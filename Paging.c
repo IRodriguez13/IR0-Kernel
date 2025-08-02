@@ -19,7 +19,6 @@ __attribute__((aligned(PAGE_SIZE))) uint32_t second_page_table[PAGE_ENTRIES];
 
 void init_paging()
 {
-
     // Ahora debería llenar una página (tabla de paginación) de páginas mapeables a el directorio de páginas.
 
     for (uint32_t i = 0; i < PAGE_ENTRIES; i++)
@@ -27,6 +26,10 @@ void init_paging()
         first_page_table[i] = (i * 4096) | PAGE_PRESENT | PAGE_WRITE;
     }
 
+    for (uint32_t i = 0; i < 1024; i++)
+    {
+        second_page_table[i] = (i * PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE;
+    }
     // Ahora le digo al directorio de páginas que esta tabla es usable
     page_directory[0] = ((uint32_t)first_page_table) | PAGE_PRESENT | PAGE_WRITE;
 
@@ -38,6 +41,13 @@ void init_paging()
     }
 
     // Le tengoque decir a la CPU cómo estoy paginando y que inicie la paginación
+    asm volatile("mov %0, %%cr3":: "r"(page_directory));
 
-
+    // Le digo a la CPU que active el bit de paginación
+    uint32_t cr0;
+    asm volatile("mov %%cr0, %0" : "=r"(cr0));
+    
+    cr0 |= 0x80000000;
+    
+    asm volatile("mov %0, %%cr0" :: "r"(cr0));  
 }

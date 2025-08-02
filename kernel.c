@@ -1,23 +1,42 @@
-// kernel.c
-void print(const char* str) 
-{
+// Funcion para imprimir usando VGA
+// Acá está la magia del modo texto en VGA:
 
-    unsigned short* VideoMemory = (unsigned short*)0xB8000;
+/*
+La memoria de video está en la dirección física 0xB8000
+
+Cada celda de pantalla son 2 bytes:
+
+1 byte: código ASCII del carácter
+
+1 byte: atributo de color (background + foreground)
+*/
+
+void print(const char *str)
+{
+    unsigned short *VideoMemory = (unsigned short *)0xB8000;
     int i = 0;
-    
-    while (str[i] != 0) 
+
+    while (str[i] != 0)
     {
         VideoMemory[i] = (VideoMemory[i] & 0xFF00) | str[i];
         i++;
     }
 }
 
-void kernel_main() //Literal este es el punto de entrada del kernel desde GRUB de booteo que se conforma en la rutina asm 
+void kernel_main() // Literal este es el punto de entrada del kernel desde GRUB de booteo que se conforma en la rutina asm
 {
-    print("Hola desde el kernel didactico! :-)");
+    print("Holis :-)");
 
-    /* yo podría dormir la cpu sin instrucciones con asm volatile ("hlt"); de manera infinita, pero no me sirve si después 
+    /* yo podría dormir la cpu sin instrucciones con asm volatile ("hlt"); de manera infinita, pero no me sirve si después
     quiero meter mas funcionalidades como el coordinador, interrupciones, paginado */
-   
-    while (1) {} // Loop eterno
+    while (1)
+    { } // Loop eterno
 }
+
+void ShutDown() // No la voy a llamar porque no tengo drivers para poder manejar lógica de encendido
+{
+    asm volatile("mov al, 0xFE; out 0x64, al");
+}
+
+
+

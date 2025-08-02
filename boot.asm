@@ -1,24 +1,20 @@
 ; boot.asm
-; Entrada compatible con Multiboot (GRUB) esto es una convención
+; Entrada compatible con mi propio bootloader.
 
-BITS 32
-SECTION .multiboot
-align 4
-    dd 0x1BADB002          ; Magic number
-    dd 0x00                ; Flags
-    dd - (0x1BADB002 + 0x00) ; Checksum
+[BITS 32]
+[EXTERN Kernel_main]
 
+section .text
+global _start
 
-SECTION .text
-global start
-extern kernel_main
+_start:
+    cli 
+    call Kernel_main
 
-start:
-    cli                    ; Clear interrupts
-    call kernel_main       ; Llamamos al C
 .hang:
     hlt
-    jmp .hang              ; Quedate tildado si no hay instrucciones nuevas (como un fallback por si en alto nivel tenemos un retorno inválido)
+    jmp .hang ; Quedate tildado si no hay instrucciones nuevas (como un fallback por si en alto nivel tenemos un retorno inválido)
+            
 
 
 ; Esto es el punto real de entrada del sistema donde permitimos a los módulos de C funcionar, por eso no usamos main() 
@@ -33,3 +29,4 @@ start:
 ;
 ; Si queremos terminar el sistema, debemos apagarlo manualmente (out 0x604, al)
 ; o reiniciarlo (out 0x64, al con 0xFE). Por ahora, simplemente colgamos la CPU.
+;

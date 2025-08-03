@@ -28,7 +28,7 @@ void idt_init()
         idt_set_gate(i, (uint32_t)isr_default, IDT_INTERRUPT_GATE_KERNEL);// Inicializa todas las entradas de la IDT con un handler genérico por defecto
     }
 
-    // declaro al bit 14 del idt como el de page faults para manejar desde su handler en asm
+    //  Asocia la interrupción 14 (Page Fault) a su handler específico en asm
     idt_set_gate(14, (uint32_t)isr_page_fault, IDT_INTERRUPT_GATE_KERNEL);
 
     // cargo el idt desde el asm

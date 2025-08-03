@@ -38,9 +38,9 @@ void Fill_Table_Page(uint32_t Directory_index, uint32_t* table, uint32_t start_a
 void Clean_Remaining_Tables(uint32_t dir_index)
 {
     // La CPU va a seguir buscando los 1023 tablas restantes que no están creadas asi que las tengo que inicialiozar en 0x00
-    for (uint32_t i= dir_index; i < PAGE_ENTRIES; i++) //Convierto en NULL las próximas 1018 páginas. O las que falten dependiendo de la cantidad de tablas que tenga.
+    for (uint32_t i= dir_index; i < PAGE_ENTRIES; i++)
     {
-        page_directory[i] = 0x00;
+        page_directory[i] = 0x00; //Convierto en NULL las próximas 1018 páginas. O las que falten dependiendo de la cantidad de tablas que tenga.
     }
 }
 

@@ -28,6 +28,7 @@ start:
 
 ; ===== HABILITAR A20 =====
 enable_a20:
+
     ; Método 1: Keyboard controller
     call a20_wait
     mov  al,   0xAD ; Disable keyboard
@@ -140,7 +141,7 @@ protected_mode:
     mov fs, ax
     mov gs, ax
     
-    ; ¡Saltar al kernel en 1MB!
+    ; Saltar al kernel en 1MB 
     jmp 0x100000
 
 ; ===== GDT =====

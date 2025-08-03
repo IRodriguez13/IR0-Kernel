@@ -1,27 +1,4 @@
-// Funcion para imprimir usando VGA
-// Acá está la magia del modo texto en VGA:
-
-/*
-La memoria de video está en la dirección física 0xB8000
-
-Cada celda de pantalla son 2 bytes:
-
-1 byte: código ASCII del carácter
-
-1 byte: atributo de color (background + foreground)
-*/
-
-void print(const char *str)
-{
-    unsigned short *VideoMemory = (unsigned short *)0xB8000;
-    int i = 0;
-
-    while (str[i] != 0)
-    {
-        VideoMemory[i] = (VideoMemory[i] & 0xFF00) | str[i];
-        i++;
-    }
-}
+#include "print.h"
 
 void kernel_main() // Literal este es el punto de entrada del kernel desde GRUB de booteo que se conforma en la rutina asm
 {

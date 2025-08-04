@@ -5,6 +5,9 @@
 #define IDT_INTERRUPT_GATE_KERNEL  0x8E  // DPL=0, solo kernel
 #define IDT_INTERRUPT_GATE_USER    0xEE  // DPL=3, user puede usar
 #define IDT_TRAP_GATE_KERNEL       0x8F  // trap gate, kernel
+#define IDT_FLAG_GATE32   0x0E // 
+#define IDT_FLAG_TRAP32   0x0F // es para pruebas 
+
 
 // Descriptor de IDT (cada entrada tiene 8 bytes) Es como una tabla de instrucciones para manejar todas las interrupciones del kernel
 typedef struct 
@@ -28,4 +31,6 @@ typedef struct
 
 // Funciones que van a consumir la IDT
 void idt_init();
-void idt_set_gate(int n, uint32_t handler);
+
+void idt_set_gate(int n, uint32_t handler, uint8_t flags);
+

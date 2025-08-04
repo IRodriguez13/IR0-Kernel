@@ -6,10 +6,12 @@
 global isr_default
 global isr_page_fault
 global idt_flush
+global timer_stub
 
 extern idt_flush
 extern page_fault_handler
 extern default_interrupt_handler
+extern time_handler
 
 idt_flush:
     mov eax, [esp+4] ; parámetro pasado (el puntero a idt_ptr, que también es un puntero)
@@ -37,6 +39,11 @@ isr_page_fault:
     add esp, 4 ; Limpio el error code automático generado en PF haciendo que el puntero de pila apunte a 4 bytes del err
     iret 
 
+timer_stub: ; lo tengo que hacer porque la cpu no sabe hacer iret en C
+    pusha
+    call time_handler
+    popa
+    iret
 
 
 ; Al entrar a la interrupción, CPU hace automáticamente:

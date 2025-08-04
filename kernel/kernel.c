@@ -2,6 +2,7 @@
 #include "Paging.h"
 #include "idt.h"
 #include "panic.h"
+#include "time.h"
 
 void kernel_main()
 {
@@ -13,12 +14,14 @@ void kernel_main()
 
     init_paging();
     LOG_OK("[OK] Paginación inicializada.\n");
-
     
     // Activar interrupciones globalmente (como tengo handlers lo puedo hacer)
     asm volatile("sti");
     
     LOG_OK("[OK] Interrupciones habilitadas.\n");
+
+    init_timer(100); // arranco a 100 Herzios
+    LOG_OK("[OK] Timer inicializado");
 
     print_colored("\nSistema en estado operativo.\n", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
 

@@ -8,7 +8,7 @@ extern void isr_default();
 extern void isr_page_fault();
 
 
-void idt_set_gate(int n, uint32_t handler, uint32_t flags) // crea una entrada de interrupción en la IDT en la posición n a 255
+void idt_set_gate(int n, uint32_t handler, uint8_t flags) // crea una entrada de interrupción en la IDT en la posición n a 255
 {
     idt[n].offset_low = handler & 0xFFFF;
     idt[n].selector = 0x08; // segmento de código en la GDT
@@ -16,6 +16,8 @@ void idt_set_gate(int n, uint32_t handler, uint32_t flags) // crea una entrada d
     idt[n].type_attr = flags; // Presente, ring 0, 32-bit interrupt gate
     idt[n].offset_high = (handler >> 16) & 0xFFFF;
 }
+
+
 
 void idt_init()
 {
@@ -34,3 +36,4 @@ void idt_init()
     // cargo el idt desde el asm
     idt_flush((uint32_t)&idt_ptr);
 }
+

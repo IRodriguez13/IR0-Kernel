@@ -8,11 +8,6 @@ extern idt_flush();
 #define PAGE_SIZE 4096    // 4kb que es lo que suele medir cada tabla (porque son páginas también)
 #define TABLE_RANGE_SIZE (PAGE_ENTRIES * PAGE_SIZE) // 4MB por tabla
 
-// Flags para autorizar las tablas de paginacion
-
-#define PAGE_PRESENT 0x1 // Con este bit, me aseguro de que la página es mapeable. sino page fault
-#define PAGE_WRITE 0x2   // Con este, que puedo escribir en la página, sino page fault
-#define PAGE_USER 0x4    // Cpn este bit (el 2), le digo  al sistema que tanto kernel como programas de usuario pueden acceder acá.
 
 // Alineo a 4 kb por necesidad de la cpu. Estos son mis dos niveles de paginación en caada tabla que arme.
 

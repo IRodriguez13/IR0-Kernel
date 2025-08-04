@@ -2,6 +2,11 @@
 
 #include <stdint.h>
 
+#define LOG_OK(msg)    print_success("[OK] " msg "\n")
+#define LOG_WARN(msg)  print_warning("[!] " msg "\n")
+#define LOG_ERR(msg)   print_error("[X] " msg "\n")
+
+
 // Configuración VGA Text Mode
 #define VGA_WIDTH  80
 #define VGA_HEIGHT 25
@@ -122,4 +127,9 @@ void print_warning(const char *str);
  * Imprime mensaje de éxito en verde.
  */
 void print_success(const char *str);
+
+/*
+* Me va a servir para poder imprimir direcciones de memo 
+*/
+void print_hex_compact(uint32_t num);
 

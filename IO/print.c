@@ -134,3 +134,25 @@ void print_success(const char *str)
 {
     print_colored(str, VGA_COLOR_GREEN, VGA_COLOR_BLACK);
 }
+
+void print_hex_compact(uint32_t num)
+{
+    char hex_chars[] = "0123456789ABCDEF";
+    char buffer[11];
+    int started = 0;
+    int index = 0;
+
+    print("0x");
+
+    for (int i = 7; i >= 0; i--) {
+        uint8_t nibble = (num >> (i * 4)) & 0xF;
+        if (nibble != 0 || started || i == 0) {
+            char c = hex_chars[nibble];
+            buffer[index++] = c;
+            started = 1;
+        }
+    }
+
+    buffer[index] = '\0';
+    print(buffer);
+}

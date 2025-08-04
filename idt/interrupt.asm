@@ -7,6 +7,7 @@ global isr_default
 global isr_page_fault
 global idt_flush
 
+extern idt_flush
 extern page_fault_handler
 extern default_interrupt_handler
 
@@ -14,6 +15,14 @@ idt_flush:
     mov eax, [esp+4] ; parámetro pasado (el puntero a idt_ptr, que también es un puntero)
     lidt [eax] ; cargo la idt usando la memo adrss de su puntero
     ret ; vuelvo a alto nivel
+
+isr_template: ; Es para testear el tema del byte que quiero mostrar por consola
+    pusha
+    push byte 14 ; la idea es loggear este PF.
+    call default_interrupt_handler
+    add esp, 4
+    popa
+    iret
 
 isr_default:
     pusha ; Guarda TODOS los registros (eax, ebx, ecx, etc.)

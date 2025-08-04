@@ -1,14 +1,30 @@
 #include "print.h"
+#include "Paging.h"
+#include "idt.h"
+#include "panic.h"
 
-void kernel_main() // Literal este es el punto de entrada del kernel desde GRUB de booteo que se conforma en la rutina asm
+void kernel_main()
 {
-    print("Holis :-)");
+    clear_screen();
+    print_colored("=== IR0 KERNEL BOOT === :-)\n", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
 
-    /* yo podría dormir la cpu sin instrucciones con asm volatile ("hlt"); de manera infinita, pero no me sirve si después
-    quiero meter mas funcionalidades como el coordinador, interrupciones, paginado */
-    while (1)
-    { } // Loop eterno
+    idt_init();
+    LOG_OK("[OK] IDT cargado correctamente.\n");
+
+    init_paging();
+    LOG_OK("[OK] Paginación inicializada.\n");
+
+    
+    // Activar interrupciones globalmente (como tengo handlers lo puedo hacer)
+    asm volatile("sti");
+    
+    LOG_OK("[OK] Interrupciones habilitadas.\n");
+
+    print_colored("\nSistema en estado operativo.\n", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+
+    cpu_relax();
 }
+
 
 void ShutDown() // No la voy a llamar porque no tengo drivers para poder manejar lógica de encendido
 {

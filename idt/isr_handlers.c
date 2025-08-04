@@ -9,8 +9,8 @@ void page_fault_handler()
 
     print_error("==== PAGE FAULT ====\n");
     // Por acá tengo que pasar la dirección que dió PF.
-    // Sería algo tipo  print_hex(fault_adrss);
-    
+    print_hex_compact(fault_adrss);
+    print("\n");    
     // No sé si es un evento de kernel panic pero tengo que dormir la cpu
     cpu_relax();
 }
@@ -19,6 +19,8 @@ void page_fault_handler()
 
 void default_interrupt_handler()
 {
-    print_success("Interrupción desconocida \n");
+    print_warning("Interrupción por defecto \n");
+    
+    cpu_relax();
 }
 

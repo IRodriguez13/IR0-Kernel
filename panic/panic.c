@@ -1,4 +1,5 @@
 #include "panic.h"
+#include "print.h"
 
 void panic(const char *message)
 {

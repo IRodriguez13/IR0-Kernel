@@ -13,7 +13,7 @@ It aims to be minimal at its core, but flexible enough to scale into different u
 - ⚡ IDT + basic interrupt handling (hardware & page faults)
 - ⏱️ PIT-based timer + interrupt dispatch
 - 🚨 Kernel panic system
-- 💻 Fully custom bootloader (no GRUB)
+- 💻 Fully custom bootloader (no GRUB but used in x64)
 - 🛠️ Designed to support modular targets (Desktop, Server, IoT)
 
 ---

@@ -9,7 +9,7 @@ y cómo manejarlas. Se le dice PIT (Programmable Interval Timer)
 */
 
 // Sirve para hacerle saber al kernel sobre el paso interno del tiempo.
-void init_timer(uint32_t frecuency);
+void init_PIT(uint32_t frecuency);
 
 
 // Acá arranco el contador del timer

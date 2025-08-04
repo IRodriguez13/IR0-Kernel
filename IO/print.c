@@ -76,7 +76,6 @@ void putchar(char c)
     }
 }
 
-// Tu función original mejorada
 void print(const char *str) 
 {
     int i = 0;

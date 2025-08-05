@@ -1,5 +1,6 @@
 ; Básicamente, acá tengo funciones que se encargan de orquestar llamados a los diferentes handlers de interrupciones.
 ; Lo hago en asm porque la funcion flush requiere de lidt que me permite cargar el idt que hice en el alto nivel. 
+; Aparte, iret no existe en alto nivel y retornar con los registros puhseados al interrumpir corrompe todo
 
 [bits 32]
 

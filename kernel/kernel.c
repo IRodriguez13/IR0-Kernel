@@ -14,6 +14,11 @@
 
 uint8_t stack1[STACK_SIZE];
 uint8_t stack2[STACK_SIZE];
+// Tasks estáticas para testing  
+task_t task1_struct;
+task_t task2_struct;
+
+//====================
 
 void kernel_main()
 {
@@ -21,47 +26,49 @@ void kernel_main()
     print_colored("=== IR0 KERNEL BOOT === :-)\n", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
 
     idt_init();
-    LOG_OK("[OK] IDT cargado correctamente.\n");
+    LOG_OK("IDT cargado correctamente");
 
     init_paging();
-    LOG_OK("[OK] Paginación inicializada.\n");
-
-    // Activar interrupciones globalmente (como tengo handlers lo puedo hacer)
-    asm volatile("sti");
-
-    LOG_OK("[OK] Interrupciones habilitadas.\n");
+    LOG_OK("Paginación inicializada");
 
     scheduler_init();
-// ===== TEST ======
+    LOG_OK("Scheduler inicializado");
+
     // Crear task1
-    task_t *t1 = (task_t *)0x300000; // Asumamos esta dirección libre
-    t1->eip = (uint32_t)task1;
-    t1->esp = (uint32_t)(stack1 + STACK_SIZE);
-    t1->ebp = t1->esp;
-    t1->state = TASK_READY;
-    t1->next = NULL;
-    add_task(t1);
+    task1_struct.pid = 1;
+    task1_struct.eip = (uint32_t)task1;
+    task1_struct.esp = (uint32_t)(stack1 + STACK_SIZE - 4); // Dejar espacio
+    task1_struct.ebp = task1_struct.esp;
+    task1_struct.state = TASK_READY;
+    task1_struct.priority = 10;
+    
+    // Obtener page directory actual
+    asm volatile("mov %%cr3, %0" : "=r"(task1_struct.cr3));
+    
+    add_task(&task1_struct);
 
     // Crear task2
-    task_t *t2 = (task_t *)0x300100; // Otra dirección, o mejor si usás kmalloc a futuro
-    t2->eip = (uint32_t)task2;
-    t2->esp = (uint32_t)(stack2 + STACK_SIZE);
-    t2->ebp = t2->esp;
-    t2->state = TASK_READY;
-    t2->next = NULL;
-    add_task(t2);
+    task2_struct.pid = 2;
+    task2_struct.eip = (uint32_t)task2;
+    task2_struct.esp = (uint32_t)(stack2 + STACK_SIZE - 4);
+    task2_struct.ebp = task2_struct.esp;
+    task2_struct.state = TASK_READY;
+    task2_struct.priority = 10;
+    task2_struct.cr3 = task1_struct.cr3; // Mismo page directory por ahora
+    
+    add_task(&task2_struct);
 
-    print("[KERNEL] Tareas inicializadas.\n");
+    LOG_OK("Tareas creadas");
 
-    // Iniciar con un primer switch manual
-    scheduler_tick(); // Va a llamar a switch_task(t1, t2)
+    // Activar interrupciones
+    asm volatile("sti");
+    LOG_OK("Interrupciones habilitadas");
 
-    // inicio el reloj que esté disponible. La prioridad es de LAPIC
-    init_clock();
+    // Iniciar scheduler (va a saltar al primer proceso)
+    scheduler_start();
 
-    print_colored("\nSistema en estado operativo.\n", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-
-    cpu_relax();
+    // No debería llegar aquí
+    panic("Scheduler returned unexpectedly!");
 }
 
 void ShutDown() // No la voy a llamar porque no tengo drivers para poder manejar lógica de encendido

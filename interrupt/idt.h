@@ -1,5 +1,5 @@
 #pragma once // Evita tener que hacer ifdef, endif pq esta abstraído
-#include <stdint.h>
+#include "../includes/stdint.h"
 
 #define IDT_ENTRIES 256 // cantidad de entradas de nuestro idt
 #define IDT_INTERRUPT_GATE_KERNEL  0x8E  // DPL=0, solo kernel

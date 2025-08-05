@@ -1,51 +1,75 @@
-# Makefile para IR0 con Scheduler
+# Makefile para IR0 Kernel con Scheduler
 
-CFLAGS=-m32 -nostdlib -nostdinc -fno-builtin -fno-stack-protector -fno-pic -nodefaultlibs -Iinclude
-LDFLAGS=-m elf_i386
+# Configuración del compilador
+CC = gcc
+ASM = nasm
+LD = ld
 
-# Archivos objeto necesarios
+# Flags comunes
+CFLAGS = -m32 -nostdlib -nostdinc -fno-builtin -fno-stack-protector \
+         -fno-pic -nodefaultlibs -Iinclude -Wall -Wextra -O1
+ASMFLAGS = -f elf
+LDFLAGS = -m elf_i386 -T linker.ld
+
+# Archivos objeto necesarios (ordenados por dependencias)
 OBJS = boot/boot.o \
        kernel/kernel.o \
-       IO/print.o \
-       Paging/Paging.o \
        interrupt/idt.o \
        interrupt/interrupt.o \
        interrupt/isr_handlers.o \
+       includes/print.o \
+       Paging/Paging.o \
        panic/panic.o \
-       scheduler/scheduler.o \
-       scheduler/switch/switch.o \
-       test/task_demo.o \
        drivers/timer/pit/pit.o \
        drivers/timer/clock_system.o \
        drivers/timer/best_clock.o \
        drivers/timer/acpi/acpi.o \
        drivers/timer/hpet/hpet.o \
-       drivers/timer/lapic/lapic.o
+       drivers/timer/lapic/lapic.o \
+       scheduler/scheduler.o \
+       scheduler/switch/switch.o \
+       test/task_demo.o
 
+# Reglas principales
 all: kernel.iso
 
-# Compilar archivos ASM
+# Compilación de ASM
 %.o: %.asm
-	nasm -f elf $< -o $@
+	$(ASM) $(ASMFLAGS) $< -o $@
 
-# Compilar archivos C
+# Compilación de C (con dependencias automáticas)
 %.o: %.c
-	gcc $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	@cp $*.d $*.P; \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+	    -e '/^$$/ d' -e 's/$$/ :/' < $*.d >> $*.P; \
+	rm -f $*.d
 
-# Linkear kernel
+# Incluir dependencias automáticas
+-include $(OBJS:.o=.P)
+
+# Linkeo del kernel
 kernel.bin: $(OBJS) linker.ld
-	ld $(LDFLAGS) -T linker.ld -o kernel.bin $(OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-# Crear ISO
+# Creación de ISO
 kernel.iso: kernel.bin
-	mkdir -p iso/boot/grub
-	cp kernel.bin iso/boot/kernel.bin
-	echo 'set timeout=0' > iso/boot/grub/grub.cfg
-	echo 'set default=0' >> iso/boot/grub/grub.cfg
-	echo 'menuentry "IR0 Kernel" { multiboot /boot/kernel.bin }' >> iso/boot/grub/grub.cfg
-	grub-mkrescue -o kernel.iso iso/ > /dev/null 2>&1
+	@mkdir -p iso/boot/grub
+	@cp kernel.bin iso/boot/
+	@echo 'set timeout=0\nset default=0\nmenuentry "IR0 Kernel" { multiboot /boot/kernel.bin }' > iso/boot/grub/grub.cfg
+	@grub-mkrescue -o $@ iso/ >/dev/null 2>&1
+	@echo "ISO generada: kernel.iso"
 
-test-kernel:
-	rm -rf $(OBJS) kernel.bin iso kernel.iso
+# Limpieza
+clean:
+	rm -f $(OBJS) $(OBJS:.o=.P) kernel.bin
+	rm -rf iso
 
-.PHONY: all clean
+distclean: clean
+	rm -f kernel.iso
+
+# QEMU (opcional)
+run: kernel.iso
+	qemu-system-i386 -cdrom kernel.iso -m 512 -serial stdio
+
+.PHONY: all clean distclean run

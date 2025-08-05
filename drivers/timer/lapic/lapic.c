@@ -1,6 +1,6 @@
 #include "lapic.h"
-#include "print.h"
-#include "panic.h"
+#include "../../../includes/print.h"
+#include "../../../panic/panic.h"
 
 #define LAPIC_BASE 0xFEE00000
 #define LAPIC_TIMER_REG 0x320
@@ -34,4 +34,12 @@ void lapic_init_timer()
     lapic_write(LAPIC_TIMER_INIT_COUNT, 10000000); // este valor define frecuencia
 
     print_success("[LAPIC] Temporizador local configurado.\n");
+}
+
+int lapic_available()
+{
+    // Check CPUID for LAPIC support
+    uint32_t eax, ebx, ecx, edx;
+    asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
+    return (edx & (1 << 9)) != 0; // APIC bit
 }

@@ -1,5 +1,5 @@
-#pragma PANIC_H
-#include "print.h"
+#pragma once
+#include "../includes/print.h"
 
 /*
  * Detiene el kernel completamente y muestra mensaje de error crítico.

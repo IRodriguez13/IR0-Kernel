@@ -1,7 +1,7 @@
 #include "scheduler.h"
 #include "task.h"
-#include "print.h"
-#include "panic.h" 
+#include "../includes/print.h"
+#include "../panic/panic.h" 
 
 static task_t *current_task = NULL;
 static task_t *ready_queue = NULL;

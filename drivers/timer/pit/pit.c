@@ -1,7 +1,7 @@
-#include "interrupt/idt.h"
-#include "panic.h"
-#include "print.h"
-#include "Paging.h"
+#include "../../../interrupt/idt.h"
+#include "../../../panic/panic.h"
+#include "../../../includes/print.h"
+#include "../../../Paging/Paging.h" 
 #define PIT_FREC 1193180
 extern void timer_stub();
 

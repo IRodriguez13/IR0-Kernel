@@ -1,5 +1,5 @@
-#include "print.h"
-#include "panic.h"
+#include "../includes/print.h"
+#include "../panic/panic.h"
 
 void task1() 
 {

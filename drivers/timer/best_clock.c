@@ -1,7 +1,7 @@
-#include "acpi.h"
-#include "lapic.h"
+#include "acpi/acpi.h"
+#include "lapic/lapic.h"
 #include "clock_system.h" // donde definiste ClockType enum
-#include "hpet.h"
+#include "hpet/hpet.h"
 
 enum ClockType detect_best_clock()
 {

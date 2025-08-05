@@ -1,0 +1,5 @@
+Literalmente estaba intentando compilar un kernel de SO con dependencias de usuario, que chad por dios.
+
+osea, quería llamar al sistema operativo cuando YO soy el sistema operativo en cuestión JAJAS. 
+
+En fin, todos los headers que use y sean o bien de la lib std o propios, los tengo que crear acá y llamarlos.

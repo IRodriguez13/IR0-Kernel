@@ -1,6 +1,6 @@
-#pragma PRINT_H
+#pragma once
 
-#include <stdint.h>
+#include "stdint.h"
 
 #define LOG_OK(msg)    print_success("[OK] " msg "\n")
 #define LOG_WARN(msg)  print_warning("[!] " msg "\n")

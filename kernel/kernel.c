@@ -1,13 +1,12 @@
-#include "print.h"
-#include "Paging.h"
-#include "interrupt/idt.h"
-#include "panic.h"
-#include "time.h"
-#include "scheduler.h"
-#include "task.h"
+#include "../includes/print.h"
+#include "../Paging/Paging.h"        // ← Ruta completa
+#include "../interrupt/idt.h"
+#include "../panic/panic.h"          // ← Ruta completa
+#include "../drivers/timer/clock_system.h"  // ← En lugar de "time.h"
+#include "../scheduler/scheduler.h"  // ← Ruta completa
+#include "../scheduler/task.h"       // ← Ruta completa
+#include "../test/task_demo.h"
 
-//=== TEST ====
-#include "task_demo.h"
 
 
 #define STACK_SIZE 4096
@@ -71,7 +70,13 @@ void kernel_main()
     panic("Scheduler returned unexpectedly!");
 }
 
-void ShutDown() // No la voy a llamar porque no tengo drivers para poder manejar lógica de encendido
+void ShutDown() // Como no tengo drivers para apagar la máquina, no la puedo usar.
 {
-    asm volatile("mov al, 0xFE; out 0x64, al");
+    uint8_t reset_value = 0xFE;
+    asm volatile(
+       "outb %%al, $0x64"
+       :                    // outputs (ninguno)
+       : "a"(reset_value)   // inputs: reset_value en AL
+       : "memory"           // clobbers: indica que puede modificar memoria
+    );
 }

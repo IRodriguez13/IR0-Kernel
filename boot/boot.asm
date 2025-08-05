@@ -2,14 +2,14 @@
 ; Entrada compatible con mi propio bootloader.
 
 [BITS 32]
-[EXTERN Kernel_main]
+[EXTERN kernel_main]  ; 
 
 section .text
 global _start
 
 _start:
     cli 
-    call Kernel_main
+    call kernel_main
 
 .hang:
     hlt

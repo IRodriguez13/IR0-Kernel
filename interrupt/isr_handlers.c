@@ -1,5 +1,4 @@
 #include "isr_handlers.h"
-#include "panic.h"
 
 // Acá manejo las interrupciones que dan page fault según el idt.
 void page_fault_handler()

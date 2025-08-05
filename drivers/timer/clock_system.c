@@ -1,10 +1,10 @@
-#include "print.h"
-#include "acpi.h"
-#include "pit.h"
-#include "lapic.h"
-#include "hpet.h"
+#include "../../includes/print.h"
+#include "acpi/acpi.h"
+#include "pit/pit.h"
+#include "lapic/lapic.h"
+#include "hpet/hpet.h"
 #include "clock_system.h"
-#include "panic.h"
+#include "../../panic/panic.h"
 
 void init_clock()
 {
@@ -29,7 +29,7 @@ void init_clock()
 
         case CLOCK_RTC:
             LOG_OK("[CLOCK] Using legacy RTC timer\n");
-            rtc_timer_init(); // No la tengo
+            //rtc_timer_init();  No la tengo
             break;
 
         default:

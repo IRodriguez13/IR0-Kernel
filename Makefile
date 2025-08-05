@@ -25,6 +25,7 @@ OBJS = boot/boot.o \
        drivers/timer/best_clock.o \
        drivers/timer/acpi/acpi.o \
        drivers/timer/hpet/hpet.o \
+       dirvers/timer/hpet/find_hpet.o \
        drivers/timer/lapic/lapic.o \
        scheduler/scheduler.o \
        scheduler/switch/switch.o \

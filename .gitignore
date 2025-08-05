@@ -1,2 +1,5 @@
 /.vscode
 *.o
+*.P
+*.so
+*.dll

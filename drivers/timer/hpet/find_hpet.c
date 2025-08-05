@@ -1,4 +1,6 @@
 #include "find_hpet.h"
+#include "../../../includes/stdint.h"
+
 
 
 /* VERSIÓN MEJORADA - Con validaciones y implementación propia */

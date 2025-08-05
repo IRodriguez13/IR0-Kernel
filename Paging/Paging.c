@@ -1,6 +1,6 @@
 #include "Paging.h"
 
-extern idt_flush();
+extern void idt_flush(void);
 
 // Tamaño std para directiorio/tablas en 32-bit paging
 

@@ -6,8 +6,8 @@ ASM = nasm
 LD = ld
 
 # Flags comunes
-CFLAGS = -m32 -nostdlib -nostdinc -fno-builtin -fno-stack-protector \
-         -fno-pic -nodefaultlibs -Iinclude -Wall -Wextra -O1
+CFLAGS = -m32 -nostdlib -nostdinc -fno-builtin -fno-stack-protector -fno-pic -nodefaultlibs -ffreestanding -Iinclude -Wall -Wextra -O1 -MMD -MP
+
 ASMFLAGS = -f elf
 LDFLAGS = -m elf_i386 -T linker.ld
 
@@ -25,7 +25,7 @@ OBJS = boot/boot.o \
        drivers/timer/best_clock.o \
        drivers/timer/acpi/acpi.o \
        drivers/timer/hpet/hpet.o \
-       dirvers/timer/hpet/find_hpet.o \
+       drivers/timer/hpet/find_hpet.o\
        drivers/timer/lapic/lapic.o \
        scheduler/scheduler.o \
        scheduler/switch/switch.o \

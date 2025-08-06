@@ -1,19 +1,19 @@
 #include "../includes/print.h"
-#include "../Paging/Paging.h"        // ← Ruta completa
+#include "../Paging/Paging.h"       
 #include "../interrupt/idt.h"
-#include "../panic/panic.h"          // ← Ruta completa
-#include "../drivers/timer/clock_system.h"  // ← En lugar de "time.h"
-#include "../scheduler/scheduler.h"  // ← Ruta completa
-#include "../scheduler/task.h"       // ← Ruta completa
+#include "../panic/panic.h"        
+#include "../drivers/timer/clock_system.h" 
+#include "../scheduler/scheduler.h"  
+#include "../scheduler/task.h"      
 #include "../test/task_demo.h"
 
 
-
+// simulacion de memoria porque todavía no tengo stack, ni heap.
 #define STACK_SIZE 4096
 
 uint8_t stack1[STACK_SIZE];
 uint8_t stack2[STACK_SIZE];
-// Tasks estáticas para testing  
+// ==== Tasks estáticas para testing ===  
 task_t task1_struct;
 task_t task2_struct;
 
@@ -69,6 +69,7 @@ void kernel_main()
     // No debería llegar aquí
     panic("Scheduler returned unexpectedly!");
 }
+
 
 void ShutDown() // Como no tengo drivers para apagar la máquina, no la puedo usar.
 {

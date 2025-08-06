@@ -31,6 +31,7 @@ OBJS = boot/boot.o \
        scheduler/switch/switch.o \
        test/task_demo.o
 
+
 # Reglas principales
 all: kernel.iso
 

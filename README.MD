@@ -59,11 +59,12 @@ It aims to be minimal at its core, but flexible enough to scale into different u
 
 ## 📦 Build Instructions
 
-> Requirements: `nasm`, `gcc` (cross-compiler preferred), `ld`, `qemu`
+
+> Requirements: `nasm`, `gcc` (cross-compiler preferred), `ld`, `qemu`, `make support`.  
+> For build the entire kernel (build strategy soon. IR0-SERVER, IR0-DESKTOP, IR0-IOT)
 
 ```bash
-make
-qemu-system-i386 -kernel ir0.bin
+make all
 ```
 
 

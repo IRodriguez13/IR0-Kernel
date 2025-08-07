@@ -19,7 +19,7 @@ task_t task2_struct;
 
 //====================
 
-void kernel_main()
+void kmain_x86()
 {
     clear_screen();
     print_colored("=== IR0 KERNEL BOOT === :-)\n", VGA_COLOR_CYAN, VGA_COLOR_BLACK);

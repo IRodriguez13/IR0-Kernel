@@ -31,9 +31,11 @@ static volatile int in_panic = 0;
 // Utilizamos un mejor manejo del stack-trace 
 void panic_advanced(const char *message, panic_level_t level, const char *file, int line)
 {
-    // Por si de casualidad también falla Panic.
+    // Por si de casualidad también falla Panic (es el peor evento posible).
     if (in_panic) 
     {
+        // corto interrupciones directo de nuevo.
+        asm volatile("cli");
         print_error("DOUBLE PANIC! System completely fucked.\n");
         cpu_relax();
         return;
@@ -89,7 +91,7 @@ void dump_registers()
 {
     uint32_t eax, ebx, ecx, edx, esp, ebp, eip, eflags, cr0, cr2, cr3;
     
-    // Capturar registros actuales en el momento del error - Sintaxis Intel porque me parece mas legible 
+    // Les saco una fotito a los registros actuales en el momento del error - Sintaxis Intel porque me parece mas legible 
     asm volatile(
         "mov %0, eax\n\t"
         "mov %1, ebx\n\t" 
@@ -143,7 +145,8 @@ void dump_stack_trace()
     
     while (ebp && frame_count < max_frames) 
     {
-        // Validar que ebp esté en rango de memoria válido
+
+        // Validar que ebp esté en rango de memoria válido osea entre 1mb y 1 gb
         if ((uint32_t)ebp < 0x100000 || (uint32_t)ebp > 0x40000000) 
         {
             print_warning("Stack trace truncated (invalid frame pointer)\n");
@@ -221,8 +224,8 @@ void panic(const char *message)
 }
 
 
-// cpu_relax - halt es una instruccion que corta cualquier ejecucion de la cpu, hasta la siguiente interrupcion
-// en este caso, la cpu entre en ese trance indefinidamente.
+// cpu_relax - halt es una instruccion que corta cualquier ejecucion de la cpu y la incia en modo de bajo consumo, hasta la siguiente interrupcion
+// en este caso, la cpu no entra nunca en ninguna interrupción y es eso lo que queremos.
 
 void cpu_relax()
 {

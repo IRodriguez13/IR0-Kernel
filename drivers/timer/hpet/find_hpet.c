@@ -53,68 +53,59 @@ void* find_hpet_table()
     {
         char* sig = (char*)addr;
         
-        // ✅ Usar implementación propia de memcmp
+        //  Usar implementación propia de memcmp
         if (memcmp(sig, ACPI_RSDP_SIGNATURE, 8) == 0) 
         {
             rsdp_t* rsdp = (rsdp_t*)addr;
             
-            // ✅ Validar checksum de RSDP
+            //  Validar checksum de RSDP
             if (!validate_rsdp_checksum(rsdp)) 
-            {
                 continue; // RSDP corrupto, seguir buscando
-            }
             
-            // ✅ Validar que rsdt_address sea válido
+            
+            //  Validar que rsdt_address sea válido
             if (!is_valid_acpi_address(rsdp->rsdt_address))
-            {
                 continue;
-            }
+            
             
             acpi_sdt_header_t* rsdt = (acpi_sdt_header_t*)(uintptr_t)rsdp->rsdt_address;
             
-            // ✅ Validar longitud de RSDT
+            //  Validar longitud de RSDT
             if (rsdt->length < sizeof(acpi_sdt_header_t)) 
-            {
                 continue;
-            }
             
-            // ✅ Verificar signature de RSDT
-            if (memcmp(rsdt->signature, "RSDT", 4) != 0) 
-            {
+            
+            //  Verificar signature de RSDT
+            if (memcmp(rsdt->signature, "RSDT", 4) != 0)     
                 continue;
-            }
+        
             
             int entries = (rsdt->length - sizeof(acpi_sdt_header_t)) / 4;
             
-            // ✅ Limitar número de entradas para evitar loops infinitos
+            // Limitar número de entradas para evitar loops infinitos
             if (entries > 64) 
-            {  // Límite razonable
                 continue;
-            }
+            
             
             uint32_t* table_ptrs = (uint32_t*)((uint8_t*)rsdt + sizeof(acpi_sdt_header_t));
 
             for (int i = 0; i < entries; i++) 
             {
-                // ✅ Validar cada puntero de tabla
+                // Validar cada puntero de tabla
                 if (!is_valid_acpi_address(table_ptrs[i])) 
-                {
                     continue;
-                }
-                
+                                
                 acpi_sdt_header_t* table = (acpi_sdt_header_t*)(uintptr_t)table_ptrs[i];
                 
-                // ✅ Verificar que el puntero no sea NULL
+                // Verificar que el puntero no sea NULL
                 if (table == NULL) 
-                {
                     continue;
-                }
                 
-                // ✅ Comparar signature completa, no solo el primer uint32_t
+                
+                // Comparar signature completa, no solo el primer uint32_t
                 if (memcmp(table->signature, "HPET", 4) == 0) 
-                {
                     return table;
-                }
+                
             }
         }
     }

@@ -176,6 +176,8 @@ void signals_reset_on_exec(process_t *p)
 	p->signal_pending = 0;
 	p->signal_mask = 0;
 	p->signal_ignored = 0;
+	p->it_real_expire_ms = 0;
+	p->it_real_interval_ms = 0;
 	for (i = 0; i < _NSIG; i++)
 	{
 		p->signal_handlers[i] = SIG_DFL;

@@ -93,5 +93,6 @@ int proc_ioports_read(char *buf, size_t count);
 int proc_modules_read(char *buf, size_t count);
 int proc_timer_list_read(char *buf, size_t count);
 int proc_net_dev_read(char *buf, size_t count);
+int proc_net_route_read(char *buf, size_t count);
 int proc_kmsg_read(char *buf, size_t count);
 int proc_swaps_read(char *buf, size_t count);

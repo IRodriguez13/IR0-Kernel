@@ -24,6 +24,7 @@
 
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
+#define SOCK_RAW    3
 #define SOCK_CLOEXEC   0x80000
 #define SOCK_NONBLOCK  0x800
 #define SOCK_TYPE_MASK 0xf

@@ -26,8 +26,10 @@
 #include <ir0/open_flags.h>
 #include <ir0/sock_udp.h>
 #include <ir0/sock_stream.h>
+#include <ir0/sock_icmp.h>
 #include <ir0/socket.h>
 #include <ir0/signals.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/pipe.h>
 #include <ir0/vfs.h>
 #include <ir0/memfd.h>
@@ -104,6 +106,8 @@ static int sock_alloc_fd_flags(void *sock, int is_stream, int type_flags)
 	{
 		if (is_stream)
 			sock_stream_release(sock);
+		else if (sock_icmp_is(sock))
+			sock_icmp_release(sock);
 		else
 			sock_udp_release(sock);
 		return -EMFILE;
@@ -146,7 +150,27 @@ static struct sock_udp *sock_fd_lookup(int fd)
 	p = fd_table[fd].vfs_file;
 	if (sock_stream_is(p))
 		return NULL;
+	if (sock_icmp_is(p))
+		return NULL;
 	return (struct sock_udp *)p;
+}
+
+static struct sock_icmp *sock_icmp_fd_lookup(int fd)
+{
+	fd_entry_t *fd_table;
+	void *p;
+
+	if (!current_process)
+		return NULL;
+	if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+		return NULL;
+	fd_table = get_process_fd_table();
+	if (!fd_table[fd].in_use || !fd_table[fd].is_socket)
+		return NULL;
+	p = fd_table[fd].vfs_file;
+	if (!sock_icmp_is(p))
+		return NULL;
+	return (struct sock_icmp *)p;
 }
 
 static struct sock_stream *sock_stream_fd_lookup(int fd)
@@ -206,6 +230,21 @@ int64_t sys_socket(int domain, int type, int protocol)
 			return -ENOMEM;
 		fd = sock_alloc_fd_flags(ss, 1, type_flags);
 		return fd < 0 ? fd : fd;
+	}
+
+	if (base == SOCK_RAW)
+	{
+		struct sock_icmp *icmp;
+
+		if (domain != AF_INET)
+			return -EAFNOSUPPORT;
+		if (protocol != 0 && protocol != IPPROTO_ICMP)
+			return -EPROTONOSUPPORT;
+		icmp = sock_icmp_create();
+		if (!icmp)
+			return -ENOMEM;
+		fd = sock_alloc_fd_flags(icmp, 0, type_flags);
+		return fd;
 	}
 
 	if (domain != AF_INET)
@@ -306,6 +345,7 @@ ssize_t sys_sendto(int fd, const void *buf, size_t len, int flags,
 	struct sock_stream *ss;
 	struct sockaddr_in sin;
 	struct sock_udp *sock;
+	struct sock_icmp *icmp;
 	uint8_t *kbuf;
 	int ret;
 
@@ -354,6 +394,25 @@ ssize_t sys_sendto(int fd, const void *buf, size_t len, int flags,
 	if (sin.sin_family != AF_INET)
 		return -EAFNOSUPPORT;
 
+	icmp = sock_icmp_fd_lookup(fd);
+	if (icmp)
+	{
+		kbuf = kmalloc(len);
+		if (!kbuf)
+			return -ENOMEM;
+		if (copy_from_user(kbuf, buf, len) != 0)
+		{
+			kfree(kbuf);
+			return -EFAULT;
+		}
+		ret = sock_icmp_sendto(icmp, sin.sin_addr, kbuf, len);
+		kfree(kbuf);
+		if (ret < 0)
+			return ret;
+		(void)flags;
+		return (ssize_t)ret;
+	}
+
 	sock = sock_fd_lookup(fd);
 	if (!sock)
 		return -ENOTSOCK;
@@ -380,6 +439,7 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 {
 	struct sock_stream *ss;
 	struct sock_udp *sock;
+	struct sock_icmp *icmp;
 	uint16_t src_port = 0;
 	uint8_t *kbuf;
 	ssize_t n;
@@ -470,6 +530,98 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 	{
 		if (validate_userspace_buffer(src_addr, out_len) != 0)
 			return -EFAULT;
+	}
+
+	icmp = sock_icmp_fd_lookup(fd);
+	if (icmp)
+	{
+		nb = sock_nonblock_fd(fd, flags);
+		kbuf = kmalloc(len);
+		if (!kbuf)
+			return -ENOMEM;
+
+		for (;;)
+		{
+			n = sock_icmp_recvfrom(icmp, kbuf, len, MSG_DONTWAIT,
+					       &src_ip_be);
+			if (n != -EAGAIN)
+				break;
+			if (nb)
+			{
+				kfree(kbuf);
+				return -EAGAIN;
+			}
+			if (signals_pause_should_interrupt(current_process))
+			{
+				handle_signals();
+				kfree(kbuf);
+				/*
+				 * Sysret would return to the insn after recvfrom and
+				 * ignore task.RIP. If a userspace handler was armed,
+				 * iretq into it (BusyBox ping SIGALRM → sendping4).
+				 */
+				if (current_process->saved_context)
+				{
+					process_restore_user_task_segments(current_process);
+					switch_to_user_task(&current_process->task);
+				}
+				return -EINTR;
+			}
+			{
+				int64_t sleep_ret = syscall_sleep_ms_locked(20);
+
+				if (sleep_ret < 0)
+				{
+					kfree(kbuf);
+					return sleep_ret;
+				}
+			}
+			if (signals_pause_should_interrupt(current_process))
+			{
+				handle_signals();
+				kfree(kbuf);
+				if (current_process->saved_context)
+				{
+					process_restore_user_task_segments(current_process);
+					switch_to_user_task(&current_process->task);
+				}
+				return -EINTR;
+			}
+			icmp = sock_icmp_fd_lookup(fd);
+			if (!icmp)
+			{
+				kfree(kbuf);
+				return -EBADF;
+			}
+		}
+		if (n < 0)
+		{
+			kfree(kbuf);
+			return n;
+		}
+		if (copy_to_user(buf, kbuf, (size_t)n) != 0)
+		{
+			kfree(kbuf);
+			return -EFAULT;
+		}
+		kfree(kbuf);
+
+		if (src_addr && out_len >= sizeof(sin))
+		{
+			memset(&sin, 0, sizeof(sin));
+			sin.sin_family = AF_INET;
+			sin.sin_addr = src_ip_be;
+			if (copy_to_user(src_addr, &sin, sizeof(sin)) != 0)
+				return -EFAULT;
+			if (addrlen)
+			{
+				socklen_t slen = sizeof(sin);
+
+				if (copy_to_user(addrlen, &slen, sizeof(slen)) != 0)
+					return -EFAULT;
+			}
+		}
+		return n;
 	}
 
 	sock = sock_fd_lookup(fd);
@@ -741,6 +893,8 @@ static void scm_rights_dtor(void *entry, size_t sz)
 	{
 		if (sock_stream_is(e->vfs_file))
 			sock_stream_release((struct sock_stream *)e->vfs_file);
+		else if (sock_icmp_is(e->vfs_file))
+			sock_icmp_release((struct sock_icmp *)e->vfs_file);
 		else if (!sock_stream_is_slot(e->vfs_file))
 			sock_udp_release((struct sock_udp *)e->vfs_file);
 	}
@@ -789,6 +943,8 @@ static int scm_clone_fd_entry(fd_entry_t *dst, int srcfd)
 	{
 		if (sock_stream_is(dst->vfs_file))
 			sock_stream_acquire((struct sock_stream *)dst->vfs_file);
+		else if (sock_icmp_is(dst->vfs_file))
+			sock_icmp_acquire((struct sock_icmp *)dst->vfs_file);
 		else if (!sock_stream_is_slot(dst->vfs_file))
 			sock_udp_acquire((struct sock_udp *)dst->vfs_file);
 	}

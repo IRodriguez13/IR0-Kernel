@@ -219,6 +219,7 @@ WRAP0(sys_sync)
 WRAP2(sys_gettimeofday, struct timeval *, void *)
 WRAP2(sys_getitimer, int, struct itimerval *)
 WRAP3(sys_setitimer, int, const struct itimerval *, struct itimerval *)
+WRAP1(sys_alarm, unsigned int)
 WRAP5(sys_prctl, int, unsigned long, unsigned long, unsigned long, unsigned long)
 WRAP1(sys_setuid, uid_t)
 WRAP1(sys_setgid, gid_t)
@@ -324,6 +325,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_dup2]           = wrap_sys_dup2;
   syscall_table_rw[__NR_nanosleep]      = wrap_sys_nanosleep;
   syscall_table_rw[__NR_getitimer]      = wrap_sys_getitimer;
+  syscall_table_rw[__NR_alarm]          = wrap_sys_alarm;
   syscall_table_rw[__NR_setitimer]      = wrap_sys_setitimer;
   syscall_table_rw[__NR_pause]          = wrap_sys_pause;
   syscall_table_rw[__NR_getpid]         = wrap_sys_getpid;

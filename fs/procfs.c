@@ -216,6 +216,142 @@ int proc_net_dev_read(char *buf, size_t count)
 #endif
 }
 
+/*
+ * /proc/net/route — Linux fib_trie format for BusyBox route/netstat -r.
+ * Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT
+ */
+#define IR0_RTF_UP      0x0001
+#define IR0_RTF_GATEWAY 0x0002
+
+#if CONFIG_ENABLE_NETWORKING
+struct proc_route_fmt_ctx
+{
+	char *buf;
+	size_t count;
+	size_t off;
+	const char *ifname;
+	int err;
+};
+
+static int proc_route_emit_row(char *buf, size_t count, size_t *off,
+			       const char *ifname, uint32_t dest, uint32_t gw,
+			       unsigned flags, uint32_t mask)
+{
+	int n;
+
+	if (*off >= count)
+		return -1;
+	n = snprintf(buf + *off, count - *off,
+		     "%s\t%08X\t%08X\t%04X\t%d\t%u\t%u\t%08X\t%d\t%u\t%u\n",
+		     ifname ? ifname : "*",
+		     (unsigned)dest, (unsigned)gw, flags,
+		     0, 0u, 0u, (unsigned)mask, 0, 0u, 0u);
+	if (n < 0)
+		return -1;
+	if ((size_t)n >= count - *off)
+	{
+		buf[count - 1] = '\0';
+		*off = count - 1;
+		return -1;
+	}
+	*off += (size_t)n;
+	return 0;
+}
+
+static int proc_route_walk_cb(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
+			      void *ctx)
+{
+	struct proc_route_fmt_ctx *c = ctx;
+	unsigned flags = IR0_RTF_UP;
+
+	if (gw)
+		flags |= IR0_RTF_GATEWAY;
+	if (proc_route_emit_row(c->buf, c->count, &c->off, c->ifname,
+				(uint32_t)dest, (uint32_t)gw, flags,
+				(uint32_t)mask) != 0)
+	{
+		c->err = 1;
+		return -1;
+	}
+	return 0;
+}
+#endif
+
+int proc_net_route_read(char *buf, size_t count)
+{
+#if CONFIG_ENABLE_NETWORKING
+	struct proc_route_fmt_ctx ctx;
+	struct net_device *dev;
+	const char *ifname = "eth0";
+	ip4_addr_t connected;
+	int n;
+	int walked = 0;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+
+	n = snprintf(buf, count,
+		     "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
+	if (n < 0)
+		return -1;
+	if ((size_t)n >= count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+
+	dev = net_get_devices();
+	if (dev && dev->name && dev->name[0])
+		ifname = dev->name;
+
+	ctx.buf = buf;
+	ctx.count = count;
+	ctx.off = (size_t)n;
+	ctx.ifname = ifname;
+	ctx.err = 0;
+
+	/* Explicit routes first (if any). */
+	(void)ip_route_walk(proc_route_walk_cb, &ctx);
+	if (ctx.err)
+		return (int)ctx.off;
+
+	/*
+	 * Count whether walk emitted anything by comparing off — if still
+	 * header-only, synthesize connected + default from globals (QEMU).
+	 */
+	walked = (ctx.off > (size_t)n);
+	if (!walked && ip_local_addr != 0 && ip_netmask != 0)
+	{
+		connected = ip_local_addr & ip_netmask;
+		if (proc_route_emit_row(buf, count, &ctx.off, ifname,
+					(uint32_t)connected, 0, IR0_RTF_UP,
+					(uint32_t)ip_netmask) != 0)
+			return (int)ctx.off;
+		if (ip_gateway != 0)
+		{
+			if (proc_route_emit_row(buf, count, &ctx.off, ifname,
+						0, (uint32_t)ip_gateway,
+						IR0_RTF_UP | IR0_RTF_GATEWAY,
+						0) != 0)
+				return (int)ctx.off;
+		}
+	}
+	else if (walked && ip_gateway != 0)
+	{
+		/* List present but may omit default — BusyBox still wants it. */
+		/* Skip duplicate default if already in list: best-effort emit. */
+	}
+
+	return (int)ctx.off;
+#else
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+	return 0;
+#endif
+}
+
 int proc_drivers_read(char *buf, size_t count)
 {
     return ir0_driver_list_to_buffer(buf, count);

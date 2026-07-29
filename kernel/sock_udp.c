@@ -14,6 +14,7 @@
 
 #include <ir0/sock_udp.h>
 #include <ir0/sock_stream.h>
+#include <ir0/sock_icmp.h>
 #include <ir0/kmem.h>
 #include <ir0/errno.h>
 #include <ir0/clock.h>
@@ -247,6 +248,8 @@ void sock_udp_release(struct sock_udp *sock)
 	 * here and kfree() the slot → "pointer out of heap range" panic.
 	 */
 	if (sock_stream_is_slot(sock))
+		return;
+	if (sock_icmp_is(sock))
 		return;
 
 	flags = sock_irq_save();

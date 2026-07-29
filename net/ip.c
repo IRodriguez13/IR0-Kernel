@@ -806,3 +806,24 @@ int ip_route_del(ip4_addr_t dest_network, ip4_addr_t netmask)
     return -1;
 }
 
+/**
+ * ip_route_walk - Invoke @cb for each entry in the software route list.
+ * Does not synthesize the connected/default routes from globals (caller does).
+ */
+int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
+			     void *ctx),
+		  void *ctx)
+{
+	struct ip_route_entry *route;
+
+	if (!cb)
+		return -EINVAL;
+
+	for (route = ip_routes; route; route = route->next)
+	{
+		if (cb(route->dest_network, route->netmask, route->gateway, ctx) != 0)
+			return -1;
+	}
+	return 0;
+}
+

@@ -561,6 +561,8 @@ void pseudo_fs_nodes_register_all(void)
                        (void *)(uintptr_t)proc_swaps_read);
     pseudo_fs_register("/proc", "net/dev", &proc_static_read_ops,
                        (void *)(uintptr_t)proc_net_dev_read);
+    pseudo_fs_register("/proc", "net/route", &proc_static_read_ops,
+                       (void *)(uintptr_t)proc_net_route_read);
 
 #if CONFIG_ENABLE_BLUETOOTH
     pseudo_fs_register("/proc", "bluetooth/devices", &proc_bt_devices_ops,

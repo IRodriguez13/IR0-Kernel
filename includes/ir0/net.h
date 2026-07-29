@@ -162,6 +162,11 @@ extern ip4_addr_t ip_local_addr;
 extern ip4_addr_t ip_netmask;
 extern ip4_addr_t ip_gateway;
 
+/* Soft route table walk (BusyBox /proc/net/route). */
+int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
+			     void *ctx),
+		  void *ctx);
+
 /* ICMP helpers used by /dev/net control plane. */
 bool icmp_get_next_echo_result(uint16_t id, uint16_t *seq_out, uint64_t *rtt_out,
                                uint8_t *ttl_out, size_t *payload_bytes_out,

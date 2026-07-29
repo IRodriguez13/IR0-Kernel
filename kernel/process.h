@@ -199,6 +199,13 @@ typedef struct process
 	uint8_t syscall_interrupted;
 	uint64_t clock_wait_deadline_ms;
 
+	/*
+	 * ITIMER_REAL (setitimer/alarm): absolute expire in uptime ms; 0 = off.
+	 * interval_ms 0 = one-shot. Cleared on fork child and exec.
+	 */
+	uint64_t it_real_expire_ms;
+	uint64_t it_real_interval_ms;
+
 	/* Signal management */
 	uint32_t signal_pending; /* Bitmask of pending signals */
 	/* Signal handlers (function pointers to userspace handlers) */
@@ -619,6 +626,7 @@ pid_t process_get_ppid(void);
 process_t *process_get_current(void);
 void irq_save_user_frame(uint64_t *frame);
 process_t *get_process_list(void);
+void process_itimer_tick(uint64_t now_ms);
 pid_t process_get_next_pid(void);
 pid_t process_last_assigned_pid(void);
 void process_prepare_pid1_for_init(void);

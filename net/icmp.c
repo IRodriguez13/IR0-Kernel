@@ -13,6 +13,7 @@
 
 #include "icmp.h"
 #include "ip.h"
+#include <ir0/sock_icmp.h>
 #include <ir0/kmem.h>
 #include <ir0/logging.h>
 #include <ir0/clock.h>
@@ -218,6 +219,15 @@ void icmp_receive_handler(struct net_device *dev, const void *data,
 
     LOG_INFO_FMT("ICMP", "Received ICMP packet: type=%d, code=%d", 
                  (int)type, (int)code);
+
+    /*
+     * Deliver to SOCK_RAW IPPROTO_ICMP sockets (BusyBox ping). Skip echo
+     * requests: the kernel auto-replies and userspace did not send them.
+     */
+    if (type != ICMP_TYPE_ECHO_REQUEST)
+        sock_icmp_rx_deliver((uint32_t)src_ip,
+                             (uint32_t)(rx_ctx ? rx_ctx->dest_addr : 0),
+                             rx_ttl, data, len);
 
     switch (type)
     {

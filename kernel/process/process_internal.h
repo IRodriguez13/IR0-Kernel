@@ -44,6 +44,7 @@
 #include <ir0/pmm.h>
 #include <ir0/sock_udp.h>
 #include <ir0/sock_stream.h>
+#include <ir0/sock_icmp.h>
 #include <kernel/syscalls/process_syscalls.h>
 
 extern void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,

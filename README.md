@@ -42,6 +42,12 @@ ISD builds a finished image; IR0 boots it.
 
 <p align="center"><em>In-guest BusyBox <code>vi</code> after <code>make run</code>: edit C sources on the ISD rootfs (QEMU GTK).</em></p>
 
+<p align="center">
+  <img src="scripts/kconfig/assets/isd-top.png" alt="ISD guest — BusyBox top under runit" width="720" />
+</p>
+
+<p align="center"><em>BusyBox <code>top</code> after login: runit PID 1, <code>runsvdir</code>/<code>runsv</code>, ash, and idle — live process view on the ISD image.</em></p>
+
 ## Getting started
 
 ```bash

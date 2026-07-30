@@ -33,6 +33,8 @@
 #define SO_ERROR    4
 #define SO_TYPE     3
 #define SO_REUSEADDR 2
+#define SO_RCVTIMEO 20
+#define SO_SNDTIMEO 21
 #define SCM_RIGHTS  1
 
 #define MSG_PEEK     0x2

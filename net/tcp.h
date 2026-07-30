@@ -37,6 +37,17 @@ struct tcp_header
 int tcp_init(void);
 int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		   uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out);
+/* Nonblocking connect: SYN sent; complete via tcp_wire_connect_poll. */
+int tcp_wire_connect_start(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t *local_port_out);
+/* 0=established, -EAGAIN=still SYN_SENT, other negative = fail. */
+int tcp_wire_connect_poll(ip4_addr_t peer_ip, uint16_t peer_port,
+			  uint16_t local_port, uint32_t *seq_out,
+			  uint32_t *ack_out);
+int tcp_wire_poll_readable(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t local_port);
+int tcp_wire_poll_writable(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t local_port);
 int tcp_wire_send(ip4_addr_t peer_ip, uint16_t peer_port, uint16_t local_port,
 		  uint32_t *seq_io, uint32_t ack_peer, const void *data, size_t len);
 void tcp_wire_close(ip4_addr_t peer_ip, uint16_t peer_port, uint16_t local_port,

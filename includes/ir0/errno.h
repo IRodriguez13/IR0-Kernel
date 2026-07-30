@@ -78,8 +78,11 @@
 #define EPROTONOSUPPORT 93
 #define EAFNOSUPPORT 97
 #define ENOBUFS 105
+#define EISCONN 106
 #define ENOTCONN 107
 #define ESHUTDOWN 108
+#define EALREADY 114
+#define EINPROGRESS 115
 
 /* STANDARD FILE DESCRIPTORS                                                */
 

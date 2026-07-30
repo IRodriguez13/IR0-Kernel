@@ -471,7 +471,8 @@ process_t *prev_proc;
             process_restore_user_task_segments(next_proc);
         }
         else if (process_rip_in_user_range(process_syscall_ip(next_proc)) &&
-                 process_rip_in_user_range(process_syscall_sp(next_proc)))
+                 process_rip_in_user_range(process_syscall_sp(next_proc)) &&
+                 !process_rip_in_user_stack(process_syscall_ip(next_proc)))
         {
             uint64_t rax = next_proc->syscall_resume_rax;
 

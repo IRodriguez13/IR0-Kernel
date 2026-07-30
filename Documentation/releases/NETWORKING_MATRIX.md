@@ -14,10 +14,11 @@
 | poll on SOCK_STREAM | sí | sí | wire: POLLIN=RX/FIN, POLLOUT=ESTABLISHED | wget STATUSBAR |
 | poll on SOCK_RAW ICMP | sí | smoke path | readable iff RX queued | — |
 | SO_ERROR / SO_RCVTIMEO / SO_SNDTIMEO | sí | sí (SO_ERROR) | TIMEO en recv stream | — |
+| close(1)/close(2) consola | sí | sí | Linux-like; wget `-O -` | BusyBox wget |
 | SIOCGIF* ioctls | sí | sí | read-mostly | `ifconfig -a` |
 | /proc/net/dev | sí | parcial | — | — |
 | /proc/net/route | sí | sí | soft FIB sembrada | `route -n` |
-| /proc/net/{tcp,udp,raw,unix} | sí | sí | ESTABLISHED/LISTEN/SYN_SENT | `netstat` |
+| /proc/net/{tcp,udp,raw,unix} | sí | sí | ESTABLISHED/LISTEN/SYN_SENT/CLOSE_WAIT | `netstat` |
 | /proc/netinfo | sí | parcial | TSV raw | — |
 | setitimer(ITIMER_REAL) / alarm | sí | sí | SIGALRM mid-syscall + connect wait | BusyBox ping / nc |
 | IPv4 + ICMP echo | sí | sí | QEMU user-net `10.0.2.15` → `10.0.2.2` | `ping` |
@@ -38,8 +39,8 @@
 | `nslookup 10.0.2.2 10.0.2.3` | PASS |
 | `nc -w 2 10.0.2.2 9` | PASS — alarm/EINTR |
 | `SOCK_NONBLOCK` connect | PASS — `EINPROGRESS` + `POLLOUT` + `SO_ERROR=0` |
-| `wget http://10.0.2.2/` | PASS — HTML (host :80 vía SLIRP); aviso `close failed: Bad file descriptor` no bloquea body |
-| pid1 `_exit(0)` post-applets | PASS — sin SEGV en argc slot (repair rechaza RIP en stack) |
+| `wget -q -O - http://10.0.2.2/` | PASS — HTML; sin `close failed: Bad file descriptor` |
+| pid1 `_exit(0)` post-applets | PASS — sin SEGV argc |
 
 ## ISD BusyBox (`ir0_full`)
 
@@ -47,6 +48,5 @@ Habilitados: `IFCONFIG`, `PING`, `ROUTE`, `NETSTAT`, `NSLOOKUP`, `NC`, `WGET` (s
 
 ## Pendiente explícito
 
-1. `wget: close failed: Bad file descriptor` al cerrar stdout/`-O -` ( BusyBox + fd; body OK ).
-2. Estados TCP finos restantes (FIN_WAIT*, TIME_WAIT) si hace falta para smokes.
-3. Varias asociaciones TCP wire outbound concurrentes (hoy: un `g_out`).
+1. FIN_WAIT1/2 / TIME_WAIT completos (hoy: CLOSE_WAIT si peer FIN).
+2. Varias asociaciones TCP wire outbound concurrentes (hoy: un `g_out`).

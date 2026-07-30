@@ -1158,6 +1158,24 @@ int tcp_wire_poll_writable(ip4_addr_t peer_ip, uint16_t peer_port,
 	return ready;
 }
 
+int tcp_wire_peer_fin(ip4_addr_t peer_ip, uint16_t peer_port,
+		      uint16_t local_port)
+{
+	uint64_t f;
+	int fin = 0;
+	struct tcp_wire_inbound *c;
+
+	f = tcp_irq_save();
+	if (g_out.active && g_out.local_port == local_port &&
+	    g_out.peer_port == peer_port && g_out.peer_ip == peer_ip)
+		fin = g_out.peer_fin;
+	c = tcp_inbound_find(peer_ip, peer_port, local_port);
+	if (c && c->taken && c->peer_fin)
+		fin = 1;
+	tcp_irq_restore(f);
+	return fin;
+}
+
 int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		     uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out)
 {

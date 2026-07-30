@@ -1186,8 +1186,16 @@ int64_t sys_close(int fd)
     int was_pipe = fd_table[fd].is_pipe ? 1 : 0;
     int was_devfs = fd_table[fd].is_devfs ? 1 : 0;
 
+    /*
+     * Linux allows close(0/1/2) on the console slots. BusyBox wget -O -
+     * ends with xclose(1); refusing with EBADF prints "close failed".
+     */
     if (fd <= 2 && !was_pipe && !was_devfs && !fd_table[fd].vfs_file)
-      return -EBADF;
+    {
+      fd_table[fd].in_use = false;
+      fd_table[fd].flags = 0;
+      return 0;
+    }
 
     if (was_devfs)
     {

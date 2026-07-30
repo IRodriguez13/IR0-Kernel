@@ -2,7 +2,7 @@
 
 IR0 is a research operating-system kernel (GPL-3.0). Primary bring-up target is
 **x86-64** under QEMU (Multiboot, GRUB, VFS/MINIX, ELF userspace). Version
-string: **`0.0.1-pre-rc3`**.
+string: **`0.0.1-rc4`** (last pre-release before `v0.0.1` final).
 
 It is not a general-purpose production OS. The tree emphasizes narrow facades
 (`includes/ir0/`), Kconfig selection, and honest partial Linux ABI (`-ENOSYS`

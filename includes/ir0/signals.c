@@ -593,6 +593,13 @@ void handle_signals(void)
             {
                 /* Call userspace handler */
                 void (*handler)(int) = current->signal_handlers[sig];
+
+		/*
+		 * Defer catchable delivery: leave pending for the in-syscall
+		 * wait to return -EINTR/-ETIMEDOUT (see signal_defer_catchable).
+		 */
+		if (current->signal_defer_catchable)
+			continue;
                 
                 /* Validate handler is in userspace */
                 if (is_user_address((void *)handler, sizeof(void *)))

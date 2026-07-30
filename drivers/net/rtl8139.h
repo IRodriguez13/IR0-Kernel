@@ -48,6 +48,7 @@
 #define RTL8139_REG_RBSTART 0x30 /* Receive Buffer Start Address */
 #define RTL8139_REG_CR 0x37      /* Command Register */
 #define RTL8139_REG_CAPR 0x38    /* Current Address of Packet Read */
+#define RTL8139_REG_CBR 0x3A     /* Current Buffer Address (RX write ptr) */
 #define RTL8139_REG_IMR 0x3C     /* Interrupt Mask Register */
 #define RTL8139_REG_ISR 0x3E     /* Interrupt Status Register */
 #define RTL8139_REG_TCR 0x40     /* Transmit Configuration Register */
@@ -56,7 +57,7 @@
 #define RTL8139_REG_MSR     0x58 /* Media Status Register */
 
 /* Media Status Register bits */
-#define RTL8139_MSR_LINKB   (1 << 2) /* Link Status (0=Fail, 1=OK) */
+#define RTL8139_MSR_LINKB   (1 << 2) /* LinkFail: 1=down, 0=up (Realtek MSR) */
 #define RTL8139_MSR_SPEED   (1 << 3) /* Speed (0=10M, 1=100M) */
 #define RTL8139_MSR_AUX     (1 << 4) /* Aux. Power Status */
 

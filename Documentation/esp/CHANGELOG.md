@@ -1,9 +1,14 @@
 # IR0 Kernel — Changelog (español)
 
-> **Última verificación:** 2026-07-25  
+> **Última verificación:** 2026-07-30  
 > **Fuente de verdad:** historial git, smokes del `Makefile`, [`../STABLE.md`](../STABLE.md), [`../KTM.md`](../KTM.md)
 
 Versión en inglés (canónica): [`../CHANGELOG.md`](../CHANGELOG.md).
+
+## [0.0.1-rc4] — 2026-07-30 (último pre-release)
+
+Tag **`v0.0.1-rc4`**. Tras este tag: **solo bugfixing y estabilización** hasta `v0.0.1` final.  
+Detalle: [`../releases/IR0_0.0.1_RC4.md`](../releases/IR0_0.0.1_RC4.md).
 
 ## [Sin publicar]
 

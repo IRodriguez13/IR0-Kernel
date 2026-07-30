@@ -1,10 +1,24 @@
 # IR0 Kernel Changelog
 
-> **Last verified:** 2026-07-29
+> **Last verified:** 2026-07-30
 > **Source of truth:** git history, `make ktm-check`, roadmap smokes in `Makefile`, [`HARDENING.md`](HARDENING.md), [`KTM.md`](KTM.md)
 
 This file tracks user-visible and developer-facing changes per iteration.
 For tier backlog see [`ROADMAP.md`](ROADMAP.md). For **what is stable in QEMU** see [`STABLE.md`](STABLE.md).
+
+## [0.0.1-rc4] — 2026-07-30 (last pre-release)
+
+Tag: **`v0.0.1-rc4`**. Version string: `0.0.1-rc4`.  
+Policy: after this tag, **bugfixing and stabilization only** until final `v0.0.1`.  
+Notes: [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md), [`releases/NETWORKING_MATRIX.md`](releases/NETWORKING_MATRIX.md).
+
+### Networking product path + stress (ISD BusyBox `ir0_full`)
+
+- `ifconfig` / `route` mutate: `SIOCSIF*`, `SIOCADDRT` / `SIOCDELRT`; Linux `IFF_*`; RTL8139 link polarity.
+- AF_UNIX `SOCK_DGRAM` for musl `if_nametoindex`; ICMP `IP_TTL` / `SO_BINDTODEVICE` / `IP_MULTICAST_IF`.
+- TCP connect interruptible; SIGALRM → `-ETIMEDOUT` (safe `nc -w`); connect lock released on process exit.
+- RTL8139 RX uses **CBR**; overflow drain (fixes RX wedge under load).
+- Stress: `setup/pid1/net_command_stress.c` → `NET_STRESS_PASS` / `NC_ONLY_PASS`.
 
 ## [Unreleased]
 

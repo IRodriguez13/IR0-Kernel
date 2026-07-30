@@ -157,6 +157,10 @@ struct sock_stream *sock_stream_get_peer(struct sock_stream *s)
 
 static int sock_stream_wire_progress(struct sock_stream *s)
 {
+#if !CONFIG_ENABLE_NETWORKING
+	(void)s;
+	return 0;
+#else
 	uint32_t seq;
 	uint32_t ack;
 	int ret;
@@ -181,6 +185,7 @@ static int sock_stream_wire_progress(struct sock_stream *s)
 	s->so_error = 0;
 	poll_wake_check();
 	return 1;
+#endif
 }
 
 int sock_stream_poll_readable(const struct sock_stream *s)

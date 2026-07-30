@@ -63,11 +63,21 @@ static inline ip4_addr_t make_ip4_addr(uint8_t a, uint8_t b, uint8_t c, uint8_t 
 
 /* --- Networking Abstraction Layer --- */
 
-/* Standard Network Device Flags */
-#define IFF_UP (1 << 0)        /* Interface is up */
-#define IFF_BROADCAST (1 << 1) /* Broadcast address valid */
-#define IFF_LOOPBACK (1 << 2)  /* Is a loopback net */
-#define IFF_RUNNING (1 << 3)   /* Interface is running */
+/*
+ * Linux uapi netdevice flags (include/uapi/linux/if.h).
+ * BusyBox ifconfig/route interpret these bits; IR0 must match.
+ */
+#define IFF_UP          0x1
+#define IFF_BROADCAST   0x2
+#define IFF_DEBUG       0x4
+#define IFF_LOOPBACK    0x8
+#define IFF_POINTOPOINT 0x10
+#define IFF_NOTRAILERS  0x20
+#define IFF_RUNNING     0x40
+#define IFF_NOARP       0x80
+#define IFF_PROMISC     0x100
+#define IFF_ALLMULTI    0x200
+#define IFF_MULTICAST   0x1000
 
 struct net_device
 {
@@ -167,6 +177,7 @@ int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
 			     void *ctx),
 		  void *ctx);
 int ip_route_add(ip4_addr_t dest_network, ip4_addr_t netmask, ip4_addr_t gateway);
+int ip_route_del(ip4_addr_t dest_network, ip4_addr_t netmask);
 int ip_routes_seed_from_globals(void);
 
 /* ICMP helpers used by /dev/net control plane. */

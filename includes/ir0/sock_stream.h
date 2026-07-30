@@ -61,3 +61,32 @@ int sock_stream_buf_space(const struct sock_stream *peer_of_sender);
 int sock_stream_buf_count(const struct sock_stream *s);
 int sock_stream_is_recv_shutdown(const struct sock_stream *s);
 struct sock_stream *sock_stream_get_peer(struct sock_stream *s);
+
+/* /proc/net/{tcp,unix} inventory (BusyBox netstat). */
+struct sock_stream_inet_snap
+{
+	uint32_t local_ip;
+	uint16_t local_port;
+	uint32_t rem_ip;
+	uint16_t rem_port;
+	uint8_t st; /* Linux tcp_state hex */
+	unsigned long inode;
+};
+
+struct sock_stream_unix_snap
+{
+	unsigned long inode;
+	unsigned refcnt;
+	uint8_t type; /* SOCK_STREAM = 1 */
+	uint8_t st;   /* 01 connected, 0A listen, 07 unbound-ish */
+	char path[108];
+	size_t path_len;
+	int is_abstract;
+};
+
+int sock_stream_inet_walk(int (*cb)(const struct sock_stream_inet_snap *s,
+				    void *ctx),
+			  void *ctx);
+int sock_stream_unix_walk(int (*cb)(const struct sock_stream_unix_snap *s,
+				    void *ctx),
+			  void *ctx);

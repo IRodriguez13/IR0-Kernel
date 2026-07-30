@@ -14,10 +14,15 @@
 #include <ir0/kmem.h>
 #include <ir0/logging.h>
 #include <ir0/clock.h>
+#include <ir0/clock_wait.h>
 #include <ir0/arch_port.h>
 #include <ir0/net.h>
 #include <ir0/errno.h>
 #include <ir0/klog.h>
+#include <ir0/process.h>
+#include <ir0/signals.h>
+#include <ir0/context.h>
+#include <ir0/arch_cpu.h>
 #include <string.h>
 
 #define TCP_WIRE_TIMEOUT_MS 5000U
@@ -1004,11 +1009,17 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		return -EIO;
 	}
 
+	/*
+	 * Yieldable wait so BusyBox nc -w / wget -T (alarm/SIGALRM) can
+	 * interrupt connect. Busy-spin left SIGALRM pending until return.
+	 */
 	deadline = clock_get_uptime_milliseconds() + TCP_WIRE_TIMEOUT_MS;
 	for (;;)
 	{
 		int seen;
 		uint64_t f;
+		uint64_t now;
+		uint64_t slice;
 
 		net_stack_poll();
 		f = tcp_irq_save();
@@ -1016,17 +1027,38 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		tcp_irq_restore(f);
 		if (seen)
 			break;
-		if (clock_get_uptime_milliseconds() >= deadline)
+
+		now = clock_get_uptime_milliseconds();
+		if (now >= deadline)
 		{
 			tcp_pending_clear();
 			return -ETIMEDOUT;
 		}
-		{
-			uint64_t target = clock_get_uptime_milliseconds() + TCP_WIRE_POLL_MS;
 
-			while (clock_get_uptime_milliseconds() < target)
-				;
+		if (current_process &&
+		    signals_pause_should_interrupt(current_process))
+		{
+			handle_signals();
+			if (current_process->saved_context &&
+			    current_process->signal_enter_pending)
+			{
+				current_process->signal_enter_pending = 0;
+				process_restore_user_task_segments(current_process);
+				current_process->irq_frame_saved = 0;
+				current_process->coop_resched_resume = 0;
+				current_process->want_kernel_ret = 0;
+				arch_restore_user_fs_base();
+				tcp_pending_clear();
+				switch_to_user_task(&current_process->task);
+			}
+			tcp_pending_clear();
+			return -EINTR;
 		}
+
+		slice = now + TCP_WIRE_POLL_MS;
+		if (slice > deadline)
+			slice = deadline;
+		(void)ir0_clock_wait_block_until(slice);
 	}
 
 	tcp_build_header(&hdr, lport, peer_port, isn + 1, g_pending.peer_ack,

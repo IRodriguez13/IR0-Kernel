@@ -39,3 +39,13 @@ ssize_t sock_icmp_recvfrom(struct sock_icmp *sock, void *buf, size_t len,
  */
 void sock_icmp_rx_deliver(uint32_t src_ip_be, uint32_t dst_ip_be, uint8_t ttl,
 			  const void *icmp_data, size_t icmp_len);
+
+struct sock_icmp_snap
+{
+	uint16_t proto; /* IPPROTO_ICMP = 1 as "port" */
+	unsigned long inode;
+	unsigned refcnt;
+};
+
+int sock_icmp_walk(int (*cb)(const struct sock_icmp_snap *s, void *ctx),
+		   void *ctx);

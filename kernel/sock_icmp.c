@@ -356,3 +356,32 @@ ssize_t sock_icmp_recvfrom(struct sock_icmp *sock, void *buf, size_t len,
 	return (ssize_t)copy_len;
 #endif
 }
+
+int sock_icmp_walk(int (*cb)(const struct sock_icmp_snap *s, void *ctx),
+		   void *ctx)
+{
+	struct sock_icmp *s;
+	struct sock_icmp_snap snap;
+	uint64_t flags;
+
+	if (!cb)
+		return -EINVAL;
+
+	flags = sock_icmp_irq_save();
+	for (s = sock_icmp_open_list; s; s = s->list_next)
+	{
+		if (!sock_icmp_is(s))
+			continue;
+		memset(&snap, 0, sizeof(snap));
+		snap.proto = 1; /* IPPROTO_ICMP */
+		snap.inode = (unsigned long)(uintptr_t)s;
+		snap.refcnt = (unsigned)(s->refcount > 0 ? s->refcount : 1);
+		if (cb(&snap, ctx) != 0)
+		{
+			sock_icmp_irq_restore(flags);
+			return -1;
+		}
+	}
+	sock_icmp_irq_restore(flags);
+	return 0;
+}

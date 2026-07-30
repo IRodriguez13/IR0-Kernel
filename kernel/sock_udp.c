@@ -454,3 +454,43 @@ ssize_t sock_udp_recvfrom(struct sock_udp *sock, void *buf, size_t len, int flag
 	return (ssize_t)copy_len;
 #endif
 }
+
+int sock_udp_walk(int (*cb)(const struct sock_udp_snap *s, void *ctx), void *ctx)
+{
+	struct sock_udp *s;
+	struct sock_udp_snap snap;
+	uint64_t flags;
+
+	if (!cb)
+		return -EINVAL;
+
+	flags = sock_irq_save();
+	for (s = sock_bound_list; s; s = s->bound_next)
+	{
+		if (!s->bound)
+			continue;
+		memset(&snap, 0, sizeof(snap));
+#if CONFIG_ENABLE_NETWORKING
+		snap.local_ip = (uint32_t)ip_local_addr;
+#else
+		snap.local_ip = 0;
+#endif
+		snap.local_port = s->local_port;
+		if (s->connected)
+		{
+			snap.rem_ip = s->peer_ip_be;
+			snap.rem_port = s->peer_port;
+			snap.st = 0x01;
+		}
+		else
+			snap.st = 0x07;
+		snap.inode = (unsigned long)(uintptr_t)s;
+		if (cb(&snap, ctx) != 0)
+		{
+			sock_irq_restore(flags);
+			return -1;
+		}
+	}
+	sock_irq_restore(flags);
+	return 0;
+}

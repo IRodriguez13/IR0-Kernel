@@ -166,6 +166,8 @@ extern ip4_addr_t ip_gateway;
 int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
 			     void *ctx),
 		  void *ctx);
+int ip_route_add(ip4_addr_t dest_network, ip4_addr_t netmask, ip4_addr_t gateway);
+int ip_routes_seed_from_globals(void);
 
 /* ICMP helpers used by /dev/net control plane. */
 bool icmp_get_next_echo_result(uint16_t id, uint16_t *seq_out, uint64_t *rtt_out,

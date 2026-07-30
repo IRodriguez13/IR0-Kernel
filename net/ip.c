@@ -693,6 +693,9 @@ int ip_init(void)
 
     LOG_INFO_FMT("IP", "Initializing IPv4 with address " IP4_FMT, IP4_ARGS(ntohl(ip_local_addr)));
 
+    /* Soft FIB mirrors globals so /proc/net/route is not synthesis-only. */
+    (void)ip_routes_seed_from_globals();
+
     /* Register IP protocol handler */
     memset(&ip_proto, 0, sizeof(ip_proto));
     ip_proto.name = "IP";
@@ -709,6 +712,28 @@ int ip_init(void)
 
     LOG_INFO("IP", "IPv4 protocol initialized");
     return 0;
+}
+
+/**
+ * ip_routes_seed_from_globals - Install connected + default into soft FIB.
+ *
+ * Called from ip_init / DHCP / NET_SET_CONFIG so /proc/net/route and LPM
+ * share the same table (ip_route_add updates duplicates in place).
+ */
+int ip_routes_seed_from_globals(void)
+{
+	ip4_addr_t connected;
+	int ret = 0;
+
+	if (ip_local_addr == 0 || ip_netmask == 0)
+		return -EINVAL;
+
+	connected = ip_local_addr & ip_netmask;
+	if (ip_route_add(connected, ip_netmask, 0) != 0)
+		ret = -1;
+	if (ip_gateway != 0 && ip_route_add(0, 0, ip_gateway) != 0)
+		ret = -1;
+	return ret;
 }
 
 /**

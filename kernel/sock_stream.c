@@ -19,6 +19,7 @@
 
 #if CONFIG_ENABLE_NETWORKING
 #include "tcp.h"
+#include <ir0/net.h>
 #endif
 
 #define SS_BUF 4096
@@ -737,4 +738,92 @@ int sock_stream_set_reuseaddr(struct sock_stream *s, int on)
 int sock_stream_get_reuseaddr(const struct sock_stream *s)
 {
 	return s ? (int)s->reuseaddr : 0;
+}
+
+static uint8_t sock_stream_linux_st(enum ss_state st)
+{
+	switch (st)
+	{
+	case SS_CONNECTED:
+		return 0x01; /* TCP_ESTABLISHED */
+	case SS_LISTEN:
+		return 0x0A; /* TCP_LISTEN */
+	case SS_BOUND:
+		return 0x07; /* TCP_CLOSE */
+	default:
+		return 0x07;
+	}
+}
+
+int sock_stream_inet_walk(int (*cb)(const struct sock_stream_inet_snap *s,
+				    void *ctx),
+			  void *ctx)
+{
+	int i;
+	struct sock_stream_inet_snap snap;
+
+	if (!cb)
+		return -EINVAL;
+
+	for (i = 0; i < SS_MAX; i++)
+	{
+		struct sock_stream *s = &g_socks[i];
+
+		if (!s->in_use || s->magic != SS_MAGIC)
+			continue;
+		if (s->family != IR0_AF_INET || s->state == SS_IDLE)
+			continue;
+
+		memset(&snap, 0, sizeof(snap));
+#if CONFIG_ENABLE_NETWORKING
+		snap.local_ip = (uint32_t)ip_local_addr;
+#else
+		snap.local_ip = 0;
+#endif
+		snap.local_port = s->wire_local_port ? s->wire_local_port : s->port;
+		if (s->state == SS_CONNECTED)
+		{
+			snap.rem_ip = s->wire_peer_ip;
+			snap.rem_port = s->wire_peer_port;
+		}
+		snap.st = sock_stream_linux_st(s->state);
+		snap.inode = (unsigned long)(uintptr_t)s;
+		if (cb(&snap, ctx) != 0)
+			return -1;
+	}
+	return 0;
+}
+
+int sock_stream_unix_walk(int (*cb)(const struct sock_stream_unix_snap *s,
+				    void *ctx),
+			  void *ctx)
+{
+	int i;
+	struct sock_stream_unix_snap snap;
+
+	if (!cb)
+		return -EINVAL;
+
+	for (i = 0; i < SS_MAX; i++)
+	{
+		struct sock_stream *s = &g_socks[i];
+
+		if (!s->in_use || s->magic != SS_MAGIC)
+			continue;
+		if (s->family != IR0_AF_UNIX || s->state == SS_IDLE)
+			continue;
+
+		memset(&snap, 0, sizeof(snap));
+		snap.inode = (unsigned long)(uintptr_t)s;
+		snap.refcnt = (unsigned)(s->fd_refs > 0 ? s->fd_refs : 1);
+		snap.type = 1; /* SOCK_STREAM */
+		snap.st = sock_stream_linux_st(s->state);
+		snap.path_len = s->path_len;
+		snap.is_abstract = s->is_abstract;
+		if (s->path_len > 0 && s->path_len < sizeof(snap.path))
+			memcpy(snap.path, s->path, s->path_len);
+		if (cb(&snap, ctx) != 0)
+			return -1;
+	}
+	return 0;
 }

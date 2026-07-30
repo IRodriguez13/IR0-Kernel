@@ -560,9 +560,15 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 				 * ignore task.RIP. If a userspace handler was armed,
 				 * iretq into it (BusyBox ping SIGALRM → sendping4).
 				 */
-				if (current_process->saved_context)
+				if (current_process->saved_context &&
+				    current_process->signal_enter_pending)
 				{
+					current_process->signal_enter_pending = 0;
 					process_restore_user_task_segments(current_process);
+					current_process->irq_frame_saved = 0;
+					current_process->coop_resched_resume = 0;
+					current_process->want_kernel_ret = 0;
+					arch_restore_user_fs_base();
 					switch_to_user_task(&current_process->task);
 				}
 				return -EINTR;
@@ -580,9 +586,15 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 			{
 				handle_signals();
 				kfree(kbuf);
-				if (current_process->saved_context)
+				if (current_process->saved_context &&
+				    current_process->signal_enter_pending)
 				{
+					current_process->signal_enter_pending = 0;
 					process_restore_user_task_segments(current_process);
+					current_process->irq_frame_saved = 0;
+					current_process->coop_resched_resume = 0;
+					current_process->want_kernel_ret = 0;
+					arch_restore_user_fs_base();
 					switch_to_user_task(&current_process->task);
 				}
 				return -EINTR;

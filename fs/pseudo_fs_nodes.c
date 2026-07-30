@@ -563,6 +563,14 @@ void pseudo_fs_nodes_register_all(void)
                        (void *)(uintptr_t)proc_net_dev_read);
     pseudo_fs_register("/proc", "net/route", &proc_static_read_ops,
                        (void *)(uintptr_t)proc_net_route_read);
+    pseudo_fs_register("/proc", "net/tcp", &proc_static_read_ops,
+                       (void *)(uintptr_t)proc_net_tcp_read);
+    pseudo_fs_register("/proc", "net/udp", &proc_static_read_ops,
+                       (void *)(uintptr_t)proc_net_udp_read);
+    pseudo_fs_register("/proc", "net/raw", &proc_static_read_ops,
+                       (void *)(uintptr_t)proc_net_raw_read);
+    pseudo_fs_register("/proc", "net/unix", &proc_static_read_ops,
+                       (void *)(uintptr_t)proc_net_unix_read);
 
 #if CONFIG_ENABLE_BLUETOOTH
     pseudo_fs_register("/proc", "bluetooth/devices", &proc_bt_devices_ops,

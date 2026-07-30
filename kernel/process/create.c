@@ -254,11 +254,13 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	proc->signal_mask = 0;
 	proc->signal_ignored = 0;
 	proc->saved_context = NULL;
+	proc->signal_enter_pending = 0;
 	for (int i = 0; i < _NSIG; i++)
 	{
 		proc->signal_handlers[i] = SIG_DFL;
 		proc->signal_sa_flags[i] = 0;
 		proc->signal_sa_mask[i] = 0;
+		proc->signal_restorer[i] = NULL;
 	}
 	proc->robust_list = NULL;
 

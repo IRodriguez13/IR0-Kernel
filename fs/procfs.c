@@ -277,6 +277,58 @@ static int proc_route_walk_cb(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
 }
 #endif
 
+/*
+ * Empty Linux-style socket tables so BusyBox netstat does not fail open().
+ * Rows can be filled later from sock_stream / sock_udp inventories.
+ */
+static int proc_net_socktable_empty(char *buf, size_t count, const char *header)
+{
+	int n;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+	if (!header)
+		return 0;
+	n = snprintf(buf, count, "%s", header);
+	if (n < 0)
+		return -1;
+	if ((size_t)n >= count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	return n;
+}
+
+int proc_net_tcp_read(char *buf, size_t count)
+{
+	return proc_net_socktable_empty(
+		buf, count,
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+}
+
+int proc_net_udp_read(char *buf, size_t count)
+{
+	return proc_net_socktable_empty(
+		buf, count,
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+}
+
+int proc_net_raw_read(char *buf, size_t count)
+{
+	return proc_net_socktable_empty(
+		buf, count,
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+}
+
+int proc_net_unix_read(char *buf, size_t count)
+{
+	return proc_net_socktable_empty(
+		buf, count,
+		"Num       RefCount Protocol Flags    Type St Inode Path\n");
+}
+
 int proc_net_route_read(char *buf, size_t count)
 {
 #if CONFIG_ENABLE_NETWORKING

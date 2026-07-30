@@ -214,8 +214,16 @@ typedef struct process
 	uint32_t signal_ignored;  /* Mask of signals to ignore (SIG_IGN) */
 	uint32_t signal_sa_flags[_NSIG]; /* Per-signal sa_flags from sigaction */
 	uint32_t signal_sa_mask[_NSIG];  /* Per-signal sa_mask (during handler only) */
+	void (*signal_restorer[_NSIG])(void); /* sa_restorer (SA_RESTORER / musl) */
 	int *set_tid_ptr;      /* set_tid_address(2) userspace pointer */
 	struct sigcontext *saved_context;  /* Saved context before signal handler (for sigreturn) */
+	/*
+	 * Set when a userspace handler frame is armed; cleared on the first
+	 * switch_to_user_task into that handler. saved_context must stay until
+	 * rt_sigreturn — without this flag, nested syscalls in the handler
+	 * (sendto/setitimer from BusyBox ping SIGALRM) re-enter the handler.
+	 */
+	uint8_t signal_enter_pending;
 
 	/* Linux syscall insn frame (for fork child / blocked syscall return). */
 	arch_syscall_frame_t syscall_frame;
@@ -489,6 +497,35 @@ static inline uint64_t process_syscall_arg(const process_t *p, unsigned n)
 		return p->syscall_frame.r9;
 	default:
 		return 0;
+	}
+}
+
+static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
+{
+	if (!p)
+		return;
+	switch (n)
+	{
+	case 0:
+		p->syscall_frame.rdi = v;
+		break;
+	case 1:
+		p->syscall_frame.rsi = v;
+		break;
+	case 2:
+		p->syscall_frame.rdx = v;
+		break;
+	case 3:
+		p->syscall_frame.r10 = v;
+		break;
+	case 4:
+		p->syscall_frame.r8 = v;
+		break;
+	case 5:
+		p->syscall_frame.r9 = v;
+		break;
+	default:
+		break;
 	}
 }
 

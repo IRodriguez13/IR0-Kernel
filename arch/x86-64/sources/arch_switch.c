@@ -446,22 +446,41 @@ process_t *prev_proc;
      * Repair only when syscall_frame has usable user RIP/RSP.
      */
 #if IR0_CLASS_B_REPAIR
+    /*
+     * Do not skip waiters: ash wait4 + blocking child (hexdump/stdin) used to
+     * hit Class B while wait_blocked=1, and the old exclusion let it panic.
+     */
     if (next && next_proc && next_proc->mode == USER_MODE &&
         process_task_kernel_ret_rip_bad(next) &&
-        !next_proc->wait_blocked && next_proc->wait_target_pid == 0 &&
         !next_proc->coop_resched_resume)
     {
         const syscall_user_frame_t *sf = &next_proc->syscall_frame;
+        const int wait_no_child =
+            (next_proc->wait_blocked || next_proc->wait_target_pid != 0) &&
+            next_proc->wait_resume_child_pid <= 0;
 
-        if (process_rip_in_user_range(process_syscall_ip(next_proc)) &&
-            process_rip_in_user_range(process_syscall_sp(next_proc)))
+        if (wait_no_child)
+        {
+            /*
+             * Cannot safely apply syscall_frame (placeholder rax=0). Demote
+             * to USER CS so kernel_ret does not jmp to a user VA. Prefer
+             * surviving over panic; formation is fixed in process_wait arm.
+             */
+            klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_WAIT_DEMOTE");
+            next_proc->irq_frame_saved = 0;
+            process_restore_user_task_segments(next_proc);
+        }
+        else if (process_rip_in_user_range(process_syscall_ip(next_proc)) &&
+                 process_rip_in_user_range(process_syscall_sp(next_proc)))
         {
             uint64_t rax = next_proc->syscall_resume_rax;
 
             if (rax == 0)
                 rax = task_get_retval(&next_proc->task);
             klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_REPAIR");
-            process_apply_syscall_frame_to_task(&next_proc->task, sf, rax);
+			process_apply_syscall_frame_to_task(&next_proc->task, sf, rax);
+            if (next_proc->signal_enter_pending && next_proc->saved_context)
+                next_proc->signal_enter_pending = 0;
         }
         else
             klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_UNREPAIRED");

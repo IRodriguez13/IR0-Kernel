@@ -54,8 +54,10 @@ int process_signals_clone(process_t *dst, const process_t *src)
 		dst->signal_handlers[i] = src->signal_handlers[i];
 		dst->signal_sa_flags[i] = src->signal_sa_flags[i];
 		dst->signal_sa_mask[i] = src->signal_sa_mask[i];
+		dst->signal_restorer[i] = src->signal_restorer[i];
 	}
 	dst->saved_context = NULL;
+	dst->signal_enter_pending = 0;
 	return 0;
 }
 

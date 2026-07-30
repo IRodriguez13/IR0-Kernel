@@ -529,12 +529,17 @@ static void dhcp_apply_config(struct dhcp_offer_data *offer)
 
     arp_set_my_ip(ip_local_addr);
 
-    struct net_device *dev = net_get_devices();
-    while (dev)
     {
-        arp_set_interface_ip(dev, ip_local_addr);
-        dev = dev->next;
+        struct net_device *dev = net_get_devices();
+
+        while (dev)
+        {
+            arp_set_interface_ip(dev, ip_local_addr);
+            dev = dev->next;
+        }
     }
+
+    (void)ip_routes_seed_from_globals();
 
     if (offer->dns_server != 0)
     {

@@ -31,3 +31,15 @@ int sock_udp_sendto(struct sock_udp *sock, uint32_t dest_ip_be, uint16_t dest_po
 		    const void *data, size_t len);
 ssize_t sock_udp_recvfrom(struct sock_udp *sock, void *buf, size_t len, int flags,
 			  uint32_t *src_ip_be_out, uint16_t *src_port_out);
+
+struct sock_udp_snap
+{
+	uint32_t local_ip;
+	uint16_t local_port;
+	uint32_t rem_ip;
+	uint16_t rem_port;
+	uint8_t st;
+	unsigned long inode;
+};
+
+int sock_udp_walk(int (*cb)(const struct sock_udp_snap *s, void *ctx), void *ctx);

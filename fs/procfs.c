@@ -46,6 +46,9 @@
 #include <ir0/resource_registry.h>
 #include <ir0/pseudo_fs.h>
 #include <ir0/logging.h>
+#include <ir0/sock_stream.h>
+#include <ir0/sock_udp.h>
+#include <ir0/sock_icmp.h>
 
 #define PROC_BUFFER_SIZE           4096    /* Standard proc buffer size */
 #define PROC_LINE_MAX_LEN          256     /* Max line length for parsing */
@@ -278,16 +281,165 @@ static int proc_route_walk_cb(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
 #endif
 
 /*
- * Empty Linux-style socket tables so BusyBox netstat does not fail open().
- * Rows can be filled later from sock_stream / sock_udp inventories.
+ * Linux-style /proc/net/{tcp,udp,raw,unix} for BusyBox netstat.
+ * IPv4 addresses are printed as %08X of the __be32 (sin_addr.s_addr) value —
+ * same as Linux get_tcp4_sock — not ntohl()'d host integers.
  */
-static int proc_net_socktable_empty(char *buf, size_t count, const char *header)
+struct proc_sock_fmt_ctx
+{
+	char *buf;
+	size_t count;
+	size_t off;
+	int sl;
+	int err;
+};
+
+static int proc_sock_append(struct proc_sock_fmt_ctx *c, const char *line)
+{
+	size_t n;
+	size_t avail;
+
+	if (!c || !line || c->err)
+		return -1;
+	n = strlen(line);
+	avail = (c->off < c->count) ? (c->count - c->off) : 0;
+	if (avail <= 1)
+	{
+		c->err = 1;
+		return -1;
+	}
+	if (n >= avail)
+		n = avail - 1;
+	memcpy(c->buf + c->off, line, n);
+	c->off += n;
+	c->buf[c->off] = '\0';
+	return 0;
+}
+
+static int proc_inet_row_cb(const struct sock_stream_inet_snap *s, void *ctx)
+{
+	struct proc_sock_fmt_ctx *c = ctx;
+	char line[192];
+	int n;
+
+	n = snprintf(line, sizeof(line),
+		     "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08X %08X %5u %8d %lu %d\n",
+		     c->sl++,
+		     (unsigned)s->local_ip, (unsigned)s->local_port,
+		     (unsigned)s->rem_ip, (unsigned)s->rem_port,
+		     (unsigned)s->st,
+		     0u, 0u, 0u, 0u, 0u, 0u, 0, (unsigned long)s->inode, 1);
+	if (n < 0)
+		return -1;
+	return proc_sock_append(c, line);
+}
+
+static int proc_udp_row_cb(const struct sock_udp_snap *s, void *ctx)
+{
+	struct proc_sock_fmt_ctx *c = ctx;
+	char line[192];
+	int n;
+
+	n = snprintf(line, sizeof(line),
+		     "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08X %08X %5u %8d %lu %d\n",
+		     c->sl++,
+		     (unsigned)s->local_ip, (unsigned)s->local_port,
+		     (unsigned)s->rem_ip, (unsigned)s->rem_port,
+		     (unsigned)s->st,
+		     0u, 0u, 0u, 0u, 0u, 0u, 0, (unsigned long)s->inode, 1);
+	if (n < 0)
+		return -1;
+	return proc_sock_append(c, line);
+}
+
+static int proc_raw_row_cb(const struct sock_icmp_snap *s, void *ctx)
+{
+	struct proc_sock_fmt_ctx *c = ctx;
+	char line[192];
+	int n;
+
+	n = snprintf(line, sizeof(line),
+		     "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08X %08X %5u %8d %lu %d\n",
+		     c->sl++,
+		     0u, (unsigned)s->proto,
+		     0u, 0u,
+		     0x07u,
+		     0u, 0u, 0u, 0u, 0u, 0u, 0, (unsigned long)s->inode, 1);
+	if (n < 0)
+		return -1;
+	return proc_sock_append(c, line);
+}
+
+static int proc_unix_row_cb(const struct sock_stream_unix_snap *s, void *ctx)
+{
+	struct proc_sock_fmt_ctx *c = ctx;
+	char line[256];
+	char path[128];
+	int n;
+
+	path[0] = '\0';
+	if (s->path_len > 0)
+	{
+		if (s->is_abstract)
+		{
+			path[0] = '@';
+			if (s->path_len < sizeof(path) - 1)
+			{
+				memcpy(path + 1, s->path, s->path_len);
+				path[s->path_len + 1] = '\0';
+			}
+		}
+		else if (s->path_len < sizeof(path))
+		{
+			memcpy(path, s->path, s->path_len);
+			path[s->path_len] = '\0';
+		}
+	}
+
+	n = snprintf(line, sizeof(line),
+		     "%08lX: %08X %08X %08X %04X %02X %5lu",
+		     (unsigned long)s->inode,
+		     (unsigned)s->refcnt,
+		     0u, 0u,
+		     (unsigned)s->type,
+		     (unsigned)s->st,
+		     (unsigned long)s->inode);
+	if (n < 0)
+		return -1;
+	if (path[0])
+	{
+		size_t used = (size_t)n;
+
+		if (used + 2 < sizeof(line))
+		{
+			line[used++] = ' ';
+			strncpy(line + used, path, sizeof(line) - used - 2);
+			line[sizeof(line) - 2] = '\0';
+		}
+	}
+	{
+		size_t L = strlen(line);
+
+		if (L + 1 < sizeof(line))
+		{
+			line[L] = '\n';
+			line[L + 1] = '\0';
+		}
+	}
+	return proc_sock_append(c, line);
+}
+
+static int proc_net_socktable_start(char *buf, size_t count, const char *header,
+				    struct proc_sock_fmt_ctx *c)
 {
 	int n;
 
 	if (VALIDATE_BUFFER(buf, count) != 0)
 		return -1;
 	memset(buf, 0, count);
+	memset(c, 0, sizeof(*c));
+	c->buf = buf;
+	c->count = count;
 	if (!header)
 		return 0;
 	n = snprintf(buf, count, "%s", header);
@@ -296,37 +448,65 @@ static int proc_net_socktable_empty(char *buf, size_t count, const char *header)
 	if ((size_t)n >= count)
 	{
 		buf[count - 1] = '\0';
-		return (int)(count - 1);
+		c->off = count - 1;
+		return (int)c->off;
 	}
-	return n;
+	c->off = (size_t)n;
+	return 0;
 }
 
 int proc_net_tcp_read(char *buf, size_t count)
 {
-	return proc_net_socktable_empty(
-		buf, count,
-		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+	struct proc_sock_fmt_ctx c;
+	const char *hdr =
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+	if (proc_net_socktable_start(buf, count, hdr, &c) < 0)
+		return -1;
+#if CONFIG_ENABLE_NETWORKING
+	(void)sock_stream_inet_walk(proc_inet_row_cb, &c);
+#endif
+	return (int)c.off;
 }
 
 int proc_net_udp_read(char *buf, size_t count)
 {
-	return proc_net_socktable_empty(
-		buf, count,
-		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+	struct proc_sock_fmt_ctx c;
+	const char *hdr =
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+	if (proc_net_socktable_start(buf, count, hdr, &c) < 0)
+		return -1;
+#if CONFIG_ENABLE_NETWORKING
+	(void)sock_udp_walk(proc_udp_row_cb, &c);
+#endif
+	return (int)c.off;
 }
 
 int proc_net_raw_read(char *buf, size_t count)
 {
-	return proc_net_socktable_empty(
-		buf, count,
-		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+	struct proc_sock_fmt_ctx c;
+	const char *hdr =
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+	if (proc_net_socktable_start(buf, count, hdr, &c) < 0)
+		return -1;
+#if CONFIG_ENABLE_NETWORKING
+	(void)sock_icmp_walk(proc_raw_row_cb, &c);
+#endif
+	return (int)c.off;
 }
 
 int proc_net_unix_read(char *buf, size_t count)
 {
-	return proc_net_socktable_empty(
-		buf, count,
-		"Num       RefCount Protocol Flags    Type St Inode Path\n");
+	struct proc_sock_fmt_ctx c;
+	const char *hdr =
+		"Num       RefCount Protocol Flags    Type St Inode Path\n";
+
+	if (proc_net_socktable_start(buf, count, hdr, &c) < 0)
+		return -1;
+	(void)sock_stream_unix_walk(proc_unix_row_cb, &c);
+	return (int)c.off;
 }
 
 int proc_net_route_read(char *buf, size_t count)

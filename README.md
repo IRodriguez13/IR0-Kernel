@@ -48,6 +48,12 @@ ISD builds a finished image; IR0 boots it.
 
 <p align="center"><em>BusyBox <code>top</code> after login: runit PID 1, <code>runsvdir</code>/<code>runsv</code>, ash, and idle — live process view on the ISD image.</em></p>
 
+<p align="center">
+  <img src="scripts/kconfig/assets/isd-doom.png" alt="IR0/Unix — Doom on QEMU (desktop profile)" width="720" />
+</p>
+
+<p align="center"><em>Doom on IR0/Unix under QEMU: framebuffer + input path on the ISD desktop image (<code>PROFILE=desktop</code>).</em></p>
+
 ## Getting started
 
 ```bash

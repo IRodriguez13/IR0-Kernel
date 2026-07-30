@@ -33,6 +33,11 @@ void arch_report_bad_kernel_ret_rip(uint64_t rip, task_t *task)
 	{
 		klog_debug_fmt("KERN", " pid=%x cs=%llx saved_arg0=%llx wait_blocked=%llx wait_target=%llx irq_frame=%llx sf_rip=%llx", (unsigned)((uint32_t)p->task.pid), (unsigned long long)((uint64_t)task_get_cs(&p->task)), (unsigned long long)(task_get_arg0(&p->task)), (unsigned long long)((uint64_t)p->wait_blocked), (unsigned long long)((uint64_t)(int64_t)p->wait_target_pid), (unsigned long long)((uint64_t)p->irq_frame_saved), (unsigned long long)(process_syscall_ip(p)));
 	}
+	/*
+	 * Shared from switch_x64 .bad_ret_rip and .bad_user_iret_frame.
+	 * Message names the Class B / kernel_ret failure mode; user-iret
+	 * bound failures hit the same helper (see switch_x64.asm).
+	 */
 	panicex("kernel_ret RIP not in .text", PANIC_KERNEL_BUG, __FILE__, __LINE__,
 		__func__);
 }

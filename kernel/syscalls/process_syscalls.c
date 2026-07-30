@@ -43,6 +43,7 @@
 #include <ir0/ktm/checkpoint.h>
 #include <config.h>
 #include <ir0/arch_port.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/time.h>
 #include <ir0/clock.h>
 #include <ir0/credentials.h>
@@ -381,6 +382,7 @@ int64_t sys_rt_sigaction(int signum, const struct sigaction *act,
 		rt_sigaction_mask_to_sigset(&kold.sa_mask, sigsetsize,
 					    current_process->signal_sa_mask[signum]);
 		kold.sa_flags = (unsigned long)current_process->signal_sa_flags[signum];
+		kold.sa_restorer = current_process->signal_restorer[signum];
 		if (copy_to_user(oldact, &kold, user_bytes) != 0)
 			return -EFAULT;
 	}
@@ -397,6 +399,8 @@ int64_t sys_rt_sigaction(int signum, const struct sigaction *act,
 		current_process->signal_sa_mask[signum] =
 			rt_sigaction_mask_from_sigset(&kact.sa_mask, sigsetsize);
 		current_process->signal_sa_flags[signum] = (uint32_t)kact.sa_flags;
+		current_process->signal_restorer[signum] =
+			(kact.sa_flags & SA_RESTORER) ? kact.sa_restorer : NULL;
 #if defined(SIGNAL_DELIVER_LOG) && SIGNAL_DELIVER_LOG
 		if (signum == SIGSEGV)
 		{
@@ -1484,47 +1488,58 @@ int64_t sys_getrlimit(unsigned int resource, void *rlim)
 }
 
 /**
- * sys_sigreturn - Return from signal handler (POSIX sigreturn)
- * @ctx: Signal context to restore (from signal frame)
+ * sys_sigreturn - Return from signal handler (rt_sigreturn)
+ * @ctx: Ignored on the musl/Linux x86-64 path (see below)
  *
- * Restores CPU state saved before signal handler was invoked.
- * This allows the process to resume execution after handling a signal.
+ * Restores CPU state saved at signal delivery. Never returns on success.
  *
- * Returns: Never returns normally (restores context and resumes execution)
+ * Linux x86-64: musl __restore_rt is just
+ *   mov $__NR_rt_sigreturn, %eax; syscall
+ * with no sigcontext* in rdi. Requiring a valid user pointer here made
+ * rt_sigreturn return -EFAULT into the trampoline → SEGV (addr≈0x79) after
+ * BusyBox ping's SIGALRM sendping handler.
  */
 int64_t sys_sigreturn(struct sigcontext *ctx)
 {
+  struct sigcontext *restore_ctx;
+
   if (!current_process)
     return -ESRCH;
 
-  /* Validate context is in userspace (for USER_MODE processes) */
-  if (current_process->mode == USER_MODE)
+  if (current_process->mode != USER_MODE)
+    return 0;
+
+  /*
+   * Prefer the kernel copy from handle_signals(). Only fall back to a
+   * userspace pointer when that copy is missing (legacy/test callers).
+   */
+  restore_ctx = current_process->saved_context;
+  if (!restore_ctx)
   {
-    if (!ctx || validate_userspace_buffer(ctx, sizeof(struct sigcontext)) != 0)
+    if (!ctx ||
+        validate_userspace_buffer(ctx, sizeof(struct sigcontext)) != 0)
       return -EFAULT;
-    
-    /* Restore context from saved context or from argument */
-    struct sigcontext *restore_ctx = current_process->saved_context;
-    if (!restore_ctx)
-    {
-      /* No saved context - use argument */
-      restore_ctx = ctx;
-    }
-    
-    /* Restore CPU state from context */
-    arch_task_load_sigcontext(&current_process->task, restore_ctx);
-    
-    /* Free saved context */
-    if (current_process->saved_context)
-    {
-      kfree(current_process->saved_context);
-      current_process->saved_context = NULL;
-    }
-    
-    /* Process will resume at restored RIP on next context switch */
-    return 0;  /* Should not be reached, but return 0 for safety */
+    restore_ctx = ctx;
   }
-  
-  /* KERNEL_MODE: no-op */
+
+  arch_task_load_sigcontext(&current_process->task, restore_ctx);
+
+  if (current_process->saved_context)
+  {
+    kfree(current_process->saved_context);
+    current_process->saved_context = NULL;
+  }
+
+  /*
+   * Must iretq into the restored frame. Sysret would return into the
+   * restorer trampoline after the syscall insn, not to saved RIP.
+   */
+  process_restore_user_task_segments(current_process);
+  current_process->irq_frame_saved = 0;
+  current_process->coop_resched_resume = 0;
+  current_process->want_kernel_ret = 0;
+  current_process->signal_enter_pending = 0;
+  arch_restore_user_fs_base();
+  switch_to_user_task(&current_process->task);
   return 0;
 }

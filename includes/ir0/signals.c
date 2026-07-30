@@ -23,6 +23,9 @@
 #include <ir0/kmem.h>
 #include <ir0/arch_task_ops.h>
 #include <ir0/arch_signal.h>
+#include <ir0/arch_cpu.h>
+#include <ir0/arch_task.h>
+#include <ir0/errno.h>
 #include <config.h>
 #include <string.h>
 #include <ktm.h>
@@ -183,6 +186,7 @@ void signals_reset_on_exec(process_t *p)
 		p->signal_handlers[i] = SIG_DFL;
 		p->signal_sa_flags[i] = 0;
 		p->signal_sa_mask[i] = 0;
+		p->signal_restorer[i] = NULL;
 	}
 }
 
@@ -601,62 +605,147 @@ void handle_signals(void)
                     /* Only setup signal frame for USER_MODE processes */
                     if (current->mode == USER_MODE)
                     {
-                        /* Save current context */
-                        struct sigcontext *ctx = kmalloc(sizeof(struct sigcontext));
+                        struct sigcontext *ctx;
+                        struct sigframe frame;
+                        uint64_t user_sp;
+                        uint64_t frame_addr;
+                        uint64_t restorer;
+                        uint64_t old_cr3;
+                        void (*restorer_fn)(void);
+
+                        ctx = kmalloc(sizeof(struct sigcontext));
                         if (!ctx)
                         {
-                            /* Out of memory - fall back to default handler */
                             current->signal_handlers[sig] = SIG_DFL;
                             current->signal_pending &= ~SIGNAL_MASK(sig);
                             continue;
                         }
-                        
-                        /* Save CPU state from task structure */
-                        arch_task_store_sigcontext(ctx, &current->task);
-                        
-                        /* Store saved context in process */
-                        current->saved_context = ctx;
-                        
-                        /* Allocate signal frame on userspace stack */
-                        uint64_t frame_addr = task_get_sp(&current->task) -
-                                              sizeof(struct sigframe);
-                        frame_addr &= ~0xF;  /* Align to 16 bytes (ABI requirement) */
-                        
-                        /* Ensure frame is in userspace */
-                        if (frame_addr < 0x400000UL || frame_addr > 0x7FFFFFFFFFFFUL)
+
+                        /*
+                         * Interrupted context: prefer syscall_frame (musl
+                         * syscall insn) — task.RSP/RIP are often kernel/stale
+                         * while blocked in recvfrom/nanosleep.
+                         */
+                        if (current->syscall_frame_fresh)
                         {
-                            /* Invalid stack - fall back to default handler */
+                            const syscall_user_frame_t *sf =
+                                &current->syscall_frame;
+
+                            memset(ctx, 0, sizeof(*ctx));
+                            ctx->rip = sf->rip;
+                            ctx->rsp = sf->rsp;
+                            ctx->rflags = sf->rflags ? sf->rflags
+                                                     : (uint64_t)RFLAGS_IF;
+                            ctx->rax = (uint64_t)(int64_t)(-EINTR);
+                            ctx->rdi = sf->rdi;
+                            ctx->rsi = sf->rsi;
+                            ctx->rdx = sf->rdx;
+                            ctx->r10 = sf->r10;
+                            ctx->r8 = sf->r8;
+                            ctx->r9 = sf->r9;
+                            ctx->rbx = sf->rbx;
+                            ctx->rbp = sf->rbp;
+                            ctx->r12 = sf->r12;
+                            ctx->r13 = sf->r13;
+                            ctx->r14 = sf->r14;
+                            ctx->r15 = sf->r15;
+#if defined(USER_CODE_SEL) && defined(USER_DATA_SEL)
+                            ctx->cs = (uint64_t)USER_CODE_SEL;
+                            ctx->ss = (uint64_t)USER_DATA_SEL;
+#endif
+                        }
+                        else
+                            arch_task_store_sigcontext(ctx, &current->task);
+
+                        current->saved_context = ctx;
+
+                        user_sp = ctx->rsp & ~0xFUL;
+                        /*
+                         * Layout (low→high): [restorer][sigframe…]
+                         * Handler `ret` → musl __restore_rt → rt_sigreturn.
+                         */
+                        if (user_sp < sizeof(struct sigframe) + 8)
+                        {
+                            kfree(ctx);
+                            current->saved_context = NULL;
+                            current->signal_pending &= ~SIGNAL_MASK(sig);
+                            continue;
+                        }
+                        user_sp -= sizeof(struct sigframe);
+                        frame_addr = user_sp;
+                        user_sp -= 8;
+
+                        if (user_sp < 0x400000UL ||
+                            user_sp > 0x7FFFFFFFFFFFUL)
+                        {
                             kfree(ctx);
                             current->saved_context = NULL;
                             current->signal_handlers[sig] = SIG_DFL;
                             current->signal_pending &= ~SIGNAL_MASK(sig);
                             continue;
                         }
-                        
-                        /* Setup signal frame */
-                        struct sigframe frame;
+
+                        restorer_fn = current->signal_restorer[sig];
+                        if (!restorer_fn ||
+                            !is_user_address((void *)restorer_fn,
+                                             sizeof(void *)))
+                        {
+                            /*
+                             * No SA_RESTORER: cannot safely return from
+                             * handler. Keep pending; stop scanning this tick.
+                             */
+                            kfree(ctx);
+                            current->saved_context = NULL;
+                            break;
+                        }
+                        restorer = (uint64_t)(uintptr_t)restorer_fn;
+
                         frame.handler = handler;
                         frame.signum = sig;
                         frame.ctx = *ctx;
-                        
-                        /* Copy frame to userspace stack */
-                        uint64_t old_cr3 = get_current_page_directory();
+
+                        old_cr3 = get_current_page_directory();
                         load_page_directory((uint64_t)process_pgd(current));
-                        memcpy((void *)frame_addr, &frame, sizeof(struct sigframe));
+                        memcpy((void *)frame_addr, &frame,
+                               sizeof(struct sigframe));
+                        memcpy((void *)user_sp, &restorer, sizeof(restorer));
                         load_page_directory(old_cr3);
-                        
+
                         arch_signal_prepare_task_handler(&current->task,
                                                          (void *)handler, sig,
-                                                         frame_addr);
+                                                         user_sp);
 
-                        /* Clear signal before calling handler */
+                        /*
+                         * Always redirect syscall_frame to the handler so
+                         * Class B repair / irq_frame resume cannot iretq to a
+                         * stale recvfrom RIP. Then arm coop user-iret (not
+                         * kernel_ret): REPAIR alone has raced with FS=0 and
+                         * SEGV at low TLS offsets (BusyBox ping SIGALRM).
+                         */
+                        process_syscall_set_ip(
+                            current, (uint64_t)(uintptr_t)handler);
+                        process_syscall_set_sp(current, user_sp);
+                        process_syscall_set_arg(
+                            current, 0, (uint64_t)(uint32_t)sig);
+                        process_syscall_set_arg(current, 1, 0);
+                        process_syscall_set_arg(current, 2, 0);
+                        if (!process_syscall_flags(current))
+                            process_syscall_set_flags(current,
+                                                      (uint64_t)RFLAGS_IF);
+
+                        current->want_kernel_ret = 0;
+                        process_apply_syscall_frame_to_task(
+                            &current->task, &current->syscall_frame,
+                            (uint64_t)(uint32_t)sig);
+                        arch_restore_user_fs_base();
+                        current->signal_enter_pending = 1;
+
                         current->signal_pending &= ~SIGNAL_MASK(sig);
-                        
+
 #if DEBUG_PROCESS
-                        klog_info("SIGNAL", "Signal frame set up, handler will be called");
+                        klog_info("SIGNAL",
+                                  "Signal frame set up (restorer+syscall)");
 #endif
-                        /* Handler will be invoked on next context switch */
-                        /* When handler returns, it will call sigreturn() syscall */
                     }
                     else
                     {

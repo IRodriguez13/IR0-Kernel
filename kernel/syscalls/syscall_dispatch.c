@@ -37,6 +37,7 @@
 #include <ir0/process.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ir0/arch_port.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/sched.h>
 #include <ir0/sysv_shm.h>
 #include <ir0/memfd.h>
@@ -549,6 +550,24 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
   }
   else
   {
+    /*
+     * Signal handler armed during this syscall (e.g. SIGALRM in recvfrom):
+     * sysret would ignore task.RIP and return to the insn after the syscall.
+     * Iretq into the handler instead (restorer → rt_sigreturn later).
+     */
+    if (current_process && current_process->mode == USER_MODE &&
+        current_process->saved_context &&
+        current_process->signal_enter_pending)
+    {
+      current_process->signal_enter_pending = 0;
+      process_restore_user_task_segments(current_process);
+      current_process->irq_frame_saved = 0;
+      current_process->coop_resched_resume = 0;
+      current_process->want_kernel_ret = 0;
+      arch_restore_user_fs_base();
+      switch_to_user_task(&current_process->task);
+    }
+
     if (current_process && current_process->mode == USER_MODE &&
         current_process->syscall_frame_fresh)
     {

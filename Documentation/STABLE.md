@@ -1,15 +1,15 @@
 # IR0 — Stable baseline (release 0.0.1)
 
-> **Last verified:** 2026-07-25  
+> **Last verified:** 2026-07-30  
 > **Source of truth:** `make release-0.0.1` / CTR gates, `Makefile` smoke targets,  
 > hostshare-exec + F8 **honest MVP** (`smoke-f8-net`) + FAT secondary ship note,  
 > runit PID1 + hybrid 9p payload (`runit_hostshare_payload_run`) for desktop X smoke,  
 > merge `56a3f7b` (dev→master: kexec/S3, P1-storage, P1-T1), Future F2–F6,  
 > `Documentation/releases/IR0_0.0.1_SCOPE.md`, [`BACKLOG_REMAINING.md`](BACKLOG_REMAINING.md),  
+> [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md), [`releases/NETWORKING_MATRIX.md`](releases/NETWORKING_MATRIX.md),  
 > critical hybrid KTM battery ([`KTM.md`](KTM.md) § critical product battery),  
-> **SEP-2** userspace split: product rootfs built by the **`IR0-userspace`** sibling
-> (`IR0_USERSPACE_ROOT`, `make headers_install`) — see [`USERSPACE.md`](USERSPACE.md) and
-> [`TREE_CONTRACT`](../../IR0-desktop/Documentation/TREE_CONTRACT.md).
+> **SEP-2** userspace split: product rootfs built by the **`IR0-userspace`** / **ISD** sibling
+> (`IR0_USERSPACE_ROOT`, `make headers_install`) — see [`USERSPACE.md`](USERSPACE.md).
 > In-kernel dbgshell / `debug_bins/` **removed** (2026-07-25).
 
 This document is the **single checklist** for what is **stable enough to run and test in QEMU** (serial and GTK UI), what was formerly **in development** and is now closed for **0.0.1**, and what remains **future work** (see [`ROADMAP.md`](ROADMAP.md) P1+).
@@ -21,14 +21,16 @@ full-copied user pages. Real share-on-fork + write-fault break landed in `62cc51
 `make smoke-mm-cow-lazy`. KTM is the canonical in-kernel test plane (`make ktm-run`,
 `make ktm-userdev-run`); see [`ai_driven_dev/ktm.md`](ai_driven_dev/ktm.md).
 
-### Tag prep vs release ship (2026-07-12)
+### Tag prep vs release ship (2026-07-30)
 
 | Artifact | Meaning |
 |----------|---------|
-| **`v0.0.1-rc2`** | Pre-release **tag prep**: critical automated gates green (TCC, Doom+IWAD, posix, hostshare, arch-guard). **Not** a shipped release. |
-| **Release 0.0.1 ship** | Maintainer only: **manual QEMU/VM** walkthrough “listo”. Automated BusyBox product path (**BUSY-1** manifest + **BUSY-2** `ktm-userdev-busybox-manifest-run` / alias `smoke-busybox-manifest`) is green. |
+| **`v0.0.1-rc4`** | **Last pre-release** before final. Version string `0.0.1-rc4`. Networking stress green (`NET_STRESS_PASS`). Details: [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md). |
+| **Post-rc4 work** | **Bugfixing + stabilization only** — no new 0.0.1 product surface. |
+| **`v0.0.1` (final ship)** | Maintainer: **manual QEMU/VM** “listo” + SCOPE blockers cleared. |
+| Earlier | `v0.0.1-rc2` / `rc1` / `pre.1` — historical tag prep only. |
 
-Do **not** treat `v0.0.1-rc2` (or earlier `rc1`/`pre.1`) as “0.0.1 done”. Final git tag `v0.0.1` waits on ship criteria above.
+Do **not** treat any `rc*` tag as “0.0.1 done”. Final git tag `v0.0.1` waits on ship criteria above.
 
 ---
 

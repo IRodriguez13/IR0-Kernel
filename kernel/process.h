@@ -224,6 +224,13 @@ typedef struct process
 	 * (sendto/setitimer from BusyBox ping SIGALRM) re-enter the handler.
 	 */
 	uint8_t signal_enter_pending;
+	/*
+	 * When set, handle_signals() leaves catchable user handlers pending
+	 * (no sigframe / signal_enter_pending). Interruptible waits (e.g.
+	 * tcp_wire_connect) can map SIGALRM → -ETIMEDOUT instead of jumping
+	 * into BusyBox die-from-handler (exit from SIGALRM SEGVs on repeat).
+	 */
+	uint8_t signal_defer_catchable;
 
 	/* Linux syscall insn frame (for fork child / blocked syscall return). */
 	arch_syscall_frame_t syscall_frame;

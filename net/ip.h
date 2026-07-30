@@ -57,9 +57,11 @@ struct ip_rx_context
 
 /* IP Protocol API */
 int ip_init(void);
-int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol, 
+int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
             const void *payload, size_t len);
-void ip_receive_handler(struct net_device *dev, const void *data, 
+int ip_send_ttl(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
+		const void *payload, size_t len, uint8_t ttl);
+void ip_receive_handler(struct net_device *dev, const void *data,
                         size_t len, void *priv);
 
 /* Routing API */

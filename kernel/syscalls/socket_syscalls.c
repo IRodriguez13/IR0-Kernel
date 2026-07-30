@@ -249,10 +249,29 @@ int64_t sys_socket(int domain, int type, int protocol)
 		return fd;
 	}
 
-	if (domain != AF_INET)
-		return -EAFNOSUPPORT;
 	if (base != SOCK_DGRAM)
 		return -EPROTOTYPE;
+
+	/*
+	 * AF_UNIX SOCK_DGRAM: musl if_nametoindex()/if_indextoname() open
+	 * AF_UNIX datagram sockets solely for SIOCGIFINDEX/SIOCGIFNAME.
+	 * Reuse a UDP sock object as an ioctl control fd (no wire I/O).
+	 */
+	if (domain == AF_UNIX)
+	{
+		struct sock_udp *sock;
+
+		if (protocol != 0)
+			return -EPROTONOSUPPORT;
+		sock = sock_udp_create();
+		if (!sock)
+			return -ENOMEM;
+		fd = sock_alloc_fd_flags(sock, 0, type_flags);
+		return fd;
+	}
+
+	if (domain != AF_INET)
+		return -EAFNOSUPPORT;
 	if (protocol != 0 && protocol != IPPROTO_UDP)
 		return -EPROTONOSUPPORT;
 
@@ -325,6 +344,7 @@ int64_t sys_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 	}
 
 	{
+		struct sock_icmp *icmp;
 		struct sockaddr_in sin;
 
 		if (addrlen < sizeof(struct sockaddr_in))
@@ -333,6 +353,11 @@ int64_t sys_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 			return -EFAULT;
 		if (sin.sin_family != AF_INET)
 			return -EAFNOSUPPORT;
+
+		icmp = sock_icmp_fd_lookup(fd);
+		if (icmp)
+			return sock_icmp_bind(icmp, sin.sin_addr);
+
 		sock = sock_fd_lookup(fd);
 		if (!sock)
 			return -ENOTSOCK;
@@ -569,21 +594,9 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 				handle_signals();
 				kfree(kbuf);
 				/*
-				 * Sysret would return to the insn after recvfrom and
-				 * ignore task.RIP. If a userspace handler was armed,
-				 * iretq into it (BusyBox ping SIGALRM → sendping4).
+				 * Leave signal_enter_pending for syscall_dispatch
+				 * (same as tcp_wire_connect interrupt).
 				 */
-				if (current_process->saved_context &&
-				    current_process->signal_enter_pending)
-				{
-					current_process->signal_enter_pending = 0;
-					process_restore_user_task_segments(current_process);
-					current_process->irq_frame_saved = 0;
-					current_process->coop_resched_resume = 0;
-					current_process->want_kernel_ret = 0;
-					arch_restore_user_fs_base();
-					switch_to_user_task(&current_process->task);
-				}
 				return -EINTR;
 			}
 			{
@@ -599,17 +612,6 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 			{
 				handle_signals();
 				kfree(kbuf);
-				if (current_process->saved_context &&
-				    current_process->signal_enter_pending)
-				{
-					current_process->signal_enter_pending = 0;
-					process_restore_user_task_segments(current_process);
-					current_process->irq_frame_saved = 0;
-					current_process->coop_resched_resume = 0;
-					current_process->want_kernel_ret = 0;
-					arch_restore_user_fs_base();
-					switch_to_user_task(&current_process->task);
-				}
 				return -EINTR;
 			}
 			icmp = sock_icmp_fd_lookup(fd);
@@ -1348,6 +1350,7 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 		       socklen_t optlen)
 {
 	struct sock_stream *ss;
+	struct sock_icmp *icmp;
 	int val = 0;
 
 #if !CONFIG_ENABLE_NETWORKING
@@ -1359,6 +1362,68 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 	return -ENOSYS;
 #endif
 	ss = sock_stream_fd_lookup(fd);
+	icmp = sock_icmp_fd_lookup(fd);
+
+	if (icmp)
+	{
+		if (level == IPPROTO_IP && optname == IP_TTL)
+		{
+			if (optlen < sizeof(int) || !optval)
+				return -EINVAL;
+			if (copy_from_user(&val, optval, sizeof(val)) != 0)
+				return -EFAULT;
+			return sock_icmp_set_ttl(icmp, val);
+		}
+		if (level == IPPROTO_IP && optname == IP_MULTICAST_IF)
+		{
+			/*
+			 * BusyBox ping -I <addr> passes sockaddr_in (16B). Linux
+			 * treats optlen>=12 as ip_mreqn; imr_address sits at
+			 * offset 4 — same as sin_addr in sockaddr_in.
+			 */
+			uint8_t buf[16];
+			uint32_t addr = 0;
+			size_t n;
+
+			if (!optval || optlen < 4)
+				return -EINVAL;
+			n = optlen;
+			if (n > sizeof(buf))
+				n = sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			if (copy_from_user(buf, optval, n) != 0)
+				return -EFAULT;
+			if (n >= 8)
+				memcpy(&addr, buf + 4, 4);
+			else
+				memcpy(&addr, buf, 4);
+			return sock_icmp_bind(icmp, addr);
+		}
+		if (level == SOL_SOCKET && optname == SO_BINDTODEVICE)
+		{
+			char name[16];
+			size_t n;
+			size_t i;
+
+			if (!optval || optlen == 0)
+				return sock_icmp_set_bind_device(icmp, NULL, 0);
+			/*
+			 * Linux accepts a C string or struct ifreq (name at offset 0).
+			 * BusyBox setsockopt_bindtodevice() passes sizeof(ifreq).
+			 */
+			n = optlen;
+			if (n > sizeof(name))
+				n = sizeof(name);
+			memset(name, 0, sizeof(name));
+			if (copy_from_user(name, optval, n) != 0)
+				return -EFAULT;
+			for (i = 0; i < n && name[i]; i++)
+				;
+			return sock_icmp_set_bind_device(icmp, name, i);
+		}
+		return -ENOPROTOOPT;
+	}
+
 	if (!ss)
 		return -ENOTSOCK;
 	if (level != SOL_SOCKET)
@@ -1385,6 +1450,11 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 		ms = (uint64_t)tv.tv_sec * 1000ULL +
 		     (uint64_t)tv.tv_usec / 1000ULL;
 		return sock_stream_set_timeout_ms(ss, optname == SO_RCVTIMEO, ms);
+	}
+	if (optname == SO_BINDTODEVICE)
+	{
+		/* Single-NIC stack: accept and ignore for STREAM. */
+		return 0;
 	}
 	return -ENOPROTOOPT;
 }

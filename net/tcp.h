@@ -36,7 +36,7 @@ struct tcp_header
 
 int tcp_init(void);
 int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
-		   uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out);
+		     uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out);
 /* Nonblocking connect: SYN sent; complete via tcp_wire_connect_poll. */
 int tcp_wire_connect_start(ip4_addr_t peer_ip, uint16_t peer_port,
 			   uint16_t *local_port_out);
@@ -44,6 +44,8 @@ int tcp_wire_connect_start(ip4_addr_t peer_ip, uint16_t peer_port,
 int tcp_wire_connect_poll(ip4_addr_t peer_ip, uint16_t peer_port,
 			  uint16_t local_port, uint32_t *seq_out,
 			  uint32_t *ack_out);
+/* Drop connect lock if @pid owned it (process_exit / SEGV mid-connect). */
+void tcp_wire_on_process_exit(uint32_t pid);
 int tcp_wire_poll_readable(ip4_addr_t peer_ip, uint16_t peer_port,
 			   uint16_t local_port);
 int tcp_wire_poll_writable(ip4_addr_t peer_ip, uint16_t peer_port,

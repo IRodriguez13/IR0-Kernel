@@ -58,6 +58,7 @@ int process_signals_clone(process_t *dst, const process_t *src)
 	}
 	dst->saved_context = NULL;
 	dst->signal_enter_pending = 0;
+	dst->signal_defer_catchable = 0;
 	return 0;
 }
 

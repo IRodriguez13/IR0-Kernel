@@ -48,6 +48,9 @@ struct sock_icmp
 	struct sock_icmp_rx_pkt *rx_head;
 	struct sock_icmp_rx_pkt *rx_tail;
 	size_t rx_count;
+	ip4_addr_t bind_ip; /* 0 = any; set by bind() for ping -I addr */
+	uint8_t ttl;        /* 0 = default 64; IP_TTL */
+	char bind_dev[16];  /* SO_BINDTODEVICE name (advisory on single-NIC) */
 };
 
 static struct sock_icmp *sock_icmp_open_list;
@@ -266,6 +269,61 @@ void sock_icmp_release(struct sock_icmp *sock)
 	kfree(sock);
 }
 
+int sock_icmp_bind(struct sock_icmp *sock, uint32_t local_ip_be)
+{
+	if (!sock || !sock_icmp_is(sock))
+		return -EINVAL;
+	sock->bind_ip = local_ip_be;
+	return 0;
+}
+
+int sock_icmp_set_ttl(struct sock_icmp *sock, int ttl)
+{
+	if (!sock || !sock_icmp_is(sock))
+		return -EINVAL;
+	if (ttl < 0 || ttl > 255)
+		return -EINVAL;
+	sock->ttl = (uint8_t)ttl;
+	return 0;
+}
+
+int sock_icmp_set_bind_device(struct sock_icmp *sock, const char *name, size_t len)
+{
+	size_t n;
+	struct net_device *d;
+	int found = 0;
+
+	if (!sock || !sock_icmp_is(sock))
+		return -EINVAL;
+	if (!name || len == 0)
+	{
+		sock->bind_dev[0] = '\0';
+		return 0;
+	}
+	n = len;
+	if (n >= sizeof(sock->bind_dev))
+		n = sizeof(sock->bind_dev) - 1;
+	memcpy(sock->bind_dev, name, n);
+	sock->bind_dev[n] = '\0';
+
+	d = net_get_devices();
+	while (d)
+	{
+		if (d->name && strcmp(d->name, sock->bind_dev) == 0)
+		{
+			found = 1;
+			break;
+		}
+		d = d->next;
+	}
+	if (!found)
+	{
+		sock->bind_dev[0] = '\0';
+		return -ENODEV;
+	}
+	return 0;
+}
+
 int sock_icmp_sendto(struct sock_icmp *sock, uint32_t dest_ip_be,
 		     const void *data, size_t len)
 {
@@ -279,6 +337,7 @@ int sock_icmp_sendto(struct sock_icmp *sock, uint32_t dest_ip_be,
 	struct net_device *dev;
 	ip4_addr_t dest_ip = dest_ip_be;
 	int ret;
+	uint8_t ttl;
 
 	if (!sock || !data)
 		return -EINVAL;
@@ -290,8 +349,23 @@ int sock_icmp_sendto(struct sock_icmp *sock, uint32_t dest_ip_be,
 	dev = net_get_devices();
 	if (!dev)
 		return -ENETUNREACH;
+	if (sock->bind_dev[0])
+	{
+		struct net_device *d = net_get_devices();
 
-	ret = ip_send(dev, dest_ip, IPPROTO_ICMP, data, len);
+		while (d)
+		{
+			if (d->name && strcmp(d->name, sock->bind_dev) == 0)
+			{
+				dev = d;
+				break;
+			}
+			d = d->next;
+		}
+	}
+
+	ttl = sock->ttl ? sock->ttl : 64;
+	ret = ip_send_ttl(dev, dest_ip, IPPROTO_ICMP, data, len, ttl);
 	if (ret != 0)
 		return -EIO;
 	return (int)len;

@@ -255,6 +255,7 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	proc->signal_ignored = 0;
 	proc->saved_context = NULL;
 	proc->signal_enter_pending = 0;
+	proc->signal_defer_catchable = 0;
 	for (int i = 0; i < _NSIG; i++)
 	{
 		proc->signal_handlers[i] = SIG_DFL;

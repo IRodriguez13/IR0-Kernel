@@ -134,6 +134,32 @@ struct tcp_wire_outbound
 static struct tcp_pending_conn g_pending;
 static struct tcp_wire_listener g_listeners[TCP_WIRE_LISTEN_MAX];
 static struct tcp_wire_inbound g_inbound[TCP_WIRE_CONN_MAX];
+/* Serialize outbound connect: single g_pending/g_out (parallel wget → EINVAL). */
+static volatile int g_tcp_connect_busy;
+static uint32_t g_tcp_connect_owner;
+
+static int tcp_consume_connect_sigalrm(void)
+{
+	uint32_t pend;
+
+	if (!current_process)
+		return 0;
+	pend = current_process->signal_pending;
+	if ((pend & SIGNAL_MASK(SIGALRM)) == 0)
+		return 0;
+	if ((pend & ~(SIGNAL_MASK(SIGALRM) | SIGNAL_MASK(SIGCHLD))) != 0)
+		return 0;
+	current_process->signal_pending &= ~SIGNAL_MASK(SIGALRM);
+	current_process->it_real_expire_ms = 0;
+	current_process->it_real_interval_ms = 0;
+	if (current_process->saved_context)
+	{
+		kfree(current_process->saved_context);
+		current_process->saved_context = NULL;
+	}
+	current_process->signal_enter_pending = 0;
+	return 1;
+}
 static struct tcp_wire_outbound g_out;
 
 static inline uint64_t tcp_irq_save(void)
@@ -240,6 +266,15 @@ static void tcp_pending_clear(void)
 
 	memset(&g_pending, 0, sizeof(g_pending));
 	tcp_irq_restore(f);
+}
+
+void tcp_wire_on_process_exit(uint32_t pid)
+{
+	if (!g_tcp_connect_busy || g_tcp_connect_owner != pid)
+		return;
+	tcp_pending_clear();
+	g_tcp_connect_owner = 0;
+	__sync_lock_release(&g_tcp_connect_busy);
 }
 
 static void tcp_pending_set(ip4_addr_t peer_ip, uint16_t peer_port,
@@ -1182,19 +1217,59 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 	uint16_t lport;
 	uint64_t deadline;
 	int ret;
+	uint64_t wait_deadline;
+	uint32_t my_pid;
 
 	if (!local_port_out || !seq_out || !ack_out || peer_port == 0)
 		return -EINVAL;
 
-	ret = tcp_wire_connect_start(peer_ip, peer_port, &lport);
-	if (ret < 0)
-		return ret;
-	*local_port_out = lport;
+	my_pid = current_process ? (uint32_t)current_process->task.pid : 0;
 
 	/*
-	 * Yieldable wait so BusyBox nc -w / wget -T (alarm/SIGALRM) can
-	 * interrupt connect. Busy-spin left SIGALRM pending until return.
+	 * Defer catchable delivery for the whole connect (including lock wait).
+	 * Otherwise SIGALRM while waiting on g_tcp_connect_busy arms BusyBox
+	 * die-from-handler → SEGV on repeat.
 	 */
+	if (current_process)
+		current_process->signal_defer_catchable = 1;
+
+	/*
+	 * One outbound association at a time. Concurrent connect (stress
+	 * parallel wget) used to overwrite g_pending → -EINVAL.
+	 * Owner pid + tcp_wire_on_process_exit: SEGV mid-connect must not
+	 * leave the lock wedged for later nc/wget.
+	 */
+	wait_deadline = clock_get_uptime_milliseconds() + TCP_WIRE_TIMEOUT_MS;
+	while (__sync_lock_test_and_set(&g_tcp_connect_busy, 1))
+	{
+		if (tcp_consume_connect_sigalrm())
+		{
+			if (current_process)
+				current_process->signal_defer_catchable = 0;
+			return -ETIMEDOUT;
+		}
+		if (clock_get_uptime_milliseconds() >= wait_deadline)
+		{
+			if (current_process)
+				current_process->signal_defer_catchable = 0;
+			return -ETIMEDOUT;
+		}
+		(void)ir0_clock_wait_block_until(
+			clock_get_uptime_milliseconds() + TCP_WIRE_POLL_MS);
+	}
+	g_tcp_connect_owner = my_pid;
+
+	ret = tcp_wire_connect_start(peer_ip, peer_port, &lport);
+	if (ret < 0)
+	{
+		g_tcp_connect_owner = 0;
+		__sync_lock_release(&g_tcp_connect_busy);
+		if (current_process)
+			current_process->signal_defer_catchable = 0;
+		return ret;
+	}
+	*local_port_out = lport;
+
 	deadline = clock_get_uptime_milliseconds() + TCP_WIRE_TIMEOUT_MS;
 	for (;;)
 	{
@@ -1204,32 +1279,43 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		ret = tcp_wire_connect_poll(peer_ip, peer_port, lport, seq_out,
 					    ack_out);
 		if (ret != -EAGAIN)
+		{
+			if (current_process)
+				current_process->signal_defer_catchable = 0;
+			g_tcp_connect_owner = 0;
+			__sync_lock_release(&g_tcp_connect_busy);
 			return ret;
+		}
 
 		now = clock_get_uptime_milliseconds();
 		if (now >= deadline)
 		{
 			tcp_pending_clear();
+			if (current_process)
+				current_process->signal_defer_catchable = 0;
+			g_tcp_connect_owner = 0;
+			__sync_lock_release(&g_tcp_connect_busy);
+			return -ETIMEDOUT;
+		}
+
+		if (tcp_consume_connect_sigalrm())
+		{
+			tcp_pending_clear();
+			if (current_process)
+				current_process->signal_defer_catchable = 0;
+			g_tcp_connect_owner = 0;
+			__sync_lock_release(&g_tcp_connect_busy);
 			return -ETIMEDOUT;
 		}
 
 		if (current_process &&
 		    signals_pause_should_interrupt(current_process))
 		{
+			current_process->signal_defer_catchable = 0;
 			handle_signals();
-			if (current_process->saved_context &&
-			    current_process->signal_enter_pending)
-			{
-				current_process->signal_enter_pending = 0;
-				process_restore_user_task_segments(current_process);
-				current_process->irq_frame_saved = 0;
-				current_process->coop_resched_resume = 0;
-				current_process->want_kernel_ret = 0;
-				arch_restore_user_fs_base();
-				tcp_pending_clear();
-				switch_to_user_task(&current_process->task);
-			}
 			tcp_pending_clear();
+			g_tcp_connect_owner = 0;
+			__sync_lock_release(&g_tcp_connect_busy);
 			return -EINTR;
 		}
 

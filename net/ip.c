@@ -373,7 +373,7 @@ void ip_receive_handler(struct net_device *dev, const void *data,
 static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip, 
                             uint8_t protocol, const void *payload, size_t len,
                             uint16_t frag_id, uint16_t frag_offset, bool more_fragments,
-                            ip4_addr_t next_hop_ip)
+                            ip4_addr_t next_hop_ip, uint8_t ttl)
 {
     size_t ip_header_len = sizeof(struct ip_header);
     size_t fragment_len = ip_header_len + len;
@@ -398,7 +398,7 @@ static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip,
         flags_frag |= IP_FLAG_MF;
     ip->flags_frag_off = htons(flags_frag);
     
-    ip->ttl = 64;
+    ip->ttl = ttl ? ttl : 64;
     ip->protocol = protocol;
     ip->checksum = 0;
     /* Source IP: use interface-specific IP if available, else default */
@@ -430,8 +430,14 @@ static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip,
     return ret;
 }
 
-int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol, 
+int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
             const void *payload, size_t len)
+{
+	return ip_send_ttl(dev, dest_ip, protocol, payload, len, 64);
+}
+
+int ip_send_ttl(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
+		const void *payload, size_t len, uint8_t ttl)
 {
     if (!dev || !payload)
         return -1;
@@ -545,7 +551,7 @@ int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
         uint16_t frag_id = ip_frag_id_counter++;
         ip->id = htons(frag_id);  /* Unique fragment ID */
         ip->flags_frag_off = 0;         /* No fragmentation flags (unfragmented packet) */
-        ip->ttl = 64;                    /* Time To Live: 64 hops */
+        ip->ttl = ttl ? ttl : 64;            /* Time To Live */
         ip->protocol = protocol;         /* Upper-layer protocol (ICMP, UDP) */
         ip->checksum = 0;                /* Zero for checksum calculation */
         /* Source IP: use interface-specific IP if available, else default */
@@ -622,7 +628,8 @@ int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
         /* Send fragment */
         int ret = ip_send_fragment(dev, dest_ip, protocol, 
                                    payload_ptr + offset, fragment_payload_len,
-                                   frag_id, offset, more_fragments, next_hop_ip);
+                                   frag_id, offset, more_fragments, next_hop_ip,
+				   ttl);
         
         if (ret != 0)
         {

@@ -26,6 +26,10 @@ void sock_icmp_release(struct sock_icmp *sock);
 
 int sock_icmp_is(const void *ptr);
 
+int sock_icmp_bind(struct sock_icmp *sock, uint32_t local_ip_be);
+int sock_icmp_set_ttl(struct sock_icmp *sock, int ttl);
+int sock_icmp_set_bind_device(struct sock_icmp *sock, const char *name, size_t len);
+
 int sock_icmp_poll_readable(struct sock_icmp *sock);
 
 int sock_icmp_sendto(struct sock_icmp *sock, uint32_t dest_ip_be,

@@ -35,7 +35,12 @@
 #define SO_REUSEADDR 2
 #define SO_RCVTIMEO 20
 #define SO_SNDTIMEO 21
+#define SO_BINDTODEVICE 25
 #define SCM_RIGHTS  1
+
+#define IPPROTO_IP  0
+#define IP_TTL      2
+#define IP_MULTICAST_IF 32
 
 #define MSG_PEEK     0x2
 #define MSG_DONTWAIT 0x40

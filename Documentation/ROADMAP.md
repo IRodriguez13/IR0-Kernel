@@ -262,7 +262,8 @@ SMP, CFS backend, kernel modules (MOD-*) — see P2 below.
 | 17b | **Full ash + required applets in rootfs** | **BUSY-1 DONE** — `IR0-userspace/packages/busybox/required_applets.txt` + inject on runit disk |
 | 17c | **Applet smoke** | **BUSY-2 DONE** — `make smoke-busybox-manifest` → `BUSYBOX_MANIFEST_OK` |
 
-Tag `v0.0.1-rc2` closed automated product gates except maintainer **manual VM** for final ship.
+Tag `v0.0.1-rc4` is the **last pre-release** before final; remaining work to `v0.0.1` is bugfix /
+stabilization + maintainer **manual VM**. See [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md).
 
 ### P3 — network + desktop (after P1-storage stable)
 

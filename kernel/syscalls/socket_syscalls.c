@@ -28,8 +28,10 @@
 #include <ir0/sock_stream.h>
 #include <ir0/sock_icmp.h>
 #include <ir0/socket.h>
+#include <ir0/time.h>
 #include <ir0/signals.h>
 #include <ir0/arch_cpu.h>
+#include <ir0/clock.h>
 #include <ir0/pipe.h>
 #include <ir0/vfs.h>
 #include <ir0/memfd.h>
@@ -468,10 +470,16 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 	ss = sock_stream_fd_lookup(fd);
 	if (ss)
 	{
+		uint64_t deadline = 0;
+		uint64_t rto;
+
 		nb = sock_nonblock_fd(fd, flags);
 		kbuf = kmalloc(len);
 		if (!kbuf)
 			return -ENOMEM;
+		rto = sock_stream_get_timeout_ms(ss, 1);
+		if (rto > 0)
+			deadline = clock_get_uptime_milliseconds() + rto;
 		for (;;)
 		{
 			n = sock_stream_recv_flags(ss, kbuf, len, flags);
@@ -481,6 +489,11 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 			{
 				kfree(kbuf);
 				return -EAGAIN;
+			}
+			if (deadline && clock_get_uptime_milliseconds() >= deadline)
+			{
+				kfree(kbuf);
+				return -EAGAIN; /* Linux SO_RCVTIMEO → EAGAIN */
 			}
 			if (signals_pause_should_interrupt(current_process))
 			{
@@ -729,7 +742,9 @@ int64_t sys_connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
 				return -EINVAL;
 			if (copy_from_user(&sin, addr, sizeof(sin)) != 0)
 				return -EFAULT;
-			return sock_stream_connect_inet(ss, sin.sin_addr, ntohs(sin.sin_port));
+			return sock_stream_connect_inet_flags(ss, sin.sin_addr,
+							      ntohs(sin.sin_port),
+							      sock_nonblock_fd(fd, 0));
 		}
 		return -EAFNOSUPPORT;
 	}
@@ -1356,6 +1371,21 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 			return -EFAULT;
 		return sock_stream_set_reuseaddr(ss, val);
 	}
+	if (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+	{
+		struct timeval tv;
+		uint64_t ms;
+
+		if (optlen < sizeof(tv) || !optval)
+			return -EINVAL;
+		if (copy_from_user(&tv, optval, sizeof(tv)) != 0)
+			return -EFAULT;
+		if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000)
+			return -EINVAL;
+		ms = (uint64_t)tv.tv_sec * 1000ULL +
+		     (uint64_t)tv.tv_usec / 1000ULL;
+		return sock_stream_set_timeout_ms(ss, optname == SO_RCVTIMEO, ms);
+	}
 	return -ENOPROTOOPT;
 }
 
@@ -1397,7 +1427,7 @@ int64_t sys_getsockopt(int fd, int level, int optname, void *optval,
 	}
 	if (optname == SO_ERROR)
 	{
-		val = 0;
+		val = sock_stream_take_so_error(ss);
 		if (len < sizeof(val))
 			return -EINVAL;
 		if (copy_to_user(optval, &val, sizeof(val)) != 0)
@@ -1415,6 +1445,22 @@ int64_t sys_getsockopt(int fd, int level, int optname, void *optval,
 		if (copy_to_user(optval, &val, sizeof(val)) != 0)
 			return -EFAULT;
 		len = sizeof(val);
+		if (copy_to_user(optlen, &len, sizeof(len)) != 0)
+			return -EFAULT;
+		return 0;
+	}
+	if (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+	{
+		struct timeval tv;
+		uint64_t ms = sock_stream_get_timeout_ms(ss, optname == SO_RCVTIMEO);
+
+		if (len < sizeof(tv))
+			return -EINVAL;
+		tv.tv_sec = (long)(ms / 1000ULL);
+		tv.tv_usec = (long)((ms % 1000ULL) * 1000ULL);
+		if (copy_to_user(optval, &tv, sizeof(tv)) != 0)
+			return -EFAULT;
+		len = sizeof(tv);
 		if (copy_to_user(optlen, &len, sizeof(len)) != 0)
 			return -EFAULT;
 		return 0;

@@ -31,6 +31,7 @@ enum ss_state
 	SS_IDLE = 0,
 	SS_BOUND,
 	SS_LISTEN,
+	SS_CONNECTING,
 	SS_CONNECTED,
 };
 
@@ -59,6 +60,9 @@ struct sock_stream
 	uint16_t wire_peer_port;
 	uint32_t wire_seq;
 	uint32_t wire_ack;
+	int so_error; /* positive errno for SO_ERROR */
+	uint64_t rcv_timeout_ms; /* 0 = block forever */
+	uint64_t snd_timeout_ms;
 	uint8_t magic;
 	uint8_t rights_n;
 	uint8_t rights[SOCK_STREAM_RIGHTS_MAX][SOCK_STREAM_RIGHTS_ENTRY_SIZE];
@@ -151,13 +155,48 @@ struct sock_stream *sock_stream_get_peer(struct sock_stream *s)
 	return s ? s->peer : NULL;
 }
 
+static int sock_stream_wire_progress(struct sock_stream *s)
+{
+	uint32_t seq;
+	uint32_t ack;
+	int ret;
+
+	if (!s || !s->wire_tcp || s->state != SS_CONNECTING)
+		return 0;
+
+	ret = tcp_wire_connect_poll((ip4_addr_t)s->wire_peer_ip, s->wire_peer_port,
+				    s->wire_local_port, &seq, &ack);
+	if (ret == -EAGAIN)
+		return 0;
+	if (ret < 0)
+	{
+		s->so_error = -ret;
+		s->state = SS_BOUND;
+		poll_wake_check();
+		return ret;
+	}
+	s->wire_seq = seq;
+	s->wire_ack = ack;
+	s->state = SS_CONNECTED;
+	s->so_error = 0;
+	poll_wake_check();
+	return 1;
+}
+
 int sock_stream_poll_readable(const struct sock_stream *s)
 {
+	struct sock_stream *mut = (struct sock_stream *)s;
+
 	if (!s)
 		return 0;
 	/* Pending AF_UNIX/TCP-loopback accept queue (single slot via listener->peer). */
 	if (s->state == SS_LISTEN && s->peer && s->peer->state == SS_CONNECTED)
 		return 1;
+	if (s->state == SS_CONNECTING)
+	{
+		(void)sock_stream_wire_progress(mut);
+		return 0;
+	}
 	if (s->state != SS_CONNECTED)
 		return 0;
 	if (s->rights_n > 0)
@@ -166,6 +205,12 @@ int sock_stream_poll_readable(const struct sock_stream *s)
 		return 1;
 	if (s->shut_rd)
 		return 1;
+#if CONFIG_ENABLE_NETWORKING
+	if (s->wire_tcp)
+		return tcp_wire_poll_readable((ip4_addr_t)s->wire_peer_ip,
+					      s->wire_peer_port,
+					      s->wire_local_port);
+#endif
 	if (!s->peer || s->peer->shut_wr)
 		return 1;
 	return 0;
@@ -173,10 +218,30 @@ int sock_stream_poll_readable(const struct sock_stream *s)
 
 int sock_stream_poll_writable(const struct sock_stream *s)
 {
-	if (!s || s->state != SS_CONNECTED)
+	struct sock_stream *mut = (struct sock_stream *)s;
+
+	if (!s)
 		return 0;
+	if (s->state == SS_CONNECTING)
+	{
+		(void)sock_stream_wire_progress(mut);
+		/* Linux: POLLOUT when connect finished (ok or error). */
+		if (s->state == SS_CONNECTED || s->so_error)
+			return 1;
+		return 0;
+	}
+	if (s->state != SS_CONNECTED)
+		return 0;
+	if (s->so_error)
+		return 1;
 	if (s->shut_wr)
 		return 0;
+#if CONFIG_ENABLE_NETWORKING
+	if (s->wire_tcp)
+		return tcp_wire_poll_writable((ip4_addr_t)s->wire_peer_ip,
+					      s->wire_peer_port,
+					      s->wire_local_port);
+#endif
 	if (!s->peer)
 		return 0;
 	if (s->peer->shut_rd)
@@ -562,6 +627,12 @@ static int sock_stream_is_local_listener(uint16_t port)
 
 int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port)
 {
+	return sock_stream_connect_inet_flags(s, addr, port, 0);
+}
+
+int sock_stream_connect_inet_flags(struct sock_stream *s, uint32_t addr,
+				   uint16_t port, int nonblock)
+{
 	int i;
 	struct sock_stream *lst = NULL;
 	struct sock_stream *acc;
@@ -570,6 +641,20 @@ int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port
 		return -EINVAL;
 	if (!sock_stream_inet_addr_allowed(addr))
 		return -ECONNREFUSED;
+	if (s->state == SS_CONNECTING)
+	{
+		int pr = sock_stream_wire_progress(s);
+
+		if (s->state == SS_CONNECTED)
+			return 0;
+		if (s->so_error)
+			return -s->so_error;
+		if (pr == 0)
+			return -EALREADY;
+		return pr < 0 ? pr : 0;
+	}
+	if (s->state == SS_CONNECTED)
+		return -EISCONN;
 
 	if (!sock_stream_is_local_listener(port))
 	{
@@ -578,6 +663,22 @@ int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port
 		uint32_t seq;
 		uint32_t ack;
 		int ret;
+
+		if (nonblock)
+		{
+			ret = tcp_wire_connect_start((ip4_addr_t)addr, port, &lport);
+			if (ret < 0)
+				return ret;
+			s->wire_tcp = 1;
+			s->wire_local_port = lport;
+			s->wire_peer_ip = addr;
+			s->wire_peer_port = port;
+			s->port = lport;
+			s->peer = NULL;
+			s->so_error = 0;
+			s->state = SS_CONNECTING;
+			return -EINPROGRESS;
+		}
 
 		ret = tcp_wire_connect((ip4_addr_t)addr, port, &lport, &seq, &ack);
 		if (ret < 0)
@@ -591,8 +692,10 @@ int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port
 		s->port = lport;
 		s->state = SS_CONNECTED;
 		s->peer = NULL;
+		s->so_error = 0;
 		return 0;
 #else
+		(void)nonblock;
 		return -ECONNREFUSED;
 #endif
 	}
@@ -627,10 +730,19 @@ ssize_t sock_stream_send(struct sock_stream *s, const void *buf, size_t len)
 	size_t i;
 	const char *src = buf;
 
-	if (!s || s->state != SS_CONNECTED || !buf)
+	if (!s || (s->state != SS_CONNECTED && s->state != SS_CONNECTING) || !buf)
 		return -EINVAL;
 
 #if CONFIG_ENABLE_NETWORKING
+	if (s->wire_tcp && s->state == SS_CONNECTING)
+	{
+		int pr = sock_stream_wire_progress(s);
+
+		if (s->so_error)
+			return -s->so_error;
+		if (s->state != SS_CONNECTED)
+			return pr < 0 ? pr : -EAGAIN;
+	}
 	if (s->wire_tcp)
 	{
 		uint32_t ack = tcp_wire_peer_ack((ip4_addr_t)s->wire_peer_ip,
@@ -645,6 +757,8 @@ ssize_t sock_stream_send(struct sock_stream *s, const void *buf, size_t len)
 	}
 #endif
 
+	if (s->state != SS_CONNECTED)
+		return -EINVAL;
 	if (s->shut_wr)
 		return -EPIPE;
 	peer = s->peer;
@@ -673,10 +787,18 @@ ssize_t sock_stream_recv_flags(struct sock_stream *s, void *buf, size_t len, int
 	unsigned tail;
 	unsigned count;
 
-	if (!s || s->state != SS_CONNECTED || !buf)
+	if (!s || (s->state != SS_CONNECTED && s->state != SS_CONNECTING) || !buf)
 		return -EINVAL;
 
 #if CONFIG_ENABLE_NETWORKING
+	if (s->wire_tcp && s->state == SS_CONNECTING)
+	{
+		(void)sock_stream_wire_progress(s);
+		if (s->so_error)
+			return -s->so_error;
+		if (s->state != SS_CONNECTED)
+			return -EAGAIN;
+	}
 	if (s->wire_tcp)
 	{
 		int ret;
@@ -740,12 +862,45 @@ int sock_stream_get_reuseaddr(const struct sock_stream *s)
 	return s ? (int)s->reuseaddr : 0;
 }
 
+int sock_stream_take_so_error(struct sock_stream *s)
+{
+	int err;
+
+	if (!s)
+		return 0;
+	if (s->state == SS_CONNECTING)
+		(void)sock_stream_wire_progress(s);
+	err = s->so_error;
+	s->so_error = 0;
+	return err;
+}
+
+int sock_stream_set_timeout_ms(struct sock_stream *s, int is_rcv, uint64_t ms)
+{
+	if (!s)
+		return -EINVAL;
+	if (is_rcv)
+		s->rcv_timeout_ms = ms;
+	else
+		s->snd_timeout_ms = ms;
+	return 0;
+}
+
+uint64_t sock_stream_get_timeout_ms(const struct sock_stream *s, int is_rcv)
+{
+	if (!s)
+		return 0;
+	return is_rcv ? s->rcv_timeout_ms : s->snd_timeout_ms;
+}
+
 static uint8_t sock_stream_linux_st(enum ss_state st)
 {
 	switch (st)
 	{
 	case SS_CONNECTED:
 		return 0x01; /* TCP_ESTABLISHED */
+	case SS_CONNECTING:
+		return 0x02; /* TCP_SYN_SENT */
 	case SS_LISTEN:
 		return 0x0A; /* TCP_LISTEN */
 	case SS_BOUND:
@@ -780,8 +935,8 @@ int sock_stream_inet_walk(int (*cb)(const struct sock_stream_inet_snap *s,
 #else
 		snap.local_ip = 0;
 #endif
-		snap.local_port = s->wire_local_port ? s->wire_local_port : s->port;
-		if (s->state == SS_CONNECTED)
+	snap.local_port = s->wire_local_port ? s->wire_local_port : s->port;
+		if (s->state == SS_CONNECTED || s->state == SS_CONNECTING)
 		{
 			snap.rem_ip = s->wire_peer_ip;
 			snap.rem_port = s->wire_peer_port;

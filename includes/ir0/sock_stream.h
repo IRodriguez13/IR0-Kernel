@@ -35,11 +35,16 @@ int sock_stream_connect_unix_n(struct sock_stream *s, const char *path, size_t p
 struct sock_stream *sock_stream_accept(struct sock_stream *s);
 int sock_stream_bind_inet(struct sock_stream *s, uint16_t port);
 int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port);
+int sock_stream_connect_inet_flags(struct sock_stream *s, uint32_t addr, uint16_t port,
+				   int nonblock);
 ssize_t sock_stream_send(struct sock_stream *s, const void *buf, size_t len);
 ssize_t sock_stream_recv(struct sock_stream *s, void *buf, size_t len);
 ssize_t sock_stream_recv_flags(struct sock_stream *s, void *buf, size_t len, int flags);
 int sock_stream_set_reuseaddr(struct sock_stream *s, int on);
 int sock_stream_get_reuseaddr(const struct sock_stream *s);
+int sock_stream_take_so_error(struct sock_stream *s);
+int sock_stream_set_timeout_ms(struct sock_stream *s, int is_rcv, uint64_t ms);
+uint64_t sock_stream_get_timeout_ms(const struct sock_stream *s, int is_rcv);
 int sock_stream_is(const void *ptr);
 /* Address in g_socks[] even if already released (magic cleared). */
 int sock_stream_is_slot(const void *ptr);

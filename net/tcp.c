@@ -23,6 +23,7 @@
 #include <ir0/signals.h>
 #include <ir0/context.h>
 #include <ir0/arch_cpu.h>
+#include <ir0/poll.h>
 #include <string.h>
 
 #define TCP_WIRE_TIMEOUT_MS 5000U
@@ -61,6 +62,7 @@ struct tcp_pending_conn
 	uint32_t peer_ack;
 	uint16_t peer_window;
 	int synack_seen;
+	uint64_t deadline_ms;
 };
 
 struct tcp_wire_listener
@@ -251,6 +253,8 @@ static void tcp_pending_set(ip4_addr_t peer_ip, uint16_t peer_port,
 	g_pending.peer_port = peer_port;
 	g_pending.local_port = local_port;
 	g_pending.local_seq = local_seq;
+	g_pending.deadline_ms =
+		clock_get_uptime_milliseconds() + TCP_WIRE_TIMEOUT_MS;
 	tcp_irq_restore(f);
 }
 
@@ -980,17 +984,58 @@ uint32_t tcp_wire_peer_ack(ip4_addr_t peer_ip, uint16_t peer_port,
 	return ack;
 }
 
-int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
-		     uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out)
+static int tcp_wire_activate_outbound(ip4_addr_t peer_ip, uint16_t peer_port,
+				      uint16_t lport, uint32_t isn,
+				      uint32_t peer_ack, uint16_t peer_window)
+{
+	struct net_device *dev;
+	struct tcp_header hdr;
+	int ret;
+	uint64_t f;
+
+	dev = net_get_devices();
+	if (!dev)
+		return -ENETUNREACH;
+
+	tcp_build_header(&hdr, lport, peer_port, isn + 1, peer_ack, TCP_FLAG_ACK);
+	ret = tcp_send_raw(dev, peer_ip, &hdr, NULL, 0);
+	if (ret != 0)
+		return -EIO;
+
+	f = tcp_irq_save();
+	memset(&g_out, 0, sizeof(g_out));
+	g_out.active = 1;
+	g_out.peer_ip = peer_ip;
+	g_out.peer_port = peer_port;
+	g_out.local_port = lport;
+	g_out.snd_nxt = isn + 1;
+	g_out.snd_una = isn + 1;
+	g_out.ack_to_peer = peer_ack;
+	g_out.peer_window = peer_window ? peer_window : 8192;
+	g_out.cwnd = 1;
+	g_out.ssthresh = TCP_WIRE_CWND_CAP;
+	g_out.rx_len = 0;
+	g_out.rx_off = 0;
+	g_out.peer_fin = 0;
+	if (peer_port == TCP_WIRE_PEER_CC_PORT)
+	{
+		g_out.peer_cc_mode = 1;
+		g_out.drop_next_tx = 1;
+	}
+	tcp_irq_restore(f);
+	return 0;
+}
+
+int tcp_wire_connect_start(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t *local_port_out)
 {
 	struct net_device *dev;
 	struct tcp_header hdr;
 	uint16_t lport;
 	uint32_t isn;
-	uint64_t deadline;
 	int ret;
 
-	if (!local_port_out || !seq_out || !ack_out || peer_port == 0)
+	if (!local_port_out || peer_port == 0)
 		return -EINVAL;
 
 	dev = net_get_devices();
@@ -1008,6 +1053,125 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		tcp_pending_clear();
 		return -EIO;
 	}
+	*local_port_out = lport;
+	return 0;
+}
+
+int tcp_wire_connect_poll(ip4_addr_t peer_ip, uint16_t peer_port,
+			  uint16_t local_port, uint32_t *seq_out,
+			  uint32_t *ack_out)
+{
+	uint64_t f;
+	int seen;
+	uint32_t isn;
+	uint32_t peer_ack;
+	uint16_t peer_window;
+	uint64_t deadline;
+	int ret;
+
+	if (!seq_out || !ack_out)
+		return -EINVAL;
+
+	net_stack_poll();
+	f = tcp_irq_save();
+	if (!g_pending.active || g_pending.local_port != local_port ||
+	    g_pending.peer_port != peer_port || g_pending.peer_ip != peer_ip)
+	{
+		tcp_irq_restore(f);
+		if (g_out.active && g_out.local_port == local_port &&
+		    g_out.peer_port == peer_port && g_out.peer_ip == peer_ip)
+		{
+			*seq_out = g_out.snd_nxt;
+			*ack_out = g_out.ack_to_peer;
+			return 0;
+		}
+		return -EINVAL;
+	}
+	seen = g_pending.synack_seen;
+	isn = g_pending.local_seq;
+	peer_ack = g_pending.peer_ack;
+	peer_window = g_pending.peer_window;
+	deadline = g_pending.deadline_ms;
+	tcp_irq_restore(f);
+
+	if (!seen)
+	{
+		if (clock_get_uptime_milliseconds() >= deadline)
+		{
+			tcp_pending_clear();
+			return -ETIMEDOUT;
+		}
+		return -EAGAIN;
+	}
+
+	ret = tcp_wire_activate_outbound(peer_ip, peer_port, local_port, isn,
+					 peer_ack, peer_window);
+	tcp_pending_clear();
+	if (ret < 0)
+		return ret;
+	*seq_out = isn + 1;
+	*ack_out = peer_ack;
+	(void)poll_wake_check_nosched();
+	return 0;
+}
+
+int tcp_wire_poll_readable(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t local_port)
+{
+	uint64_t f;
+	int ready = 0;
+	struct tcp_wire_inbound *c;
+
+	f = tcp_irq_save();
+	if (g_out.active && g_out.local_port == local_port &&
+	    g_out.peer_port == peer_port && g_out.peer_ip == peer_ip)
+	{
+		if (g_out.rx_off < g_out.rx_len || g_out.peer_fin)
+			ready = 1;
+		tcp_irq_restore(f);
+		return ready;
+	}
+	c = tcp_inbound_find(peer_ip, peer_port, local_port);
+	if (c && c->taken && (c->rx_off < c->rx_len || c->peer_fin))
+		ready = 1;
+	tcp_irq_restore(f);
+	return ready;
+}
+
+int tcp_wire_poll_writable(ip4_addr_t peer_ip, uint16_t peer_port,
+			   uint16_t local_port)
+{
+	uint64_t f;
+	int ready = 0;
+
+	f = tcp_irq_save();
+	if (g_out.active && g_out.local_port == local_port &&
+	    g_out.peer_port == peer_port && g_out.peer_ip == peer_ip)
+	{
+		/* ESTABLISHED: allow send (window check is best-effort). */
+		if (g_out.peer_window > 0)
+			ready = 1;
+		else
+			ready = 1;
+	}
+	tcp_irq_restore(f);
+	return ready;
+}
+
+int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
+		     uint16_t *local_port_out, uint32_t *seq_out, uint32_t *ack_out)
+{
+	uint16_t lport;
+	uint64_t deadline;
+	int ret;
+
+	if (!local_port_out || !seq_out || !ack_out || peer_port == 0)
+		return -EINVAL;
+
+	ret = tcp_wire_connect_start(peer_ip, peer_port, &lport);
+	if (ret < 0)
+		return ret;
+	*local_port_out = lport;
 
 	/*
 	 * Yieldable wait so BusyBox nc -w / wget -T (alarm/SIGALRM) can
@@ -1016,17 +1180,13 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 	deadline = clock_get_uptime_milliseconds() + TCP_WIRE_TIMEOUT_MS;
 	for (;;)
 	{
-		int seen;
-		uint64_t f;
 		uint64_t now;
 		uint64_t slice;
 
-		net_stack_poll();
-		f = tcp_irq_save();
-		seen = g_pending.synack_seen;
-		tcp_irq_restore(f);
-		if (seen)
-			break;
+		ret = tcp_wire_connect_poll(peer_ip, peer_port, lport, seq_out,
+					    ack_out);
+		if (ret != -EAGAIN)
+			return ret;
 
 		now = clock_get_uptime_milliseconds();
 		if (now >= deadline)
@@ -1060,49 +1220,6 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 			slice = deadline;
 		(void)ir0_clock_wait_block_until(slice);
 	}
-
-	tcp_build_header(&hdr, lport, peer_port, isn + 1, g_pending.peer_ack,
-			 TCP_FLAG_ACK);
-	ret = tcp_send_raw(dev, peer_ip, &hdr, NULL, 0);
-	if (ret != 0)
-	{
-		tcp_pending_clear();
-		return -EIO;
-	}
-
-	*local_port_out = lport;
-	*seq_out = isn + 1;
-	*ack_out = g_pending.peer_ack;
-
-	{
-		uint64_t f = tcp_irq_save();
-
-		memset(&g_out, 0, sizeof(g_out));
-		g_out.active = 1;
-		g_out.peer_ip = peer_ip;
-		g_out.peer_port = peer_port;
-		g_out.local_port = lport;
-		g_out.snd_nxt = isn + 1;
-		g_out.snd_una = isn + 1; /* SYN-ACK already covered SYN */
-		g_out.ack_to_peer = g_pending.peer_ack;
-		g_out.peer_window =
-			g_pending.peer_window ? g_pending.peer_window : 8192;
-		g_out.cwnd = 1;
-		g_out.ssthresh = TCP_WIRE_CWND_CAP;
-		g_out.rx_len = 0;
-		g_out.rx_off = 0;
-		g_out.peer_fin = 0;
-		if (peer_port == TCP_WIRE_PEER_CC_PORT)
-		{
-			/* Peer-CC smoke: drop first data TX once; no synthetic DUPACK/SACK. */
-			g_out.peer_cc_mode = 1;
-			g_out.drop_next_tx = 1;
-		}
-		tcp_irq_restore(f);
-	}
-
-	tcp_pending_clear();
-	return 0;
 }
 
 int tcp_wire_send(ip4_addr_t peer_ip, uint16_t peer_port, uint16_t local_port,
@@ -1499,12 +1616,15 @@ void tcp_receive_handler(struct net_device *dev, const void *data, size_t len,
 		g_pending.peer_ack = seq + 1;
 		g_pending.peer_window = window ? window : 8192;
 		tcp_irq_restore(f);
+		(void)poll_wake_check_nosched();
 		return;
 	}
 	if (g_out.active && g_out.local_port == dest_port &&
 	    g_out.peer_port == src_port && g_out.peer_ip == src_ip &&
 	    (flags & TCP_FLAG_ACK))
 	{
+		int wake = 0;
+
 		if (hdr_len > TCP_HDR_LEN)
 			tcp_parse_sack_options((const uint8_t *)data + TCP_HDR_LEN,
 					       hdr_len - TCP_HDR_LEN);
@@ -1535,10 +1655,14 @@ void tcp_receive_handler(struct net_device *dev, const void *data, size_t len,
 				memcpy(g_out.rx + g_out.rx_len, payload, ncopy);
 				g_out.rx_len += (unsigned)ncopy;
 				g_out.ack_to_peer = seq + (uint32_t)ncopy;
+				wake = 1;
 			}
 		}
 		if (flags & TCP_FLAG_FIN)
+		{
 			g_out.peer_fin = 1;
+			wake = 1;
+		}
 		{
 			int print_cwnd = g_out.cwnd_print_pending;
 			int print_sack = g_out.sack_print_pending;
@@ -1552,6 +1676,8 @@ void tcp_receive_handler(struct net_device *dev, const void *data, size_t len,
 				klog_print("F8_TCP_WIRE_CWND_OK\n");
 			if (print_sack)
 				klog_print("F8_TCP_WIRE_SACK_OK\n");
+			if (wake)
+				(void)poll_wake_check_nosched();
 		}
 		return;
 	}

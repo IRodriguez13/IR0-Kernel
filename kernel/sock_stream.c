@@ -942,6 +942,12 @@ int sock_stream_inet_walk(int (*cb)(const struct sock_stream_inet_snap *s,
 			snap.rem_port = s->wire_peer_port;
 		}
 		snap.st = sock_stream_linux_st(s->state);
+#if CONFIG_ENABLE_NETWORKING
+		if (s->wire_tcp && s->state == SS_CONNECTED &&
+		    tcp_wire_peer_fin((ip4_addr_t)s->wire_peer_ip,
+				     s->wire_peer_port, s->wire_local_port))
+			snap.st = 0x08; /* TCP_CLOSE_WAIT */
+#endif
 		snap.inode = (unsigned long)(uintptr_t)s;
 		if (cb(&snap, ctx) != 0)
 			return -1;

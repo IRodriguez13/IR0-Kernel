@@ -48,6 +48,9 @@ int tcp_wire_poll_readable(ip4_addr_t peer_ip, uint16_t peer_port,
 			   uint16_t local_port);
 int tcp_wire_poll_writable(ip4_addr_t peer_ip, uint16_t peer_port,
 			   uint16_t local_port);
+/** 1 if outbound/inbound association has seen peer FIN. */
+int tcp_wire_peer_fin(ip4_addr_t peer_ip, uint16_t peer_port,
+		      uint16_t local_port);
 int tcp_wire_send(ip4_addr_t peer_ip, uint16_t peer_port, uint16_t local_port,
 		  uint32_t *seq_io, uint32_t ack_peer, const void *data, size_t len);
 void tcp_wire_close(ip4_addr_t peer_ip, uint16_t peer_port, uint16_t local_port,

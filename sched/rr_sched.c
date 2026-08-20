@@ -22,10 +22,19 @@
 #include <ir0/arch_port.h>
 #include <stdint.h>
 
-/* Scheduler state - circular queue of runnable processes */
-static rr_task_t *rr_head = NULL;   /* Head of circular queue (first to run) */
-static rr_task_t *rr_tail = NULL;   /* Tail of circular queue (last to run) */
-static rr_task_t *rr_current = NULL; /* Currently running process in queue */
+/*
+ * Ready list is singly linked (head -> ... -> tail, next=NULL). Advance wraps
+ * with `next ? next : rr_head`; it is not a circular queue.
+ */
+static rr_task_t *rr_head = NULL;
+static rr_task_t *rr_tail = NULL;
+static rr_task_t *rr_current = NULL;
+
+/*
+ * Bound a pick walk if the list is dirty with zombies/blocked tasks.
+ * Prevents livelock; not a statement about maximum process count.
+ */
+#define RR_MAX_PICK_ATTEMPTS 100
 
 /*
  * UP scheduler critical sections:
@@ -53,7 +62,7 @@ static inline void rr_irq_restore(uint64_t flags)
  * 1. Validate process pointer (prevent NULL pointer dereference)
  * 2. Allocate scheduler node (panic on failure - critical path)
  * 3. Link process to scheduler node
- * 4. Append to tail of circular queue (maintains order)
+ * 4. Append to tail of the ready list (maintains FIFO order)
  * 5. Mark process as READY (eligible for scheduling)
  *
  * Complexity: O(1) - constant time insertion
@@ -86,14 +95,14 @@ void rr_add_process(process_t *proc)
 	BUG_ON(!proc); /* Invalid process parameter - should never happen */
 	
 	/* Initialize scheduler node with process pointer.
-	 * The node will be linked into the circular queue.
+	 * The node will be linked into the ready list.
 	 */
 	node->process = proc;
 	node->next = NULL;
 
 	irq_flags = rr_irq_save();
 
-	/* Insert into circular queue.
+	/* Insert at tail of the singly-linked ready list.
 	 * If queue is empty, initialize head and tail to point to new node.
 	 * Otherwise, append to tail and update tail pointer.
 	 * This maintains FIFO order for fair scheduling.
@@ -139,7 +148,7 @@ void rr_add_process(process_t *proc)
  *
  * Algorithm:
  * 1. Find the scheduler node containing this process
- * 2. Remove node from circular queue (handle head, middle, tail cases)
+ * 2. Remove node from the ready list (handle head, middle, tail cases)
  * 3. Free scheduler node
  * 4. Update rr_current if it pointed to removed node
  *
@@ -218,7 +227,6 @@ void rr_schedule_next(void)
 	process_t *next = NULL;
 	uint64_t irq_flags = rr_irq_save();
 	int attempts = 0;
-	const int max_attempts = 100;
 
 	if (!rr_head)
 	{
@@ -231,7 +239,7 @@ void rr_schedule_next(void)
 	else
 		rr_current = rr_current->next ? rr_current->next : rr_head;
 
-	while (rr_current && attempts < max_attempts)
+	while (rr_current && attempts < RR_MAX_PICK_ATTEMPTS)
 	{
 		next = rr_current->process;
 

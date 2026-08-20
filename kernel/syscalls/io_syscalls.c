@@ -45,6 +45,7 @@
 #include <ir0/pseudo_fs.h>
 #include <ir0/sock_udp.h>
 #include <ir0/sock_stream.h>
+#include <ir0/sock_icmp.h>
 #include <ir0/sock_inet_ioctl.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/copy_user.h>
@@ -123,6 +124,9 @@ int fd_can_read_for(process_t *proc, int fd)
   if (fd_table[fd].is_socket && fd_table[fd].vfs_file &&
       sock_stream_is(fd_table[fd].vfs_file))
     return sock_stream_poll_readable((struct sock_stream *)fd_table[fd].vfs_file);
+  if (fd_table[fd].is_socket && fd_table[fd].vfs_file &&
+      sock_icmp_is(fd_table[fd].vfs_file))
+    return sock_icmp_poll_readable((struct sock_icmp *)fd_table[fd].vfs_file);
   if (fd_table[fd].is_eventfd && fd_table[fd].vfs_file)
     return ir0_eventfd_poll_readable((struct ir0_eventfd *)fd_table[fd].vfs_file);
   if (fd_table[fd].is_timerfd && fd_table[fd].vfs_file)
@@ -1182,8 +1186,16 @@ int64_t sys_close(int fd)
     int was_pipe = fd_table[fd].is_pipe ? 1 : 0;
     int was_devfs = fd_table[fd].is_devfs ? 1 : 0;
 
+    /*
+     * Linux allows close(0/1/2) on the console slots. BusyBox wget -O -
+     * ends with xclose(1); refusing with EBADF prints "close failed".
+     */
     if (fd <= 2 && !was_pipe && !was_devfs && !fd_table[fd].vfs_file)
-      return -EBADF;
+    {
+      fd_table[fd].in_use = false;
+      fd_table[fd].flags = 0;
+      return 0;
+    }
 
     if (was_devfs)
     {
@@ -1213,6 +1225,8 @@ int64_t sys_close(int fd)
     {
       if (sock_stream_is(fd_table[fd].vfs_file))
         sock_stream_release((struct sock_stream *)fd_table[fd].vfs_file);
+      else if (sock_icmp_is(fd_table[fd].vfs_file))
+        sock_icmp_release((struct sock_icmp *)fd_table[fd].vfs_file);
       else if (!sock_stream_is_slot(fd_table[fd].vfs_file))
         sock_udp_release((struct sock_udp *)fd_table[fd].vfs_file);
       fd_table[fd].vfs_file = NULL;
@@ -1424,6 +1438,16 @@ int64_t sys_dup2(int oldfd, int newfd)
       ir0_timerfd_release((struct ir0_timerfd *)fd_table[newfd].vfs_file);
       fd_table[newfd].vfs_file = NULL;
     }
+    else if (fd_table[newfd].is_socket && fd_table[newfd].vfs_file)
+    {
+      if (sock_stream_is(fd_table[newfd].vfs_file))
+	sock_stream_release((struct sock_stream *)fd_table[newfd].vfs_file);
+      else if (sock_icmp_is(fd_table[newfd].vfs_file))
+	sock_icmp_release((struct sock_icmp *)fd_table[newfd].vfs_file);
+      else if (!sock_stream_is_slot(fd_table[newfd].vfs_file))
+	sock_udp_release((struct sock_udp *)fd_table[newfd].vfs_file);
+      fd_table[newfd].vfs_file = NULL;
+    }
     else if (fd_table[newfd].vfs_file)
     {
       vfs_close((struct vfs_file *)fd_table[newfd].vfs_file);
@@ -1511,6 +1535,20 @@ int64_t sys_dup2(int oldfd, int newfd)
   else if (fd_table[oldfd].is_timerfd && fd_table[oldfd].vfs_file)
   {
     ir0_timerfd_acquire((struct ir0_timerfd *)fd_table[oldfd].vfs_file);
+    fd_table[newfd].vfs_file = fd_table[oldfd].vfs_file;
+  }
+  else if (fd_table[oldfd].is_socket && fd_table[oldfd].vfs_file)
+  {
+    /*
+     * BusyBox ping does xmove_fd(raw_sock, 0). Must not vfs_file_acquire the
+     * sock_* object — that corrupts magic and sendto falls through as UDP.
+     */
+    if (sock_stream_is(fd_table[oldfd].vfs_file))
+      sock_stream_acquire((struct sock_stream *)fd_table[oldfd].vfs_file);
+    else if (sock_icmp_is(fd_table[oldfd].vfs_file))
+      sock_icmp_acquire((struct sock_icmp *)fd_table[oldfd].vfs_file);
+    else if (!sock_stream_is_slot(fd_table[oldfd].vfs_file))
+      sock_udp_acquire((struct sock_udp *)fd_table[oldfd].vfs_file);
     fd_table[newfd].vfs_file = fd_table[oldfd].vfs_file;
   }
   else if (fd_table[oldfd].vfs_file)

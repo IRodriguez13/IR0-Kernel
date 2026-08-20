@@ -7,7 +7,9 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: process.h
- * Description: IR0 kernel source/header file
+ * Description: process_t and process API. Still a large aggregate (sched,
+ *              signals, wait, blocked-syscall resume, creds, timers, stacks);
+ *              mm/files are already extracted. Prefer accessors.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -18,6 +20,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <ir0/task.h>
+#include <ir0/arch_syscall_frame.h>
 #include <ir0/signals.h>
 #include <ir0/types.h>
 #include <ir0/fd_types.h>
@@ -88,35 +91,9 @@ struct mmap_region
 };
 
 /*
- * User register snapshot at syscall entry (Linux pt_regs subset).
- * Prefer the ISA-neutral name arch_syscall_frame_t in new code.
- * Layout decode/fill remains ISA-private (arch_syscall_frame / arch_switch).
- */
-typedef struct
-{
-	uint64_t rip;
-	uint64_t rflags;
-	uint64_t rsp;
-	uint64_t rbx;
-	uint64_t rbp;
-	uint64_t r12;
-	uint64_t r13;
-	uint64_t r14;
-	uint64_t r15;
-	uint64_t rdi;
-	uint64_t rsi;
-	uint64_t rdx;
-	uint64_t r10;
-	uint64_t r8;
-	uint64_t r9;
-} arch_syscall_frame_t;
-
-/* Legacy alias — same type; do not invent a second frame layout. */
-typedef arch_syscall_frame_t syscall_user_frame_t;
-
-/*
- * Arch-owned thread TLS (x86: IA32_FS_BASE). Lives in a union with fs_base so
- * ASM IR0_PROC_FS_BASE_OFFSET stays stable; portable code uses process_tls_*.
+ * Arch-owned thread TLS (x86: IA32_FS_BASE; ARM64: TPIDR_EL0). Lives in a
+ * union with fs_base so ASM IR0_PROC_FS_BASE_OFFSET stays stable; portable
+ * code uses process_tls_*.
  */
 typedef struct arch_thread_state
 {
@@ -125,6 +102,10 @@ typedef struct arch_thread_state
 
 typedef struct process
 {
+	/*
+	 * Aggregate still owns lifecycle, signals, wait, syscall-resume, creds,
+	 * timers, and stacks. mm and files are the extracted domains so far.
+	 */
 	task_t task;
 	/*
 	 * TLS / arch thread state. Prefer process_tls_get/set and
@@ -199,6 +180,13 @@ typedef struct process
 	uint8_t syscall_interrupted;
 	uint64_t clock_wait_deadline_ms;
 
+	/*
+	 * ITIMER_REAL (setitimer/alarm): absolute expire in uptime ms; 0 = off.
+	 * interval_ms 0 = one-shot. Cleared on fork child and exec.
+	 */
+	uint64_t it_real_expire_ms;
+	uint64_t it_real_interval_ms;
+
 	/* Signal management */
 	uint32_t signal_pending; /* Bitmask of pending signals */
 	/* Signal handlers (function pointers to userspace handlers) */
@@ -207,8 +195,23 @@ typedef struct process
 	uint32_t signal_ignored;  /* Mask of signals to ignore (SIG_IGN) */
 	uint32_t signal_sa_flags[_NSIG]; /* Per-signal sa_flags from sigaction */
 	uint32_t signal_sa_mask[_NSIG];  /* Per-signal sa_mask (during handler only) */
+	void (*signal_restorer[_NSIG])(void); /* sa_restorer (SA_RESTORER / musl) */
 	int *set_tid_ptr;      /* set_tid_address(2) userspace pointer */
 	struct sigcontext *saved_context;  /* Saved context before signal handler (for sigreturn) */
+	/*
+	 * Set when a userspace handler frame is armed; cleared on the first
+	 * switch_to_user_task into that handler. saved_context must stay until
+	 * rt_sigreturn — without this flag, nested syscalls in the handler
+	 * (sendto/setitimer from BusyBox ping SIGALRM) re-enter the handler.
+	 */
+	uint8_t signal_enter_pending;
+	/*
+	 * When set, handle_signals() leaves catchable user handlers pending
+	 * (no sigframe / signal_enter_pending). Interruptible waits (e.g.
+	 * tcp_wire_connect) can map SIGALRM → -ETIMEDOUT instead of jumping
+	 * into BusyBox die-from-handler (exit from SIGALRM SEGVs on repeat).
+	 */
+	uint8_t signal_defer_catchable;
 
 	/* Linux syscall insn frame (for fork child / blocked syscall return). */
 	arch_syscall_frame_t syscall_frame;
@@ -217,7 +220,9 @@ typedef struct process
 	int *wait_status_ptr;    /* userspace wait4 status word while irq_frame_saved */
 	/*
 	 * wait4 blocked-syscall contract (D1.17): while irq_frame_saved from wait4,
-	 * wait_target_pid holds the pid argument (>0 specific child; -1/0 any child).
+	 * wait_target_pid holds the pid argument:
+	 *   >0  specific child; -1 any child; 0 same process group;
+	 *   < -1 process group whose id is -pid.
 	 * Wake/resume/reap paths must honour this — never complete wait4(pid>0) for
 	 * another child, even if syscall_resume_rax was stale or mis-set.
 	 */
@@ -427,62 +432,49 @@ static inline void process_tls_set(process_t *p, uint64_t tls)
 		p->arch_thread.tls_base = tls;
 }
 
-/* Opaque syscall-frame accessors (layout is ISA-shaped; do not open-code fields). */
+/* Opaque syscall-frame accessors — ISA decode lives in arch_syscall_frame_*.h. */
 static inline uint64_t process_syscall_ip(const process_t *p)
 {
-	return p ? p->syscall_frame.rip : 0;
+	return p ? arch_syscall_frame_ip(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_sp(const process_t *p)
 {
-	return p ? p->syscall_frame.rsp : 0;
+	return p ? arch_syscall_frame_sp(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_flags(const process_t *p)
 {
-	return p ? p->syscall_frame.rflags : 0;
+	return p ? arch_syscall_frame_flags(&p->syscall_frame) : 0;
 }
 
 static inline void process_syscall_set_ip(process_t *p, uint64_t ip)
 {
 	if (p)
-		p->syscall_frame.rip = ip;
+		arch_syscall_frame_set_ip(&p->syscall_frame, ip);
 }
 
 static inline void process_syscall_set_sp(process_t *p, uint64_t sp)
 {
 	if (p)
-		p->syscall_frame.rsp = sp;
+		arch_syscall_frame_set_sp(&p->syscall_frame, sp);
 }
 
 static inline void process_syscall_set_flags(process_t *p, uint64_t flags)
 {
 	if (p)
-		p->syscall_frame.rflags = flags;
+		arch_syscall_frame_set_flags(&p->syscall_frame, flags);
 }
 
-/* Linux x86-64 ABI arg slots: 0=rdi … 5=r9 (ARM64 maps later). */
 static inline uint64_t process_syscall_arg(const process_t *p, unsigned n)
 {
-	if (!p)
-		return 0;
-	switch (n)
-	{
-	case 0:
-		return p->syscall_frame.rdi;
-	case 1:
-		return p->syscall_frame.rsi;
-	case 2:
-		return p->syscall_frame.rdx;
-	case 3:
-		return p->syscall_frame.r10;
-	case 4:
-		return p->syscall_frame.r8;
-	case 5:
-		return p->syscall_frame.r9;
-	default:
-		return 0;
-	}
+	return p ? arch_syscall_frame_arg(&p->syscall_frame, n) : 0;
+}
+
+static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
+{
+	if (p)
+		arch_syscall_frame_set_arg(&p->syscall_frame, n, v);
 }
 
 void process_capture_syscall_frame(process_t *p);
@@ -500,6 +492,7 @@ void process_arm_blocked_syscall_resume(process_t *p, uint64_t rax);
 void process_arm_coop_resched_resume(process_t *p, uint64_t rax);
 void process_clear_in_thread_syscall_block(process_t *p);
 void process_reset_blocked_syscall_state(process_t *p);
+/* "arm" = prepare/enable a resume path (English verb), not ARM64. */
 void process_arm_kernel_syscall_sleep(process_t *p);
 /* After switch_context saved prev: honour want_kernel_ret (Class B close). */
 void process_after_task_save(task_t *prev);
@@ -593,15 +586,14 @@ int process_signal_default_kill(process_t *target, int signal);
  */
 void process_reap_zombie_on_wait_resume(process_t *parent, pid_t child_pid);
 
-/* IR0 PHILOSOPHY: Only spawn() creates processes - total simplicity
- * Mode must be explicitly specified - no magic address detection */
+/* spawn() — explicit-mode process creation (kernel vs user). */
 pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode);
 
 /* Convenience wrappers for explicit mode specification */
 pid_t spawn_user(void (*entry)(void), const char *name);
 pid_t spawn_kernel(void (*entry)(void), const char *name);
 
-/* Fork exists only for POSIX syscall compatibility - uses spawn() internally */
+/* POSIX fork/clone: kernel/process/fork.c (not spawn internally). */
 pid_t fork(void);
 pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 		   int *child_tid, unsigned long tls);
@@ -619,6 +611,7 @@ pid_t process_get_ppid(void);
 process_t *process_get_current(void);
 void irq_save_user_frame(uint64_t *frame);
 process_t *get_process_list(void);
+void process_itimer_tick(uint64_t now_ms);
 pid_t process_get_next_pid(void);
 pid_t process_last_assigned_pid(void);
 void process_prepare_pid1_for_init(void);

@@ -45,6 +45,10 @@
 #include <ir0/klog.h>
 #include <ir0/console_backend.h>
 #include <ir0/statfs.h>
+#include <ir0/arch_cpu.h>
+#include <ir0/cpu.h>
+#include <ir0/sched.h>
+#include <ir0/process.h>
 #include <config.h>
 #include <string.h>
 
@@ -56,6 +60,245 @@
 /* ------------------------------------------------------------------ */
 static struct vfs_fstype *fs_types  = NULL;
 static struct vfs_mount  *mounts   = NULL;
+
+/*
+ * MINIX find_inode() returns a pointer to a static inode. Concurrent
+ * vfs_stat / vfs_read / vfs_read_file (ls+stat vs execve of BusyBox)
+ * filled struct stat from the wrong inode and tore ELF images.
+ *
+ * One fs_ops critical section at a time. Waiters schedule; IRQs stay
+ * enabled so ATA PIO still uses its own irq_save per command.
+ *
+ * Recursive: vfs_open -> vfs_truncate, vfs_utimens -> vfs_stat,
+ * vfs_read_file -> ops->stat/read, same task.
+ */
+static int vfs_fs_op_busy;
+static int vfs_fs_op_depth;
+static const void *vfs_fs_op_owner;
+
+static const void *vfs_fs_op_self(void)
+{
+	if (current_process)
+		return current_process;
+	return &vfs_fs_op_busy;
+}
+
+static void vfs_fs_op_acquire(void)
+{
+	const void *me = vfs_fs_op_self();
+
+	for (;;)
+	{
+		unsigned long flags = irq_save();
+
+		if (vfs_fs_op_busy && vfs_fs_op_owner == me)
+		{
+			vfs_fs_op_depth++;
+			irq_restore(flags);
+			return;
+		}
+		if (!vfs_fs_op_busy)
+		{
+			vfs_fs_op_busy = 1;
+			vfs_fs_op_owner = me;
+			vfs_fs_op_depth = 1;
+			irq_restore(flags);
+			return;
+		}
+		irq_restore(flags);
+		if (!current_process)
+		{
+			cpu_relax();
+			continue;
+		}
+		sched_schedule_next();
+	}
+}
+
+static void vfs_fs_op_release(void)
+{
+	unsigned long flags = irq_save();
+
+	if (vfs_fs_op_depth > 1)
+	{
+		vfs_fs_op_depth--;
+		irq_restore(flags);
+		return;
+	}
+	vfs_fs_op_busy = 0;
+	vfs_fs_op_owner = NULL;
+	vfs_fs_op_depth = 0;
+	irq_restore(flags);
+}
+
+static int vfs_ops_stat(struct vfs_ops *ops, const char *path, stat_t *st)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->stat(path, st);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_read(struct vfs_ops *ops, const char *path, void *buf,
+			size_t count, size_t *done, off_t offset)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->read(path, buf, count, done, offset);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_write(struct vfs_ops *ops, const char *path, const void *buf,
+			 size_t count, size_t *done, off_t offset)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->write(path, buf, count, done, offset);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_create(struct vfs_ops *ops, const char *path, mode_t mode)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->create(path, mode);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_mkdir(struct vfs_ops *ops, const char *path, mode_t mode)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->mkdir(path, mode);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_unlink(struct vfs_ops *ops, const char *path)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->unlink(path);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_rmdir(struct vfs_ops *ops, const char *path)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->rmdir(path);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_readdir(struct vfs_ops *ops, const char *path,
+			   struct vfs_dirent *entries, int max)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->readdir(path, entries, max);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_link(struct vfs_ops *ops, const char *oldpath,
+			const char *newpath)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->link(oldpath, newpath);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_symlink(struct vfs_ops *ops, const char *target,
+			   const char *linkpath)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->symlink(target, linkpath);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_readlink(struct vfs_ops *ops, const char *path, char *buf,
+			    size_t buflen)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->readlink(path, buf, buflen);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_rename(struct vfs_ops *ops, const char *oldpath,
+			  const char *newpath)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->rename(oldpath, newpath);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_chown(struct vfs_ops *ops, const char *path, uid_t owner,
+			 gid_t group)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->chown(path, owner, group);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_chmod(struct vfs_ops *ops, const char *path, mode_t mode)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->chmod(path, mode);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_truncate(struct vfs_ops *ops, const char *path, size_t length)
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->truncate(path, length);
+	vfs_fs_op_release();
+	return ret;
+}
+
+static int vfs_ops_utimens(struct vfs_ops *ops, const char *path,
+			   const struct timespec times[2])
+{
+	int ret;
+
+	vfs_fs_op_acquire();
+	ret = ops->utimens(path, times);
+	vfs_fs_op_release();
+	return ret;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers                                                   */
@@ -597,13 +840,13 @@ int vfs_open(const char *path, int flags, mode_t mode, struct vfs_file **out)
 
         if (parent_dir(path, parent, sizeof(parent)) == 0)
         {
-            if (!ops->stat || ops->stat(parent, &st) != 0)
+            if (!ops->stat || vfs_ops_stat(ops, parent, &st) != 0)
                 return -ENOENT;
             if (!ir0_check_file_access(parent, ACCESS_WRITE))
                 return -EACCES;
         }
 
-        target_exists = (ops->stat && ops->stat(path, &st) == 0) ? 1 : 0;
+        target_exists = (ops->stat && vfs_ops_stat(ops, path, &st) == 0) ? 1 : 0;
 
         if (target_exists && S_ISDIR(st.st_mode) && !(flags & IR0_O_DIRECTORY))
         {
@@ -620,12 +863,12 @@ int vfs_open(const char *path, int flags, mode_t mode, struct vfs_file **out)
                 /* open(2): the caller's mode is authoritative, 0000 included. */
                 mode_t fmode = mode & 07777;
 
-                ret = ops->create(path, fmode);
+                ret = vfs_ops_create(ops, path, fmode);
                 if (ret == -EISDIR)
                 {
                     ret = vfs_rmdir_recursive(path);
                     if (ret == 0)
-                        ret = ops->create(path, fmode);
+                        ret = vfs_ops_create(ops, path, fmode);
                 }
                 if (ret != 0)
                     return ret;
@@ -648,7 +891,7 @@ int vfs_open(const char *path, int flags, mode_t mode, struct vfs_file **out)
         int accmode = flags & IR0_O_ACCMODE;
         stat_t st;
 
-        if (!ops->stat || ops->stat(path, &st) != 0)
+        if (!ops->stat || vfs_ops_stat(ops, path, &st) != 0)
             return -ENOENT;
 
         if (accmode == IR0_O_RDONLY || accmode == IR0_O_RDWR)
@@ -663,7 +906,7 @@ int vfs_open(const char *path, int flags, mode_t mode, struct vfs_file **out)
     {
         stat_t st;
 
-        if (!ops->stat || ops->stat(path, &st) != 0)
+        if (!ops->stat || vfs_ops_stat(ops, path, &st) != 0)
             return -ENOENT;
         if (S_ISDIR(st.st_mode))
             return -EISDIR;
@@ -703,7 +946,7 @@ int vfs_read(struct vfs_file *f, char *buf, size_t count)
         return -ENOSYS;
 
     size_t done = 0;
-    int ret = ops->read(f->path, buf, count, &done, f->pos);
+    int ret = vfs_ops_read(ops, f->path, buf, count, &done, f->pos);
     if (vfs_exec_audit_active)
     {
         vfs_exec_audit_log("vfs_read", f->path, ret, f->pos, count, done, 0, -1);
@@ -734,12 +977,12 @@ int vfs_write(struct vfs_file *f, const char *buf, size_t count)
      */
     if (f->flags & IR0_O_APPEND) {
         stat_t st;
-        if (ops->stat && ops->stat(f->path, &st) == 0)
+        if (ops->stat && vfs_ops_stat(ops, f->path, &st) == 0)
             f->pos = st.st_size;
     }
 
     size_t done = 0;
-    int ret = ops->write(f->path, buf, count, &done, f->pos);
+    int ret = vfs_ops_write(ops, f->path, buf, count, &done, f->pos);
     if (ret != 0)
         return ret;
     f->pos += (off_t)done;
@@ -764,7 +1007,7 @@ int vfs_pread(struct vfs_file *f, char *buf, size_t count, off_t offset)
         return -ENOSYS;
 
     size_t done = 0;
-    int ret = ops->read(f->path, buf, count, &done, offset);
+    int ret = vfs_ops_read(ops, f->path, buf, count, &done, offset);
 
     if (ret != 0)
         return ret;
@@ -791,7 +1034,7 @@ int vfs_pwrite(struct vfs_file *f, const char *buf, size_t count, off_t offset)
         return -ENOSYS;
 
     size_t done = 0;
-    int ret = ops->write(f->path, buf, count, &done, offset);
+    int ret = vfs_ops_write(ops, f->path, buf, count, &done, offset);
 
     if (ret != 0)
         return ret;
@@ -837,7 +1080,7 @@ off_t vfs_lseek(struct vfs_file *f, off_t offset, int whence)
         if (!ops || !ops->stat)
             return -ENOSYS;
         stat_t st;
-        if (ops->stat(f->path, &st) != 0)
+        if (vfs_ops_stat(ops, f->path, &st) != 0)
             return -EIO;
         new_pos = st.st_size + offset;
         break;
@@ -866,7 +1109,8 @@ int vfs_stat(const char *path, stat_t *buf)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->stat)
         return -ENODEV;
-    return ops->stat(path, buf);
+    memset(buf, 0, sizeof(*buf));
+    return vfs_ops_stat(ops, path, buf);
 }
 
 int vfs_statfs(const char *path, struct ir0_statfs *buf)
@@ -890,7 +1134,14 @@ int vfs_statfs(const char *path, struct ir0_statfs *buf)
 
 #if CONFIG_ENABLE_FS_MINIX
 	if (strcmp(fst, "minix") == 0)
-		return minix_fs_statfs(buf);
+	{
+		int rc;
+
+		vfs_fs_op_acquire();
+		rc = minix_fs_statfs(buf);
+		vfs_fs_op_release();
+		return rc;
+	}
 #endif
 #if CONFIG_ENABLE_FS_TMPFS
 	if (strcmp(fst, "tmpfs") == 0)
@@ -948,7 +1199,7 @@ int vfs_mkdir(const char *path, int mode)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->mkdir)
         return -ENOSYS;
-    return ops->mkdir(path, (mode_t)mode);
+    return vfs_ops_mkdir(ops, path, (mode_t)mode);
 }
 
 int vfs_unlink(const char *path)
@@ -975,7 +1226,7 @@ int vfs_unlink(const char *path)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->unlink)
         return -ENOSYS;
-    return ops->unlink(path);
+    return vfs_ops_unlink(ops, path);
 }
 
 int vfs_link(const char *oldpath, const char *newpath)
@@ -1004,7 +1255,7 @@ int vfs_link(const char *oldpath, const char *newpath)
     struct vfs_ops *ops = ops_for_path(oldpath);
     if (!ops || !ops->link)
         return -ENOSYS;
-    return ops->link(oldpath, newpath);
+    return vfs_ops_link(ops, oldpath, newpath);
 }
 
 int vfs_symlink(const char *target, const char *linkpath)
@@ -1022,7 +1273,7 @@ int vfs_symlink(const char *target, const char *linkpath)
     ops = ops_for_path(linkpath);
     if (!ops || !ops->symlink)
         return -ENOSYS;
-    return ops->symlink(target, linkpath);
+    return vfs_ops_symlink(ops, target, linkpath);
 }
 
 int vfs_readlink(const char *path, char *buf, size_t buflen)
@@ -1038,7 +1289,7 @@ int vfs_readlink(const char *path, char *buf, size_t buflen)
     ops = ops_for_path(path);
     if (!ops || !ops->readlink)
         return -ENOSYS;
-    return ops->readlink(path, buf, buflen);
+    return vfs_ops_readlink(ops, path, buf, buflen);
 }
 
 int vfs_rename(const char *oldpath, const char *newpath)
@@ -1111,10 +1362,10 @@ int vfs_rename(const char *oldpath, const char *newpath)
     if (!ops)
         return -ENOSYS;
     if (ops->rename)
-        return ops->rename(oldpath, newpath);
+        return vfs_ops_rename(ops, oldpath, newpath);
     if (!ops->link)
         return -ENOSYS;
-    ret = ops->link(oldpath, newpath);
+    ret = vfs_ops_link(ops, oldpath, newpath);
     if (ret != 0)
         return ret;
     return vfs_unlink(oldpath);
@@ -1153,7 +1404,7 @@ int vfs_rmdir(const char *path)
     struct vfs_ops *ops = ops_for_path(norm);
     if (!ops || !ops->rmdir)
         return -ENOSYS;
-    return ops->rmdir(norm);
+    return vfs_ops_rmdir(ops, norm);
 }
 
 static int rmdir_recursive_impl(const char *path, int depth)
@@ -1181,7 +1432,7 @@ static int rmdir_recursive_impl(const char *path, int depth)
     if (n < 0) {
         struct vfs_ops *ops = ops_for_path(norm);
         if (ops && ops->rmdir)
-            return ops->rmdir(norm);
+            return vfs_ops_rmdir(ops, norm);
         return n;
     }
 
@@ -1227,7 +1478,7 @@ static int rmdir_recursive_impl(const char *path, int depth)
 
     struct vfs_ops *ops = ops_for_path(norm);
     if (ops && ops->rmdir)
-        return ops->rmdir(norm);
+        return vfs_ops_rmdir(ops, norm);
     return -ENOSYS;
 }
 
@@ -1294,7 +1545,7 @@ int vfs_readdir(const char *path, struct vfs_dirent *entries, int max)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->readdir)
         return -ENOSYS;
-    return ops->readdir(path, entries, max);
+    return vfs_ops_readdir(ops, path, entries, max);
 }
 
 int vfs_chown(const char *path, uid_t owner, gid_t group)
@@ -1310,7 +1561,7 @@ int vfs_chown(const char *path, uid_t owner, gid_t group)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->chown)
         return -ENOSYS;
-    return ops->chown(path, owner, group);
+    return vfs_ops_chown(ops, path, owner, group);
 }
 
 int vfs_chmod(const char *path, mode_t mode)
@@ -1334,7 +1585,7 @@ int vfs_chmod(const char *path, mode_t mode)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->chmod)
         return -ENOSYS;
-    return ops->chmod(path, mode);
+    return vfs_ops_chmod(ops, path, mode);
 }
 
 int vfs_truncate(const char *path, size_t length)
@@ -1352,7 +1603,7 @@ int vfs_truncate(const char *path, size_t length)
     struct vfs_ops *ops = ops_for_path(path);
     if (!ops || !ops->truncate)
         return -ENOSYS;
-    return ops->truncate(path, length);
+    return vfs_ops_truncate(ops, path, length);
 }
 
 int vfs_utimens(const char *path, const struct timespec times[2])
@@ -1372,7 +1623,7 @@ int vfs_utimens(const char *path, const struct timespec times[2])
     ops = ops_for_path(path);
     if (!ops || !ops->utimens)
         return -ENOSYS;
-    return ops->utimens(path, times);
+    return vfs_ops_utimens(ops, path, times);
 }
 
 
@@ -1416,10 +1667,13 @@ int vfs_read_file(const char *path, void **data, size_t *size)
         klog_print("\n");
     }
 
+    vfs_fs_op_acquire();
+
     ret = ops->stat(path, &st);
     if (ret != 0)
     {
         vfs_exec_audit_log("stat_fail", path, ret, 0, 0, 0, 0, -1);
+        vfs_fs_op_release();
         return ret;
     }
 
@@ -1427,6 +1681,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
     {
         vfs_exec_audit_log("stat_bad_size", path, -EIO, 0, 0, 0,
                            (uint64_t)st.st_ino, st.st_size);
+        vfs_fs_op_release();
         return -EIO;
     }
 
@@ -1438,6 +1693,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
     {
         vfs_exec_audit_log("file_too_large", path, -EFBIG, 0, fsize, 0,
                            (uint64_t)st.st_ino, st.st_size);
+        vfs_fs_op_release();
         return -EFBIG;
     }
     if (fsize == 0)
@@ -1446,6 +1702,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
         *size = 0;
         vfs_exec_audit_log("file_size_zero", path, 0, 0, 0, 0,
                            (uint64_t)st.st_ino, 0);
+        vfs_fs_op_release();
         return 0;
     }
 
@@ -1454,6 +1711,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
     {
         vfs_exec_audit_log("kmalloc_fail", path, -ENOMEM, 0, fsize, 0,
                            (uint64_t)st.st_ino, st.st_size);
+        vfs_fs_op_release();
         return -ENOMEM;
     }
 
@@ -1474,6 +1732,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
                                           st.st_size, (off_t)total,
                                           fsize - total, ret);
             kfree(buf);
+            vfs_fs_op_release();
             return ret;
         }
         if (chunk == 0)
@@ -1482,6 +1741,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
                                fsize - total, total,
                                (uint64_t)st.st_ino, st.st_size);
             kfree(buf);
+            vfs_fs_op_release();
             return -EIO;
         }
         vfs_exec_audit_log("read_chunk", path, 0, (off_t)total,
@@ -1496,6 +1756,7 @@ int vfs_read_file(const char *path, void **data, size_t *size)
                            fsize, total,
                            (uint64_t)st.st_ino, st.st_size);
         kfree(buf);
+        vfs_fs_op_release();
         return -EIO;
     }
 
@@ -1503,5 +1764,6 @@ int vfs_read_file(const char *path, void **data, size_t *size)
     *size = total;
     vfs_exec_audit_log("read_ok", path, 0, 0, fsize, total,
                        (uint64_t)st.st_ino, st.st_size);
+    vfs_fs_op_release();
     return 0;
 }

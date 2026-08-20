@@ -393,9 +393,13 @@ static int32_t rtl8139_hw_init(void)
     resource_register_irq(irq, "rtl8139");
     resource_register_ioport(rtl8139_io_base, (uint16_t)(rtl8139_io_base + 0x40), "rtl8139");
 
-    /* Read Link Status (REAL DATA) */
+    /*
+     * MSR bit2 is LinkFail (datasheet / QEMU): 0 = link OK, 1 = down.
+     * QEMU user-net keeps the link up; inverted polarity left eth0 without
+     * IFF_UP so plain `ifconfig` (no -a) printed nothing.
+     */
     uint8_t msr = inb(rtl8139_io_base + RTL8139_REG_MSR);
-    bool link_ok = (msr & RTL8139_MSR_LINKB) != 0;
+    bool link_ok = (msr & RTL8139_MSR_LINKB) == 0;
 
     /* Register with network stack */
     memset(&rtl8139_dev, 0, sizeof(rtl8139_dev));
@@ -875,12 +879,14 @@ static void rtl8139_process_rx_packets(void)
         return;
     }
 
-    /* Read hardware write pointer
-     * In RTL8139, the write pointer is at offset 0x10 in the RX buffer
-     * We need to read it as a 16-bit value in little-endian format
+    /*
+     * Hardware write cursor is CBR (I/O 0x3A), not rx_buffer+0x10.
+     * Reading the ring as a write ptr desyncs CAPR under load → RxOverflow
+     * and RX stays wedged (TX still works; ping/wget die after stress).
+     * Spec: Realtek RTL8139 programming guide / datasheet CBR/CAPR.
      */
-    uint16_t current_write = *((volatile uint16_t *)(rtl8139_rx_buffer + 0x10));
-    current_write &= (RTL8139_RX_BUF_SIZE - 1);  /* Mask to buffer size */
+    uint16_t current_write = inw(rtl8139_io_base + RTL8139_REG_CBR);
+    current_write &= (RTL8139_RX_BUF_SIZE - 1);
     
     /* Handle wrap-around: if current_write < read_offset, we wrapped */
     if (current_write < rtl8139_rx_read_offset)
@@ -1128,40 +1134,37 @@ void rtl8139_handle_interrupt(void)
                    (unsigned)isr);
 #endif
     
-    /* Check for receive interrupt */
-    if (isr & RTL8139_INT_ROK)
+    /*
+     * ROK and RxBufOvw both need drain + CAPR update. Realtek: on overflow,
+     * update CAPR first then clear ISR(ROK); otherwise RX DMA stays stopped.
+     */
+    if (isr & (RTL8139_INT_ROK | RTL8139_INT_RXOVW | RTL8139_INT_FIFOOVW))
     {
+        if (isr & (RTL8139_INT_RXOVW | RTL8139_INT_FIFOOVW))
+        {
+            rtl8139_counters.rx_errors++;
+            LOG_WARNING_FMT("RTL8139", "RX overflow ISR=0x%x — draining ring",
+                            (unsigned)isr);
+        }
         if (rtl8139_try_enter_rx())
         {
-            LOG_DEBUG("RTL8139", "RX interrupt detected, processing packets...");
-            /* Process packets BEFORE clearing ISR to avoid race conditions */
             rtl8139_process_rx_packets();
             rtl8139_leave_rx();
         }
     }
-    else if (isr != 0)
+
+    if (isr & RTL8139_INT_RER)
     {
-        /* Log non-RX interrupts for debugging */
-        if (isr & RTL8139_INT_RER)
-        {
-            rtl8139_counters.rx_errors++;
-            LOG_DEBUG("RTL8139", "RX error interrupt");
-        }
-        if (isr & RTL8139_INT_RXOVW)
-        {
-            rtl8139_counters.rx_errors++;
-            LOG_WARNING("RTL8139", "RX buffer overflow interrupt");
-        }
-        if (isr & RTL8139_INT_TER)
-        {
-            rtl8139_counters.tx_errors++;
-            LOG_DEBUG("RTL8139", "TX error interrupt");
-        }
-        if (isr & RTL8139_INT_PUN)
-            LOG_DEBUG("RTL8139", "Packet underrun interrupt");
-        if (isr & RTL8139_INT_FIFOOVW)
-            LOG_WARNING("RTL8139", "FIFO overflow interrupt");
+        rtl8139_counters.rx_errors++;
+        LOG_DEBUG("RTL8139", "RX error interrupt");
     }
+    if (isr & RTL8139_INT_TER)
+    {
+        rtl8139_counters.tx_errors++;
+        LOG_DEBUG("RTL8139", "TX error interrupt");
+    }
+    if (isr & RTL8139_INT_PUN)
+        LOG_DEBUG("RTL8139", "Packet underrun interrupt");
     
     /* Check for transmit interrupt (optional, for TX completion) */
     if (isr & RTL8139_INT_TOK)
@@ -1212,7 +1215,7 @@ void rtl8139_poll(void)
     poll_count++;
     if ((poll_count % 500) == 0)
     {
-        uint16_t current_write = *((volatile uint16_t *)(rtl8139_rx_buffer + 0x10));
+        uint16_t current_write = inw(rtl8139_io_base + RTL8139_REG_CBR);
 
         current_write &= (RTL8139_RX_BUF_SIZE - 1);
         klog_debug_fmt("RTL8139",
@@ -1222,22 +1225,20 @@ void rtl8139_poll(void)
     }
 #endif
     
-    if (isr & RTL8139_INT_ROK)
+    if (isr & (RTL8139_INT_ROK | RTL8139_INT_RXOVW | RTL8139_INT_FIFOOVW))
     {
         if (rtl8139_try_enter_rx())
         {
-            /* Process packets */
             rtl8139_process_rx_packets();
             rtl8139_leave_rx();
-            
-            /* Clear interrupt status */
-            outw(rtl8139_io_base + RTL8139_REG_ISR, RTL8139_INT_ROK);
+            outw(rtl8139_io_base + RTL8139_REG_ISR,
+                 (uint16_t)(isr & (RTL8139_INT_ROK | RTL8139_INT_RXOVW |
+                                   RTL8139_INT_FIFOOVW)));
         }
     }
     else
     {
         /* Even if ISR doesn't show ROK, check the buffer directly */
-        /* Sometimes packets arrive but interrupt doesn't fire */
         if (rtl8139_try_enter_rx())
         {
             rtl8139_process_rx_packets();

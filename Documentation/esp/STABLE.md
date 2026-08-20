@@ -1,9 +1,10 @@
 # IR0 — Baseline estable (release 0.0.1)
 
-> **Última verificación:** 2026-07-18  
+> **Última verificación:** 2026-07-30  
 > **Fuente de verdad:** smokes/`Makefile`, merge `56a3f7b` (kexec/S3, P1-storage, P1-T1),  
 > F8 MVP honesto (`smoke-f8-net`), Future F2–F6, híbrido runit+9p (`runit_hostshare_payload_run`),  
-> [`../HARDENING.md`](../HARDENING.md), [`../ROADMAP.md`](../ROADMAP.md), gates CTR.
+> [`../releases/IR0_0.0.1_RC4.md`](../releases/IR0_0.0.1_RC4.md), [`../HARDENING.md`](../HARDENING.md),  
+> [`../ROADMAP.md`](../ROADMAP.md), gates CTR.
 
 Checklist único de lo **estable para probar en QEMU** (serial y GTK), lo que **estaba en desarrollo** y quedó **cerrado en 0.0.1**, y lo que sigue siendo **trabajo futuro** ([`ROADMAP.md`](../ROADMAP.md) P1+).
 
@@ -14,10 +15,11 @@ kernel aún hacía full-copy. El share-on-fork real + break en write fault está
 (`make smoke-mm-cow-lazy`). KTM es el plano de test canónico (`make ktm-run`,
 `make ktm-userdev-run`); ver [`../ai_driven_dev/ktm.md`](../ai_driven_dev/ktm.md).
 
-### Tag prep vs ship (2026-07-12)
+### Tag prep vs ship (2026-07-30)
 
-- **`v0.0.1-rc2`**: tag prep (gates críticos automáticos). **No** es el release.
-- **Ship 0.0.1**: VM manual del mantenedor. BusyBox producto (**BUSY-1/2**) cerrado con `smoke-busybox-manifest`.
+- **`v0.0.1-rc4`**: **último pre-release** antes del final (`0.0.1-rc4`). Tras el tag: solo bugfixing/estabilización.
+- **Ship `v0.0.1`**: VM manual del mantenedor + blockers de SCOPE.
+- Detalle: [`../releases/IR0_0.0.1_RC4.md`](../releases/IR0_0.0.1_RC4.md).
 
 ---
 

@@ -567,6 +567,9 @@ void clock_tick(void)
     /* Check and fire alarms */
     clock_check_alarms();
 
+    /* POSIX ITIMER_REAL → SIGALRM (BusyBox ping -c N / -i). */
+    process_itimer_tick(clock_get_uptime_milliseconds());
+
     /* Timed waits (nanosleep, poll timeout) and poll fd timeouts. */
     ir0_clock_wait_fire_due(clock_get_uptime_milliseconds());
     (void)poll_wake_check_nosched();

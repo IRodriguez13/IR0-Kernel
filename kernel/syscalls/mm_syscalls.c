@@ -28,6 +28,7 @@
 #include <ir0/mm_struct.h>
 #include <ir0/paging.h>
 #include <ir0/pmm.h>
+#include <mm/allocator.h>
 #include <ir0/arch_port.h>
 #include <ir0/ktm/checkpoint.h>
 #include <stdbool.h>
@@ -361,9 +362,6 @@ int64_t sys_brk(void *addr)
 		return (int64_t)process_heap_end(current_process);
 	}
 
-	if (!is_user_address(addr, 0))
-		return -EFAULT;
-
 	new_brk = (uintptr_t)addr;
 	current_brk = process_heap_end(current_process);
 	heap_lo = process_heap_start(current_process);
@@ -380,10 +378,14 @@ int64_t sys_brk(void *addr)
 		current_brk = heap_lo;
 	}
 
-	if (new_brk < heap_lo)
-		return -EFAULT;
-	if (new_brk > heap_lo + USER_HEAP_MAX_SIZE)
-		return -EFAULT;
+	/*
+	 * Linux brk(2) never returns -errno. A rejected request keeps the
+	 * current program break so musl's `__syscall(SYS_brk) < end` probe
+	 * sees a real VA instead of -EFAULT.
+	 */
+	if (!is_user_address(addr, 0) || new_brk < heap_lo ||
+	    new_brk > heap_lo + USER_HEAP_MAX_SIZE)
+		return (int64_t)current_brk;
 
 	/* If expanding heap, map only pages past the current break.
 	 * Align start UP: aligning down would remap the partially used
@@ -953,6 +955,14 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
                             process_pgd(current_process));
       return ret;
     }
+    if (hint_addr < (uintptr_t)PMM_PHYS_BASE &&
+	hint_addr + length > (uintptr_t)SIMPLE_HEAP_START)
+    {
+      ret = SYSCALL_PTR_ERR(EINVAL);
+      mmap_audit_log_return("map-fixed-kernel-heap", ret, hint_addr, length, 0,
+			    process_pgd(current_process));
+      return ret;
+    }
 
     mm_prepare_map_fixed(hint_addr, length);
     virt_addr = hint_addr;
@@ -996,6 +1006,18 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
                                         length);
     if (virt_addr == 0)
       return SYSCALL_PTR_ERR(ENOMEM);
+  }
+
+  if ((flags & MAP_FIXED) == 0 &&
+      (virt_addr < USER_MMAP_START ||
+       virt_addr + aligned_len > USER_MMAP_END ||
+       virt_addr + aligned_len < virt_addr))
+  {
+    klog_notice_fmt("MMAP",
+		    "reject va=%llx len=%llx outside mmap arena\n",
+		    (unsigned long long)virt_addr,
+		    (unsigned long long)aligned_len);
+    return SYSCALL_PTR_ERR(ENOMEM);
   }
 
   /* Determine page flags from protection flags */

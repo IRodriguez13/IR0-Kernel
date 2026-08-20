@@ -30,6 +30,7 @@
 #include <ir0/ktm/klog.h>
 #include <string.h>
 #include <ir0/arch_port.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/resource_registry.h>
 #include <stdint.h>
 
@@ -704,23 +705,39 @@ bool ata_read_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors, void *bu
 		ata_emit_classify("ATA_MULTI_SECTOR_UNSAFE");
 	}
 
-	for (s = 0; s < num_sectors; s++)
+	/*
+	 * PIO command/data is not reentrant. Concurrent exec of the same
+	 * BusyBox inode (hexdump | head) preempted mid-DRQ and tore the ELF.
+	 */
 	{
-		uint32_t sector_lba = lba + (uint32_t)s;
-		uint8_t *dest = (uint8_t *)buffer + (size_t)s * ATA_SECTOR_SIZE;
+		unsigned long irq_flags = irq_save();
+		int failed = 0;
 
-		if (need_bounce)
+		for (s = 0; s < num_sectors; s++)
 		{
-			uint8_t bounce[ATA_SECTOR_SIZE] __attribute__((aligned(2)));
+			uint32_t sector_lba = lba + (uint32_t)s;
+			uint8_t *dest = (uint8_t *)buffer + (size_t)s * ATA_SECTOR_SIZE;
 
-			if (!ata_read_one_sector_pio(drive, sector_lba, bounce, s, 1))
-				return false;
-			memcpy(dest, bounce, ATA_SECTOR_SIZE);
+			if (need_bounce)
+			{
+				uint8_t bounce[ATA_SECTOR_SIZE] __attribute__((aligned(2)));
+
+				if (!ata_read_one_sector_pio(drive, sector_lba, bounce, s, 1))
+				{
+					failed = 1;
+					break;
+				}
+				memcpy(dest, bounce, ATA_SECTOR_SIZE);
+			}
+			else if (!ata_read_one_sector_pio(drive, sector_lba, dest, s, 1))
+			{
+				failed = 1;
+				break;
+			}
 		}
-		else if (!ata_read_one_sector_pio(drive, sector_lba, dest, s, 1))
-		{
+		irq_restore(irq_flags);
+		if (failed)
 			return false;
-		}
 	}
 
 	return true;
@@ -764,6 +781,8 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 {
 	uint8_t s;
 	int need_bounce;
+	unsigned long irq_flags;
+	bool ok = false;
 
 	if (!ata_drives_present[drive] || !buffer || num_sectors == 0)
 		return false;
@@ -781,6 +800,8 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 		ata_emit_classify("ATA_MULTI_SECTOR_UNSAFE");
 	}
 
+	irq_flags = irq_save();
+
 	/*
 	 * Odd caller buffers: PIO one sector through an aligned bounce.
 	 * Aligned multi-sector keeps the historical single-command path.
@@ -795,9 +816,10 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 
 			memcpy(bounce, src, ATA_SECTOR_SIZE);
 			if (!ata_write_one_sector_pio(drive, lba + (uint32_t)s, bounce))
-				return false;
+				goto out;
 		}
-		return true;
+		ok = true;
+		goto out;
 	}
 
 	{
@@ -815,7 +837,7 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 
 		outb(drive_head_port, drive_select | 0x40);
 		if (!ata_wait_ready(drive))
-			return false;
+			goto out;
 
 		outb(sector_count_port, num_sectors);
 		outb(lba_low_port, lba & 0xFF);
@@ -829,7 +851,7 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 			int i;
 
 			if (!ata_wait_drq(drive))
-				return false;
+				goto out;
 
 			for (i = 0; i < 256; i++)
 				outw(data_port, buffer16[sector * 256 + i]);
@@ -840,7 +862,11 @@ bool ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t num_sectors,
 		 * MINIX zone growth (FASE52D ~500KB) into multi-minute hangs.
 		 * Callers that need durability should use ir0_block_flush / fsync.
 		 */
-		return ata_wait_ready(drive);
+		ok = ata_wait_ready(drive);
 	}
+
+out:
+	irq_restore(irq_flags);
+	return ok;
 }
 

@@ -50,7 +50,7 @@ Review the diff under `Documentation/ai_driven_dev/` before committing.
 | `kernel-architecture-rigor.md` | always | Facades, SPDX, testing, honest docs |
 | `kernel-c-allman-style.md` | C sources | Allman brace style |
 | `kernel-docs-language-policy.md` | `**/*.md` | English primary; Spanish in `Documentation/esp/` |
-| `ir0-git-commit-hygiene.md` | always | Signed-off-by required; no agent Co-authored-by |
+| `ir0-git-commit-hygiene.md` | always | Maintainer author only; Signed-off-by; never Co-authored-by |
 | `ir0-roadmap-research-multiagent.md` | always | T0–T3 tiers, web research, CTR gates |
 | `ir0-development-plan-mode.md` | always | When to plan before coding |
 | `ir0-development-multiagent-format.md` | always | Parallel agents and oleada report format |

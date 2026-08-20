@@ -76,6 +76,8 @@ typedef struct
 #define SIG_ERR ((void (*)(int))-1) /* Error return */
 
 #define SA_SIGINFO    4
+#define SA_RESTORER   0x04000000U
+#define SA_RESTART    0x10000000U
 #define SA_RESETHAND  0x80000000U
 
 #ifndef SIGNAL_DELIVER_LOG
@@ -126,13 +128,23 @@ struct sigaction {
 
 /**
  * struct sigframe - Signal frame on userspace stack
- * Complete context saved when signal handler is invoked
+ * Complete context saved when signal handler is invoked.
+ *
+ * Layout on stack (low→high): [restorer][sigframe…]. Handler entry RSP must
+ * be 8 mod 16 (SysV). sizeof must be 0 mod 16 so that after aligning RSP,
+ * subtracting this frame and the 8-byte restorer leaves RSP ≡ 8; otherwise
+ * musl/glibc movaps in rt_sigaction/setitimer #GP (BusyBox ping SIGALRM).
  */
 struct sigframe {
     void (*handler)(int);     /* Signal handler function */
     int signum;               /* Signal number */
+    int __pad0;
     struct sigcontext ctx;    /* Saved CPU context */
+    uint64_t __align16;       /* pad to multiple of 16 */
 };
+
+_Static_assert((sizeof(struct sigframe) % 16) == 0,
+	       "sigframe size must be 16-byte multiple for handler RSP ABI");
 
 /**
  * send_signal - Send a signal to a process

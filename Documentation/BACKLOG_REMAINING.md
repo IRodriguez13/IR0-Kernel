@@ -198,7 +198,9 @@ Slice: connect+send/recv to QEMU gateway **10.0.2.2:8888** (MVP, not full stack)
 
 virtiofs/FUSE remains **Future** (no guest FUSE). Host-share remains virtio-**9p**.
 
-Tag `v0.0.1-rc2` = automated critical gates only; **ship** still needs Maintainer manual VM above.
+Tag `v0.0.1-rc4` = **last pre-release** (feature freeze for 0.0.1 surface); post-rc4 = bugfix /
+stabilization only. **Ship** `v0.0.1` still needs Maintainer manual VM above. See
+[`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md).
 
 ## ARM64 — honest status (2026-07-12)
 

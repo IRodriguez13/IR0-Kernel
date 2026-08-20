@@ -85,6 +85,8 @@ static int process_files_acquire_entries(files_struct_t *f)
 		{
 			if (sock_stream_is(e->vfs_file))
 				sock_stream_acquire((struct sock_stream *)e->vfs_file);
+			else if (sock_icmp_is(e->vfs_file))
+				sock_icmp_acquire((struct sock_icmp *)e->vfs_file);
 			else if (!sock_stream_is_slot(e->vfs_file))
 				sock_udp_acquire((struct sock_udp *)e->vfs_file);
 		}

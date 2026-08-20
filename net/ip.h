@@ -57,14 +57,20 @@ struct ip_rx_context
 
 /* IP Protocol API */
 int ip_init(void);
-int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol, 
+int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
             const void *payload, size_t len);
-void ip_receive_handler(struct net_device *dev, const void *data, 
+int ip_send_ttl(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
+		const void *payload, size_t len, uint8_t ttl);
+void ip_receive_handler(struct net_device *dev, const void *data,
                         size_t len, void *priv);
 
 /* Routing API */
 int ip_route_add(ip4_addr_t dest_network, ip4_addr_t netmask, ip4_addr_t gateway);
 int ip_route_del(ip4_addr_t dest_network, ip4_addr_t netmask);
+int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
+			     void *ctx),
+		  void *ctx);
+int ip_routes_seed_from_globals(void);
 
 /* IP Address Utilities */
 static inline ip4_addr_t ip_make_addr(uint8_t a, uint8_t b, uint8_t c, uint8_t d)

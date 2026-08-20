@@ -1362,6 +1362,7 @@ int64_t dev_net_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
                             dev = dev->next;
                         }
                     }
+                    (void)ip_routes_seed_from_globals();
                     return 0;
                 }
             }

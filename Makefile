@@ -1111,9 +1111,13 @@ kernel-x64.iso: kernel-x64.bin arch/x86-64/grub.cfg
 	@echo "✓ ISO created: $@"
 
 # Kernel con tests in-kernel (solo al hacer make tests / kernel-tests)
-# config.h documents IR0_KERNEL_TESTS; Makefile ensures it for this target
+# config.h documents IR0_KERNEL_TESTS; Makefile ensures it for this target.
+# kmain must be compiled with that flag: a leftover kernel-x64.bin main.o
+# would skip kernel_test_run_all() and make kernel-tests time out.
 kernel-x64-test.bin: CFLAGS += -DIR0_KERNEL_TESTS=1
 kernel-x64-test.bin: $(ALL_OBJS_TEST) arch/x86-64/linker.ld
+	@rm -f kernel/main.o
+	@$(MAKE) --no-print-directory CFLAGS="$(CFLAGS)" kernel/main.o
 	@echo "  LD      $@ (with in-kernel tests)"
 	@$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS_TEST)
 	@echo "✓ Kernel (test) linked: $@"

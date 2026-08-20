@@ -5,7 +5,7 @@ IR0 repository hygiene guardrails.
 Checks:
 1) No obviously unnecessary artifacts are tracked.
 2) No compiled binaries or build outputs under setup/pid1 or vendored BusyBox.
-3) No forbidden agent Co-authored-by trailers in branch history.
+3) No Co-authored-by trailers and no agent Author/Committer in history.
 4) Spanish markdown naming/location is constrained to /esp directories.
 """
 
@@ -15,9 +15,14 @@ import re
 import subprocess
 import sys
 
-FORBIDDEN_AGENT_COAUTHOR_RE = re.compile(
-    r"^Co-authored-by:.*<cursoragent@",
+FORBIDDEN_COAUTHOR_RE = re.compile(
+    r"^Co-authored-by:",
     re.IGNORECASE | re.MULTILINE,
+)
+
+AGENT_IDENTITY_RE = re.compile(
+    r"cursoragent@|^\s*Cursor Agent\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -151,9 +156,31 @@ def is_spanish_named_markdown(path: str) -> bool:
     return stem.endswith("_es") or stem.endswith("-es") or stem.startswith("esp_")
 
 
-def git_head_commits():
+def git_commits_to_scan():
+    """
+    Scan commits this branch introduces relative to origin/master.
+
+    Already-merged history cannot be rewritten through a PR when master is
+    protected. New agent commits still fail. Use --all-history to audit the
+    whole reachable graph (e.g. after an admin rewrite of master).
+    """
+    extra = sys.argv[1:] if len(sys.argv) > 1 else []
+    if "--all-history" in extra:
+        spec = ["HEAD"]
+    else:
+        upstream = subprocess.run(
+            ["git", "rev-parse", "--verify", "origin/master"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if upstream.returncode == 0:
+            spec = ["origin/master..HEAD"]
+        else:
+            spec = ["HEAD"]
     proc = subprocess.run(
-        ["git", "log", "HEAD", "--format=%H"],
+        ["git", "log", *spec, "--format=%H"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -164,28 +191,41 @@ def git_head_commits():
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def commits_with_forbidden_agent_coauthor():
+def commit_oneline(commit: str) -> str:
+    oneline = subprocess.run(
+        ["git", "log", "-1", "--oneline", commit],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return oneline.stdout.strip() if oneline.returncode == 0 else commit
+
+
+def commits_with_forbidden_attribution():
+    """Any Co-authored-by, or Author/Committer using a cloud-agent identity."""
     bad = []
-    for commit in git_head_commits():
-        proc = subprocess.run(
-            ["git", "log", "-1", "--format=%B", commit],
+    for commit in git_commits_to_scan():
+        ident = subprocess.run(
+            ["git", "log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", commit],
             cwd=ROOT,
             text=True,
             capture_output=True,
             check=False,
         )
-        if proc.returncode != 0:
+        if ident.returncode != 0:
             continue
-        if FORBIDDEN_AGENT_COAUTHOR_RE.search(proc.stdout):
-            oneline = subprocess.run(
-                ["git", "log", "-1", "--oneline", commit],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            label = oneline.stdout.strip() if oneline.returncode == 0 else commit
-            bad.append(label)
+        text = ident.stdout
+        label = commit_oneline(commit)
+        if FORBIDDEN_COAUTHOR_RE.search(text):
+            bad.append(f"{label} (Co-authored-by trailer)")
+            continue
+        # First two lines are author / committer from --format.
+        lines = text.splitlines()
+        author = lines[0] if lines else ""
+        committer = lines[1] if len(lines) > 1 else ""
+        if AGENT_IDENTITY_RE.search(author) or AGENT_IDENTITY_RE.search(committer):
+            bad.append(f"{label} (agent Author/Committer)")
     return bad
 
 
@@ -216,10 +256,10 @@ def main():
                 errors.append(f"[spanish-doc-location] {rel} (must live under an /esp directory)")
 
     try:
-        for label in commits_with_forbidden_agent_coauthor():
-            errors.append(f"[agent-coauthor] {label}")
+        for label in commits_with_forbidden_attribution():
+            errors.append(f"[commit-identity] {label}")
     except Exception as exc:
-        errors.append(f"[agent-coauthor-check] {exc}")
+        errors.append(f"[commit-identity-check] {exc}")
 
     if errors:
         print("[repo-hygiene-guard] FAILED")
@@ -232,4 +272,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("Usage: repo_hygiene_guard.py [--all-history]")
+        raise SystemExit(0)
+    raise SystemExit(main())

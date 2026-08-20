@@ -115,6 +115,41 @@ void ktest_mmap_null_placement(void)
 	slot[3] = fixed;
 	addrs[3] = fixed_addr;
 
+	{
+		uint64_t id_flags = 0;
+		void *split;
+		void *heap_fixed;
+		void *anon;
+
+		KASSERT(is_page_mapped_in_directory(process_pgd(current_process),
+						    0x800000UL, &id_flags) == 1);
+		KASSERT((id_flags & PAGE_USER) == 0);
+
+		split = ktest_mmap_anon(0x1000, KTEST_PROT_RW,
+					KTEST_MAP_PRIVATE | KTEST_MAP_ANONYMOUS |
+						KTEST_MAP_FIXED,
+					(void *)0x600000UL);
+		KASSERT(split == (void *)0x600000UL);
+		KASSERT(ktest_pte_present(0x600000UL));
+		KASSERT(sys_munmap(split, 0x1000) == 0);
+
+		heap_fixed = ktest_mmap_anon(0x1000, KTEST_PROT_RW,
+					     KTEST_MAP_PRIVATE | KTEST_MAP_ANONYMOUS |
+						     KTEST_MAP_FIXED,
+					     (void *)0x800000UL);
+		KASSERT((intptr_t)heap_fixed < 0);
+
+		anon = ktest_mmap_anon(0x4000, KTEST_PROT_RW,
+				       KTEST_MAP_PRIVATE | KTEST_MAP_ANONYMOUS,
+				       NULL);
+		KASSERT(anon != (void *)(intptr_t)-1);
+		KASSERT((uintptr_t)anon >= USER_MMAP_START);
+		KASSERT((uintptr_t)anon >= IR0_MMAP_NULL_MIN_VA);
+		((volatile char *)anon)[0] = 0x5A;
+		((volatile char *)anon)[0x3FFF] = 0x5A;
+		KASSERT(sys_munmap(anon, 0x4000) == 0);
+	}
+
 	ktest_unmap_all(slot, 4);
 
 	process_set_heap_start(current_process, saved_heap_start);

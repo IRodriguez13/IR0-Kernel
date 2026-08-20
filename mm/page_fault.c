@@ -7,7 +7,7 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: page_fault.c
- * Description: Portable page fault policy (demand paging, COW, SIGSEGV).
+ * Description: Portable page fault policy (demand paging, anon mmap, COW, SIGSEGV).
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -26,6 +26,7 @@
 #include <ir0/copy_user.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/arch_page_fault.h>
+#include <ir0/abi/mmap_contract.h>
 #include <ktm.h>
 #include <ktm_probe_diag.h>
 #include <d1_13_malloc_pf_diag.h>
@@ -69,6 +70,39 @@ static struct mmap_region *pf_mmap_region_for(process_t *p, uint64_t fa)
 			return r;
 	}
 	return NULL;
+}
+
+static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
+			 const struct arch_page_fault_info *info);
+
+/*
+ * Linux do_anonymous_page: demand-zero a 4 KiB user leaf.
+ * Heap, stack, and anonymous mmap VMAs share this path.
+ */
+static void pf_demand_zero_page(process_t *current, uint64_t fault_addr,
+				uint64_t map_flags, uint64_t *stack,
+				const struct arch_page_fault_info *info)
+{
+	uintptr_t phys_addr;
+	uint64_t vaddr_aligned;
+
+	phys_addr = pmm_alloc_frame();
+	if (phys_addr == 0)
+	{
+		pf_user_segv(current, stack, fault_addr, info);
+		return;
+	}
+
+	vaddr_aligned = fault_addr & ~0xFFFUL;
+	if (map_page_in_directory(process_pgd(current), vaddr_aligned,
+				  phys_addr, map_flags) != 0)
+	{
+		pmm_free_frame(phys_addr);
+		pf_user_segv(current, stack, fault_addr, info);
+		return;
+	}
+
+	memset((void *)(uintptr_t)phys_addr, 0, 0x1000);
 }
 
 #if DEBUG_D1_DIAG
@@ -388,10 +422,44 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 		if (!current || !process_pgd(current))
 			return;
 
-		if (pf_mmap_region_for(current, fault_addr) != NULL)
 		{
-			pf_user_segv(current, stack, fault_addr, info);
-			return;
+			struct mmap_region *mr;
+
+			mr = pf_mmap_region_for(current, fault_addr);
+			if (mr != NULL)
+			{
+				if ((mr->flags & IR0_MAP_ANONYMOUS) == 0)
+				{
+					pf_user_segv(current, stack, fault_addr, info);
+					return;
+				}
+				if (mr->prot == 0)
+				{
+					pf_user_segv(current, stack, fault_addr, info);
+					return;
+				}
+				if (write && (mr->prot & 0x2) == 0) /* PROT_WRITE */
+				{
+					pf_user_segv(current, stack, fault_addr, info);
+					return;
+				}
+				if (insn_fetch && (mr->prot & 0x4) == 0) /* PROT_EXEC */
+				{
+					pf_user_segv(current, stack, fault_addr, info);
+					return;
+				}
+				{
+					uint64_t map_flags = PAGE_USER;
+
+					if (mr->prot & 0x2) /* PROT_WRITE */
+						map_flags |= PAGE_RW;
+					if (mr->prot & 0x4) /* PROT_EXEC */
+						map_flags |= PAGE_EXEC;
+					pf_demand_zero_page(current, fault_addr, map_flags,
+							    stack, info);
+				}
+				return;
+			}
 		}
 
 		if (!pf_addr_in_heap(current, fault_addr) &&
@@ -402,30 +470,11 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 		}
 
 		{
-			uintptr_t phys_addr = pmm_alloc_frame();
-
-			if (phys_addr == 0)
-			{
-				pf_user_segv(current, stack, fault_addr, info);
-				return;
-			}
-
-			uint64_t flags = PAGE_USER | PAGE_RW;
+			uint64_t map_flags = PAGE_USER | PAGE_RW;
 
 			if (insn_fetch)
-				flags |= PAGE_EXEC;
-
-			uint64_t vaddr_aligned = fault_addr & ~0xFFF;
-
-			if (map_page_in_directory(process_pgd(current), vaddr_aligned,
-						  phys_addr, flags) != 0)
-			{
-				pmm_free_frame(phys_addr);
-				pf_user_segv(current, stack, fault_addr, info);
-				return;
-			}
-
-			memset((void *)(uintptr_t)phys_addr, 0, 0x1000);
+				map_flags |= PAGE_EXEC;
+			pf_demand_zero_page(current, fault_addr, map_flags, stack, info);
 		}
 		return;
 	}

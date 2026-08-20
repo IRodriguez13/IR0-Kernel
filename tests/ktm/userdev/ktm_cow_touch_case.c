@@ -3,13 +3,15 @@
  * Copyright (C) 2026  Iván Rodriguez
  *
  * File: ktm_cow_touch_case.c
- * Description: PID1 — fork + child write shared page (COW touch MVP).
+ * Description: PID1 — fork + child write shared page (COW touch MVP);
+ *              MAP_FIXED across 6 MiB identity seam + anonymous mmap touch.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -95,6 +97,44 @@ int main(void)
 	(void)ktm_assert_true(fd, "parent_page_intact", g_cow_page[0] == 'A');
 	if (g_cow_page[0] != 'A')
 		fails++;
+
+	/*
+	 * Split-proof: MAP_FIXED into the 6 MiB supervisor-2MB identity slot
+	 * (ISD ELF/brk window). Anonymous mmap stays in the high arena.
+	 */
+	{
+		int mmap6_ok = 0;
+		int mmap_ok = 0;
+		char *mmap6;
+		char *mmap_p;
+
+		mmap6 = mmap((void *)0x600000UL, 4096, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		if (mmap6 != MAP_FAILED)
+		{
+			mmap6[0] = 0x5A;
+			mmap6[4095] = 0x5A;
+			mmap6_ok = (mmap6[0] == 0x5A && mmap6[4095] == 0x5A);
+			(void)munmap(mmap6, 4096);
+		}
+		(void)ktm_assert_true(fd, "mmap_fixed_6m_split", mmap6_ok);
+		if (!mmap6_ok)
+			fails++;
+
+		mmap_p = mmap(NULL, 16 * 1024, PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mmap_p != MAP_FAILED)
+		{
+			mmap_p[0] = 0x5A;
+			mmap_p[16 * 1024 - 1] = 0x5A;
+			mmap_ok = (mmap_p[0] == 0x5A &&
+				   mmap_p[16 * 1024 - 1] == 0x5A);
+			(void)munmap(mmap_p, 16 * 1024);
+		}
+		(void)ktm_assert_true(fd, "mmap_anon_touch", mmap_ok);
+		if (!mmap_ok)
+			fails++;
+	}
 
 	if (ktm_run_invariants(fd, KTM_INV_PROCESS | KTM_INV_FRAMES) != 0)
 		fails++;

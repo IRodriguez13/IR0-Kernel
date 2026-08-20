@@ -21,6 +21,7 @@
 
 #define KTEST_BUSYBOX_INITIAL_BRK 0x453000UL
 #define KTEST_BRK_GROW 0x2000UL
+#define KTEST_BRK_ACROSS_6M 0x601000UL
 
 static int ktest_pte_present(uintptr_t va)
 {
@@ -30,6 +31,18 @@ static int ktest_pte_present(uintptr_t va)
 		return 0;
 	return is_page_mapped_in_directory(process_pgd(current_process), va,
 					   &flags) == 1;
+}
+
+static int ktest_pte_user(uintptr_t va)
+{
+	uint64_t flags = 0;
+
+	if (!current_process || !process_pgd(current_process))
+		return 0;
+	if (is_page_mapped_in_directory(process_pgd(current_process), va,
+					&flags) != 1)
+		return 0;
+	return (flags & PAGE_USER) != 0;
 }
 
 void ktest_brk_post_exec(void)
@@ -54,6 +67,12 @@ void ktest_brk_post_exec(void)
 	KASSERT_EQ((uint64_t)grown, KTEST_BUSYBOX_INITIAL_BRK + KTEST_BRK_GROW);
 	KASSERT(ktest_pte_present(KTEST_BUSYBOX_INITIAL_BRK));
 	KASSERT(ktest_pte_present(KTEST_BUSYBOX_INITIAL_BRK + 0x1000UL));
+
+	/* Cross the 6 MiB supervisor-2MB identity seam (Linux split_huge_pmd). */
+	grown = sys_brk((void *)KTEST_BRK_ACROSS_6M);
+	KASSERT_EQ((uint64_t)grown, KTEST_BRK_ACROSS_6M);
+	KASSERT(ktest_pte_present(0x600000UL));
+	KASSERT(ktest_pte_user(0x600000UL));
 
 	process_set_heap_start(current_process, saved_start);
 	process_set_heap_end(current_process, saved_end);

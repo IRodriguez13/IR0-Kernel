@@ -12,11 +12,11 @@
 #include "pl011.h"
 
 #include <stdint.h>
+#include <ir0/arch_elf.h>
 #include <ir0/boot_log.h>
 
 #define EI_NIDENT 16
 #define ET_EXEC 2
-#define EM_AARCH64 183
 #define PT_LOAD 1
 #define PF_X 1
 #define PAGE_SIZE 4096UL
@@ -130,7 +130,7 @@ static int load_elf(const uint8_t *blob, uint64_t blob_len, uint64_t *entry_out)
 	if (ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
 	    ehdr->e_ident[2] != 'L' || ehdr->e_ident[3] != 'F')
 		return -1;
-	if (ehdr->e_type != ET_EXEC || ehdr->e_machine != EM_AARCH64)
+	if (ehdr->e_type != ET_EXEC || !arch_elf_machine_supported(ehdr->e_machine))
 		return -1;
 	if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * ehdr->e_phentsize > blob_len)
 		return -1;

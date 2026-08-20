@@ -14,6 +14,7 @@
 
 #include "process.h"
 #include <ir0/arch_task.h>
+#include <ir0/arch_elf.h>
 #include <ir0/sched.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -83,7 +84,6 @@ typedef struct
 #define ET_EXEC 2
 #define ET_DYN  3
 #define PT_LOAD 1
-#define EM_X86_64 0x3e
 
 /* Maximum program headers processed per executable (bounds cost and table size) */
 #define ELF_MAX_PHNUM 64
@@ -209,8 +209,9 @@ static int validate_elf_header(const elf64_header_t *header)
         return 0;
     }
 
-    /* Check 64-bit and x86-64 architecture */
-    if (header->e_ident[4] != ELFCLASS64 || header->e_machine != EM_X86_64)
+    /* Check 64-bit ELF for this kernel's e_machine. */
+    if (header->e_ident[4] != ELFCLASS64 ||
+        !arch_elf_machine_supported(header->e_machine))
     {
         return 0;
     }
@@ -1278,13 +1279,13 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     process_set_heap_start(proc, 0);
     process_set_heap_end(proc, 0);
     /*
-     * Linux clears TLS across execve. Stale fs_base from the pre-exec image
+     * Linux clears TLS across execve. Stale tls_base from the pre-exec image
      * (or fork parent) must not be restored on the next context switch —
-     * that leaves FS pointing at unmapped VA while glibc/musl still expect
-     * to call arch_prctl(ARCH_SET_FS) during CRT startup.
+     * that leaves TLS pointing at unmapped VA while glibc/musl still expect
+     * to install a new base during CRT startup (x86: arch_prctl; ARM: TPIDR).
      */
     process_tls_set(proc, 0);
-    set_fs_base(0);
+    set_tls(0);
     process_set_stack_layout(proc, USER_STACK_TOP - USER_STACK_SIZE,
 			     USER_STACK_SIZE);
 

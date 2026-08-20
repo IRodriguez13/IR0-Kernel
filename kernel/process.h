@@ -7,7 +7,9 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: process.h
- * Description: IR0 kernel source/header file
+ * Description: process_t and process API. Still a large aggregate (sched,
+ *              signals, wait, blocked-syscall resume, creds, timers, stacks);
+ *              mm/files are already extracted. Prefer accessors.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -18,6 +20,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <ir0/task.h>
+#include <ir0/arch_syscall_frame.h>
 #include <ir0/signals.h>
 #include <ir0/types.h>
 #include <ir0/fd_types.h>
@@ -88,35 +91,9 @@ struct mmap_region
 };
 
 /*
- * User register snapshot at syscall entry (Linux pt_regs subset).
- * Prefer the ISA-neutral name arch_syscall_frame_t in new code.
- * Layout decode/fill remains ISA-private (arch_syscall_frame / arch_switch).
- */
-typedef struct
-{
-	uint64_t rip;
-	uint64_t rflags;
-	uint64_t rsp;
-	uint64_t rbx;
-	uint64_t rbp;
-	uint64_t r12;
-	uint64_t r13;
-	uint64_t r14;
-	uint64_t r15;
-	uint64_t rdi;
-	uint64_t rsi;
-	uint64_t rdx;
-	uint64_t r10;
-	uint64_t r8;
-	uint64_t r9;
-} arch_syscall_frame_t;
-
-/* Legacy alias — same type; do not invent a second frame layout. */
-typedef arch_syscall_frame_t syscall_user_frame_t;
-
-/*
- * Arch-owned thread TLS (x86: IA32_FS_BASE). Lives in a union with fs_base so
- * ASM IR0_PROC_FS_BASE_OFFSET stays stable; portable code uses process_tls_*.
+ * Arch-owned thread TLS (x86: IA32_FS_BASE; ARM64: TPIDR_EL0). Lives in a
+ * union with fs_base so ASM IR0_PROC_FS_BASE_OFFSET stays stable; portable
+ * code uses process_tls_*.
  */
 typedef struct arch_thread_state
 {
@@ -125,6 +102,10 @@ typedef struct arch_thread_state
 
 typedef struct process
 {
+	/*
+	 * Aggregate still owns lifecycle, signals, wait, syscall-resume, creds,
+	 * timers, and stacks. mm and files are the extracted domains so far.
+	 */
 	task_t task;
 	/*
 	 * TLS / arch thread state. Prefer process_tls_get/set and
@@ -449,91 +430,49 @@ static inline void process_tls_set(process_t *p, uint64_t tls)
 		p->arch_thread.tls_base = tls;
 }
 
-/* Opaque syscall-frame accessors (layout is ISA-shaped; do not open-code fields). */
+/* Opaque syscall-frame accessors — ISA decode lives in arch_syscall_frame_*.h. */
 static inline uint64_t process_syscall_ip(const process_t *p)
 {
-	return p ? p->syscall_frame.rip : 0;
+	return p ? arch_syscall_frame_ip(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_sp(const process_t *p)
 {
-	return p ? p->syscall_frame.rsp : 0;
+	return p ? arch_syscall_frame_sp(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_flags(const process_t *p)
 {
-	return p ? p->syscall_frame.rflags : 0;
+	return p ? arch_syscall_frame_flags(&p->syscall_frame) : 0;
 }
 
 static inline void process_syscall_set_ip(process_t *p, uint64_t ip)
 {
 	if (p)
-		p->syscall_frame.rip = ip;
+		arch_syscall_frame_set_ip(&p->syscall_frame, ip);
 }
 
 static inline void process_syscall_set_sp(process_t *p, uint64_t sp)
 {
 	if (p)
-		p->syscall_frame.rsp = sp;
+		arch_syscall_frame_set_sp(&p->syscall_frame, sp);
 }
 
 static inline void process_syscall_set_flags(process_t *p, uint64_t flags)
 {
 	if (p)
-		p->syscall_frame.rflags = flags;
+		arch_syscall_frame_set_flags(&p->syscall_frame, flags);
 }
 
-/* Linux x86-64 ABI arg slots: 0=rdi … 5=r9 (ARM64 maps later). */
 static inline uint64_t process_syscall_arg(const process_t *p, unsigned n)
 {
-	if (!p)
-		return 0;
-	switch (n)
-	{
-	case 0:
-		return p->syscall_frame.rdi;
-	case 1:
-		return p->syscall_frame.rsi;
-	case 2:
-		return p->syscall_frame.rdx;
-	case 3:
-		return p->syscall_frame.r10;
-	case 4:
-		return p->syscall_frame.r8;
-	case 5:
-		return p->syscall_frame.r9;
-	default:
-		return 0;
-	}
+	return p ? arch_syscall_frame_arg(&p->syscall_frame, n) : 0;
 }
 
 static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
 {
-	if (!p)
-		return;
-	switch (n)
-	{
-	case 0:
-		p->syscall_frame.rdi = v;
-		break;
-	case 1:
-		p->syscall_frame.rsi = v;
-		break;
-	case 2:
-		p->syscall_frame.rdx = v;
-		break;
-	case 3:
-		p->syscall_frame.r10 = v;
-		break;
-	case 4:
-		p->syscall_frame.r8 = v;
-		break;
-	case 5:
-		p->syscall_frame.r9 = v;
-		break;
-	default:
-		break;
-	}
+	if (p)
+		arch_syscall_frame_set_arg(&p->syscall_frame, n, v);
 }
 
 void process_capture_syscall_frame(process_t *p);

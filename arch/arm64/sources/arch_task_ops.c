@@ -158,8 +158,12 @@ void arch_task_save_irq_user_frame(task_t *t, const uint64_t *frame)
 void arch_task_sync_syscall_soft_mirror(task_t *t,
 					const arch_task_syscall_frame_t *sf)
 {
-	(void)t;
-	(void)sf;
+	if (!t || !sf)
+		return;
+
+	task_set_ip(t, sf->elr);
+	task_set_sp(t, sf->sp);
+	task_set_flags(t, sf->spsr);
 }
 
 void arch_task_apply_syscall_frame(task_t *t,
@@ -169,9 +173,40 @@ void arch_task_apply_syscall_frame(task_t *t,
 	if (!t || !sf)
 		return;
 
-	task_set_ip(t, sf->rip);
-	task_set_sp(t, sf->rsp);
-	task_set_flags(t, sf->rflags);
+	t->arch.x0 = x0;
+	t->arch.x1 = sf->x1;
+	t->arch.x2 = sf->x2;
+	t->arch.x3 = sf->x3;
+	t->arch.x4 = sf->x4;
+	t->arch.x5 = sf->x5;
+	t->arch.x6 = sf->x6;
+	t->arch.x7 = sf->x7;
+	t->arch.x8 = sf->x8;
+	t->arch.x9 = sf->x9;
+	t->arch.x10 = sf->x10;
+	t->arch.x11 = sf->x11;
+	t->arch.x12 = sf->x12;
+	t->arch.x13 = sf->x13;
+	t->arch.x14 = sf->x14;
+	t->arch.x15 = sf->x15;
+	t->arch.x16 = sf->x16;
+	t->arch.x17 = sf->x17;
+	t->arch.x18 = sf->x18;
+	t->arch.x19 = sf->x19;
+	t->arch.x20 = sf->x20;
+	t->arch.x21 = sf->x21;
+	t->arch.x22 = sf->x22;
+	t->arch.x23 = sf->x23;
+	t->arch.x24 = sf->x24;
+	t->arch.x25 = sf->x25;
+	t->arch.x26 = sf->x26;
+	t->arch.x27 = sf->x27;
+	t->arch.x28 = sf->x28;
+	t->arch.x29 = sf->x29;
+	t->arch.x30 = sf->x30;
+	task_set_ip(t, sf->elr);
+	task_set_sp(t, sf->sp);
+	task_set_flags(t, sf->spsr);
 	task_set_retval(t, x0);
 }
 

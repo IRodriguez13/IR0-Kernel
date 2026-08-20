@@ -25,21 +25,7 @@ static void syscall_frame_to_arch(const syscall_user_frame_t *sf,
 	if (!sf || !out)
 		return;
 
-	out->rip = sf->rip;
-	out->rflags = sf->rflags;
-	out->rsp = sf->rsp;
-	out->rbx = sf->rbx;
-	out->rbp = sf->rbp;
-	out->r12 = sf->r12;
-	out->r13 = sf->r13;
-	out->r14 = sf->r14;
-	out->r15 = sf->r15;
-	out->rdi = sf->rdi;
-	out->rsi = sf->rsi;
-	out->rdx = sf->rdx;
-	out->r10 = sf->r10;
-	out->r8 = sf->r8;
-	out->r9 = sf->r9;
+	*out = *sf;
 }
 
 int process_task_kernel_ret_rip_bad(const task_t *t)
@@ -228,14 +214,7 @@ void process_sync_task_user_ip_from_syscall_frame(process_t *p)
 		return;
 
 	sf = &p->syscall_frame;
-	{
-		arch_task_syscall_frame_t arch_sf;
-
-		arch_sf.rip = sf->rip;
-		arch_sf.rflags = sf->rflags;
-		arch_sf.rsp = sf->rsp;
-		arch_task_sync_syscall_soft_mirror(&p->task, &arch_sf);
-	}
+	arch_task_sync_syscall_soft_mirror(&p->task, sf);
 }
 
 void process_capture_syscall_frame(process_t *p)

@@ -634,39 +634,15 @@ void handle_signals(void)
                          * while blocked in recvfrom/nanosleep.
                          */
                         if (current->syscall_frame_fresh)
-                        {
-                            const syscall_user_frame_t *sf =
-                                &current->syscall_frame;
-
-                            memset(ctx, 0, sizeof(*ctx));
-                            ctx->rip = sf->rip;
-                            ctx->rsp = sf->rsp;
-                            ctx->rflags = sf->rflags ? sf->rflags
-                                                     : (uint64_t)RFLAGS_IF;
-                            ctx->rax = (uint64_t)(int64_t)(-EINTR);
-                            ctx->rdi = sf->rdi;
-                            ctx->rsi = sf->rsi;
-                            ctx->rdx = sf->rdx;
-                            ctx->r10 = sf->r10;
-                            ctx->r8 = sf->r8;
-                            ctx->r9 = sf->r9;
-                            ctx->rbx = sf->rbx;
-                            ctx->rbp = sf->rbp;
-                            ctx->r12 = sf->r12;
-                            ctx->r13 = sf->r13;
-                            ctx->r14 = sf->r14;
-                            ctx->r15 = sf->r15;
-#if defined(USER_CODE_SEL) && defined(USER_DATA_SEL)
-                            ctx->cs = (uint64_t)USER_CODE_SEL;
-                            ctx->ss = (uint64_t)USER_DATA_SEL;
-#endif
-                        }
+                            arch_signal_fill_sigcontext_from_syscall_frame(
+                                ctx, &current->syscall_frame,
+                                (uint64_t)(int64_t)(-EINTR));
                         else
                             arch_task_store_sigcontext(ctx, &current->task);
 
                         current->saved_context = ctx;
 
-                        user_sp = ctx->rsp & ~0xFUL;
+                        user_sp = arch_sigcontext_sp(ctx) & ~0xFUL;
                         /*
                          * Layout (low→high): [restorer][sigframe…]
                          * Handler `ret` → musl __restore_rt → rt_sigreturn.

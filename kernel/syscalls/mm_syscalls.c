@@ -28,6 +28,7 @@
 #include <ir0/mm_struct.h>
 #include <ir0/paging.h>
 #include <ir0/pmm.h>
+#include <mm/allocator.h>
 #include <ir0/arch_port.h>
 #include <ir0/ktm/checkpoint.h>
 #include <stdbool.h>
@@ -953,6 +954,14 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
                             process_pgd(current_process));
       return ret;
     }
+    if (hint_addr < (uintptr_t)PMM_PHYS_BASE &&
+	hint_addr + length > (uintptr_t)SIMPLE_HEAP_START)
+    {
+      ret = SYSCALL_PTR_ERR(EINVAL);
+      mmap_audit_log_return("map-fixed-kernel-heap", ret, hint_addr, length, 0,
+			    process_pgd(current_process));
+      return ret;
+    }
 
     mm_prepare_map_fixed(hint_addr, length);
     virt_addr = hint_addr;
@@ -996,6 +1005,18 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
                                         length);
     if (virt_addr == 0)
       return SYSCALL_PTR_ERR(ENOMEM);
+  }
+
+  if ((flags & MAP_FIXED) == 0 &&
+      (virt_addr < USER_MMAP_START ||
+       virt_addr + aligned_len > USER_MMAP_END ||
+       virt_addr + aligned_len < virt_addr))
+  {
+    klog_notice_fmt("MMAP",
+		    "reject va=%llx len=%llx outside mmap arena\n",
+		    (unsigned long long)virt_addr,
+		    (unsigned long long)aligned_len);
+    return SYSCALL_PTR_ERR(ENOMEM);
   }
 
   /* Determine page flags from protection flags */

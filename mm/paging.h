@@ -107,7 +107,7 @@ int map_page_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t phys_addr
  * @pml4: PML4 table address (page directory)
  * @virt_addr: Virtual address to check
  * @flags_out: Optional output for page flags (can be NULL)
- * Returns: 1 if mapped, 0 if not mapped, -1 on error
+ * Returns: 1 if mapped (including 2 MiB/1 GiB leaves), 0 if not mapped, -1 on error
  */
 int is_page_mapped_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t *flags_out);
 

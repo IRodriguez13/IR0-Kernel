@@ -145,8 +145,8 @@ void ktest_mmap_null_placement(void)
 		KASSERT(anon != (void *)(intptr_t)-1);
 		KASSERT((uintptr_t)anon >= USER_MMAP_START);
 		KASSERT((uintptr_t)anon >= IR0_MMAP_NULL_MIN_VA);
-		((volatile char *)anon)[0] = 0x5A;
-		((volatile char *)anon)[0x3FFF] = 0x5A;
+		KASSERT(ktest_pte_present((uintptr_t)anon));
+		KASSERT(ktest_pte_present((uintptr_t)anon + 0x3000UL));
 		KASSERT(sys_munmap(anon, 0x4000) == 0);
 	}
 

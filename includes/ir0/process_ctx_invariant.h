@@ -20,6 +20,13 @@
 #define IR0_USER_RIP_LO 0x00400000ULL
 #define IR0_USER_RIP_HI 0x00007FFFFFFFFFFFULL
 
+/* Match includes/ir0/abi/mmap_contract.h — duplicated for host-safe headers. */
+#ifndef IR0_USER_STACK_TOP
+#define IR0_USER_STACK_TOP  0x7FFFF000ULL
+#define IR0_USER_STACK_SIZE 0x80000ULL
+#define IR0_USER_STACK_BASE (IR0_USER_STACK_TOP - IR0_USER_STACK_SIZE)
+#endif
+
 /*
  * process_cs_rip_kernel_ret_bad - True when kernel_ret would jmp to user VA.
  *
@@ -38,4 +45,10 @@ static inline int process_cs_rip_kernel_ret_bad(uint64_t cs, uint64_t rip)
 static inline int process_rip_in_user_range(uint64_t rip)
 {
 	return (rip >= IR0_USER_RIP_LO && rip <= IR0_USER_RIP_HI) ? 1 : 0;
+}
+
+/* Reject stack VAs as executable RIP (Class B repair must not jmp to argc slot). */
+static inline int process_rip_in_user_stack(uint64_t rip)
+{
+	return (rip >= IR0_USER_STACK_BASE && rip < IR0_USER_STACK_TOP) ? 1 : 0;
 }

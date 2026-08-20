@@ -15,9 +15,13 @@
 #include "test/ktest_harness.h"
 #include "process.h"
 #include "syscalls.h"
+#include <ir0/arch_cpu.h>
+#include <ir0/errno.h>
 #include <ir0/sched.h>
 #include <ir0/signals.h>
 #include <ir0/wait.h>
+
+#define KTEST_ARCH_SET_FS 0x1002
 
 static void ktest_wait4_child_entry(void)
 {
@@ -251,5 +255,93 @@ void ktest_kill_sigterm_wait_status(void)
 		sched_remove_process(child);
 	}
 	KASSERT_EQ(process_wait(pid, NULL, 0), pid);
+	KTEST_END();
+}
+
+void ktest_wait4_pgrp(void)
+{
+	pid_t pid_same;
+	pid_t pid_other;
+	process_t *child_same;
+	process_t *child_other;
+	int status = -1;
+
+	KTEST_BEGIN("wait4_pgrp");
+	pid_same = spawn_kernel(ktest_wait4_child_a_entry, "pgrp_same");
+	pid_other = spawn_kernel(ktest_wait4_child_b_entry, "pgrp_other");
+	KASSERT_GT(pid_same, 0);
+	KASSERT_GT(pid_other, 0);
+
+	child_same = process_find_by_pid(pid_same);
+	child_other = process_find_by_pid(pid_other);
+	KASSERT(child_same != NULL);
+	KASSERT(child_other != NULL);
+
+	child_same->pgid = current_process->pgid;
+	child_other->pgid = pid_other;
+
+	current_process->wait_blocked = 1;
+	current_process->wait_target_pid = 0;
+	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
+							     pid_same),
+		   1);
+	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
+							     pid_other),
+		   0);
+	current_process->wait_target_pid = (pid_t)(-pid_other);
+	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
+							     pid_other),
+		   1);
+	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
+							     pid_same),
+		   0);
+	current_process->wait_blocked = 0;
+	current_process->wait_target_pid = 0;
+
+	process_mark_zombie(child_same);
+	child_same->exit_code = 10;
+	sched_remove_process(child_same);
+	process_mark_zombie(child_other);
+	child_other->exit_code = 20;
+	sched_remove_process(child_other);
+
+	status = -1;
+	KASSERT_EQ(process_wait(0, &status, 0), pid_same);
+	KASSERT_EQ(status, (10 & 0xFF) << 8);
+	KASSERT(process_find_by_pid(pid_same) == NULL);
+	KASSERT(process_find_by_pid(pid_other) != NULL);
+
+	status = -1;
+	KASSERT_EQ(process_wait((pid_t)(-pid_other), &status, 0), pid_other);
+	KASSERT_EQ(status, (20 & 0xFF) << 8);
+	KASSERT(process_find_by_pid(pid_other) == NULL);
+	KTEST_END();
+}
+
+void ktest_arch_prctl_set_fs_rejects_nonuser(void)
+{
+	uint64_t saved;
+	int64_t rc;
+
+	KTEST_BEGIN("arch_prctl_set_fs_rejects_nonuser");
+	KASSERT(current_process != NULL);
+
+	saved = process_tls_get(current_process);
+
+	/* Live crash: addr=0xffffffffffffffe2 (-EROFS) as ARCH_SET_FS. */
+	rc = sys_arch_prctl(KTEST_ARCH_SET_FS, 0xffffffffffffffe2UL);
+	KASSERT_EQ(rc, -EPERM);
+	KASSERT_EQ(process_tls_get(current_process), saved);
+
+	rc = sys_arch_prctl(KTEST_ARCH_SET_FS, ~0UL);
+	KASSERT_EQ(rc, -EPERM);
+	KASSERT_EQ(process_tls_get(current_process), saved);
+
+	rc = sys_arch_prctl(KTEST_ARCH_SET_FS, 0);
+	KASSERT_EQ(rc, 0);
+	KASSERT_EQ(process_tls_get(current_process), 0UL);
+
+	process_tls_set(current_process, saved);
+	set_tls(saved);
 	KTEST_END();
 }

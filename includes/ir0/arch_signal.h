@@ -18,9 +18,19 @@
 #include <ir0/task.h>
 
 struct sigcontext;
+struct arch_syscall_frame;
 
-/* Instruction pointer from an ISA-specific sigcontext (rip / pc). */
+/* Instruction pointer / stack from an ISA-specific sigcontext (rip/pc, rsp/sp). */
 uint64_t arch_sigcontext_ip(const struct sigcontext *ctx);
+uint64_t arch_sigcontext_sp(const struct sigcontext *ctx);
+
+/*
+ * Fill @ctx from a captured syscall frame (musl syscall insn while blocked).
+ * @retval is the interrupted syscall return (typically -EINTR).
+ */
+void arch_signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
+						    const struct arch_syscall_frame *sf,
+						    uint64_t retval);
 
 void arch_signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
 						const uint64_t *frame);

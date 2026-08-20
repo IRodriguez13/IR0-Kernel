@@ -37,6 +37,7 @@
 #include <ir0/process.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ir0/arch_port.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/sched.h>
 #include <ir0/sysv_shm.h>
 #include <ir0/memfd.h>
@@ -219,6 +220,7 @@ WRAP0(sys_sync)
 WRAP2(sys_gettimeofday, struct timeval *, void *)
 WRAP2(sys_getitimer, int, struct itimerval *)
 WRAP3(sys_setitimer, int, const struct itimerval *, struct itimerval *)
+WRAP1(sys_alarm, unsigned int)
 WRAP5(sys_prctl, int, unsigned long, unsigned long, unsigned long, unsigned long)
 WRAP1(sys_setuid, uid_t)
 WRAP1(sys_setgid, gid_t)
@@ -324,6 +326,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_dup2]           = wrap_sys_dup2;
   syscall_table_rw[__NR_nanosleep]      = wrap_sys_nanosleep;
   syscall_table_rw[__NR_getitimer]      = wrap_sys_getitimer;
+  syscall_table_rw[__NR_alarm]          = wrap_sys_alarm;
   syscall_table_rw[__NR_setitimer]      = wrap_sys_setitimer;
   syscall_table_rw[__NR_pause]          = wrap_sys_pause;
   syscall_table_rw[__NR_getpid]         = wrap_sys_getpid;
@@ -547,6 +550,24 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
   }
   else
   {
+    /*
+     * Signal handler armed during this syscall (e.g. SIGALRM in recvfrom):
+     * sysret would ignore task.RIP and return to the insn after the syscall.
+     * Iretq into the handler instead (restorer → rt_sigreturn later).
+     */
+    if (current_process && current_process->mode == USER_MODE &&
+        current_process->saved_context &&
+        current_process->signal_enter_pending)
+    {
+      current_process->signal_enter_pending = 0;
+      process_restore_user_task_segments(current_process);
+      current_process->irq_frame_saved = 0;
+      current_process->coop_resched_resume = 0;
+      current_process->want_kernel_ret = 0;
+      arch_restore_user_fs_base();
+      switch_to_user_task(&current_process->task);
+    }
+
     if (current_process && current_process->mode == USER_MODE &&
         current_process->syscall_frame_fresh)
     {

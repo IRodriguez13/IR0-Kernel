@@ -16,7 +16,7 @@ pre-submit:
 
 help-pre-submit:
 	@echo "IR0 pre-submit (local only — no push)"
-	@echo "  make pre-submit                 # kernel + arch-guard + tests/host + fmt"
+	@echo "  make pre-submit                 # kernel + arch-guard + hygiene + tests/host + fmt"
 	@echo "  make pre-submit SUBSYSTEM=mm    # + smoke-mm-cow-lazy"
 	@echo "  make pre-submit SUBSYSTEM=net   # + smoke-stream-sock"
 	@echo "  make pre-submit SUBSYSTEM=arm64 # + smoke-arm64"

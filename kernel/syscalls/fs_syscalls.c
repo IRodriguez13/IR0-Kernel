@@ -1507,6 +1507,7 @@ int64_t sys_stat(const char *pathname, stat_t *buf)
   if (validate_userspace_buffer(buf, IR0_USER_STAT_SIZE) != 0)
     return -EFAULT;
 
+  memset(&kst, 0, sizeof(kst));
   rc = ir0_resolve_user_path(pathname, resolved, sizeof(resolved),
                              current_process->cwd, current_process->root);
   if (rc != 0)
@@ -1571,6 +1572,7 @@ int64_t sys_newfstatat(int dirfd, const char *pathname, stat_t *buf, int flags)
   if (validate_userspace_buffer(buf, IR0_USER_STAT_SIZE) != 0)
     return -EFAULT;
 
+  memset(&kst, 0, sizeof(kst));
   rc = ir0_resolve_path_at(dirfd, pathname, resolved, sizeof(resolved));
   if (rc != 0)
     return rc;

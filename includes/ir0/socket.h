@@ -24,6 +24,7 @@
 
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
+#define SOCK_RAW    3
 #define SOCK_CLOEXEC   0x80000
 #define SOCK_NONBLOCK  0x800
 #define SOCK_TYPE_MASK 0xf
@@ -32,7 +33,14 @@
 #define SO_ERROR    4
 #define SO_TYPE     3
 #define SO_REUSEADDR 2
+#define SO_RCVTIMEO 20
+#define SO_SNDTIMEO 21
+#define SO_BINDTODEVICE 25
 #define SCM_RIGHTS  1
+
+#define IPPROTO_IP  0
+#define IP_TTL      2
+#define IP_MULTICAST_IF 32
 
 #define MSG_PEEK     0x2
 #define MSG_DONTWAIT 0x40

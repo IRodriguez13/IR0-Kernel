@@ -30,7 +30,7 @@ int process_signal_is_default_fatal(process_t *p, int sig)
 	 */
 	if (sig != SIGTERM && sig != SIGHUP && sig != SIGINT && sig != SIGQUIT &&
 	    sig != SIGUSR1 && sig != SIGUSR2 && sig != SIGSEGV && sig != SIGFPE &&
-	    sig != SIGILL && sig != SIGBUS && sig != SIGABRT)
+	    sig != SIGILL && sig != SIGBUS && sig != SIGABRT && sig != SIGALRM)
 		return 0;
 	if (p->signal_ignored & SIGNAL_MASK(sig))
 		return 0;

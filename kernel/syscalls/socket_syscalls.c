@@ -26,8 +26,12 @@
 #include <ir0/open_flags.h>
 #include <ir0/sock_udp.h>
 #include <ir0/sock_stream.h>
+#include <ir0/sock_icmp.h>
 #include <ir0/socket.h>
+#include <ir0/time.h>
 #include <ir0/signals.h>
+#include <ir0/arch_cpu.h>
+#include <ir0/clock.h>
 #include <ir0/pipe.h>
 #include <ir0/vfs.h>
 #include <ir0/memfd.h>
@@ -104,6 +108,8 @@ static int sock_alloc_fd_flags(void *sock, int is_stream, int type_flags)
 	{
 		if (is_stream)
 			sock_stream_release(sock);
+		else if (sock_icmp_is(sock))
+			sock_icmp_release(sock);
 		else
 			sock_udp_release(sock);
 		return -EMFILE;
@@ -146,7 +152,27 @@ static struct sock_udp *sock_fd_lookup(int fd)
 	p = fd_table[fd].vfs_file;
 	if (sock_stream_is(p))
 		return NULL;
+	if (sock_icmp_is(p))
+		return NULL;
 	return (struct sock_udp *)p;
+}
+
+static struct sock_icmp *sock_icmp_fd_lookup(int fd)
+{
+	fd_entry_t *fd_table;
+	void *p;
+
+	if (!current_process)
+		return NULL;
+	if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+		return NULL;
+	fd_table = get_process_fd_table();
+	if (!fd_table[fd].in_use || !fd_table[fd].is_socket)
+		return NULL;
+	p = fd_table[fd].vfs_file;
+	if (!sock_icmp_is(p))
+		return NULL;
+	return (struct sock_icmp *)p;
 }
 
 static struct sock_stream *sock_stream_fd_lookup(int fd)
@@ -208,10 +234,44 @@ int64_t sys_socket(int domain, int type, int protocol)
 		return fd < 0 ? fd : fd;
 	}
 
-	if (domain != AF_INET)
-		return -EAFNOSUPPORT;
+	if (base == SOCK_RAW)
+	{
+		struct sock_icmp *icmp;
+
+		if (domain != AF_INET)
+			return -EAFNOSUPPORT;
+		if (protocol != 0 && protocol != IPPROTO_ICMP)
+			return -EPROTONOSUPPORT;
+		icmp = sock_icmp_create();
+		if (!icmp)
+			return -ENOMEM;
+		fd = sock_alloc_fd_flags(icmp, 0, type_flags);
+		return fd;
+	}
+
 	if (base != SOCK_DGRAM)
 		return -EPROTOTYPE;
+
+	/*
+	 * AF_UNIX SOCK_DGRAM: musl if_nametoindex()/if_indextoname() open
+	 * AF_UNIX datagram sockets solely for SIOCGIFINDEX/SIOCGIFNAME.
+	 * Reuse a UDP sock object as an ioctl control fd (no wire I/O).
+	 */
+	if (domain == AF_UNIX)
+	{
+		struct sock_udp *sock;
+
+		if (protocol != 0)
+			return -EPROTONOSUPPORT;
+		sock = sock_udp_create();
+		if (!sock)
+			return -ENOMEM;
+		fd = sock_alloc_fd_flags(sock, 0, type_flags);
+		return fd;
+	}
+
+	if (domain != AF_INET)
+		return -EAFNOSUPPORT;
 	if (protocol != 0 && protocol != IPPROTO_UDP)
 		return -EPROTONOSUPPORT;
 
@@ -284,6 +344,7 @@ int64_t sys_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 	}
 
 	{
+		struct sock_icmp *icmp;
 		struct sockaddr_in sin;
 
 		if (addrlen < sizeof(struct sockaddr_in))
@@ -292,6 +353,11 @@ int64_t sys_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 			return -EFAULT;
 		if (sin.sin_family != AF_INET)
 			return -EAFNOSUPPORT;
+
+		icmp = sock_icmp_fd_lookup(fd);
+		if (icmp)
+			return sock_icmp_bind(icmp, sin.sin_addr);
+
 		sock = sock_fd_lookup(fd);
 		if (!sock)
 			return -ENOTSOCK;
@@ -306,6 +372,7 @@ ssize_t sys_sendto(int fd, const void *buf, size_t len, int flags,
 	struct sock_stream *ss;
 	struct sockaddr_in sin;
 	struct sock_udp *sock;
+	struct sock_icmp *icmp;
 	uint8_t *kbuf;
 	int ret;
 
@@ -354,6 +421,25 @@ ssize_t sys_sendto(int fd, const void *buf, size_t len, int flags,
 	if (sin.sin_family != AF_INET)
 		return -EAFNOSUPPORT;
 
+	icmp = sock_icmp_fd_lookup(fd);
+	if (icmp)
+	{
+		kbuf = kmalloc(len);
+		if (!kbuf)
+			return -ENOMEM;
+		if (copy_from_user(kbuf, buf, len) != 0)
+		{
+			kfree(kbuf);
+			return -EFAULT;
+		}
+		ret = sock_icmp_sendto(icmp, sin.sin_addr, kbuf, len);
+		kfree(kbuf);
+		if (ret < 0)
+			return ret;
+		(void)flags;
+		return (ssize_t)ret;
+	}
+
 	sock = sock_fd_lookup(fd);
 	if (!sock)
 		return -ENOTSOCK;
@@ -380,6 +466,7 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 {
 	struct sock_stream *ss;
 	struct sock_udp *sock;
+	struct sock_icmp *icmp;
 	uint16_t src_port = 0;
 	uint8_t *kbuf;
 	ssize_t n;
@@ -408,10 +495,16 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 	ss = sock_stream_fd_lookup(fd);
 	if (ss)
 	{
+		uint64_t deadline = 0;
+		uint64_t rto;
+
 		nb = sock_nonblock_fd(fd, flags);
 		kbuf = kmalloc(len);
 		if (!kbuf)
 			return -ENOMEM;
+		rto = sock_stream_get_timeout_ms(ss, 1);
+		if (rto > 0)
+			deadline = clock_get_uptime_milliseconds() + rto;
 		for (;;)
 		{
 			n = sock_stream_recv_flags(ss, kbuf, len, flags);
@@ -421,6 +514,11 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 			{
 				kfree(kbuf);
 				return -EAGAIN;
+			}
+			if (deadline && clock_get_uptime_milliseconds() >= deadline)
+			{
+				kfree(kbuf);
+				return -EAGAIN; /* Linux SO_RCVTIMEO → EAGAIN */
 			}
 			if (signals_pause_should_interrupt(current_process))
 			{
@@ -470,6 +568,87 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags,
 	{
 		if (validate_userspace_buffer(src_addr, out_len) != 0)
 			return -EFAULT;
+	}
+
+	icmp = sock_icmp_fd_lookup(fd);
+	if (icmp)
+	{
+		nb = sock_nonblock_fd(fd, flags);
+		kbuf = kmalloc(len);
+		if (!kbuf)
+			return -ENOMEM;
+
+		for (;;)
+		{
+			n = sock_icmp_recvfrom(icmp, kbuf, len, MSG_DONTWAIT,
+					       &src_ip_be);
+			if (n != -EAGAIN)
+				break;
+			if (nb)
+			{
+				kfree(kbuf);
+				return -EAGAIN;
+			}
+			if (signals_pause_should_interrupt(current_process))
+			{
+				handle_signals();
+				kfree(kbuf);
+				/*
+				 * Leave signal_enter_pending for syscall_dispatch
+				 * (same as tcp_wire_connect interrupt).
+				 */
+				return -EINTR;
+			}
+			{
+				int64_t sleep_ret = syscall_sleep_ms_locked(20);
+
+				if (sleep_ret < 0)
+				{
+					kfree(kbuf);
+					return sleep_ret;
+				}
+			}
+			if (signals_pause_should_interrupt(current_process))
+			{
+				handle_signals();
+				kfree(kbuf);
+				return -EINTR;
+			}
+			icmp = sock_icmp_fd_lookup(fd);
+			if (!icmp)
+			{
+				kfree(kbuf);
+				return -EBADF;
+			}
+		}
+		if (n < 0)
+		{
+			kfree(kbuf);
+			return n;
+		}
+		if (copy_to_user(buf, kbuf, (size_t)n) != 0)
+		{
+			kfree(kbuf);
+			return -EFAULT;
+		}
+		kfree(kbuf);
+
+		if (src_addr && out_len >= sizeof(sin))
+		{
+			memset(&sin, 0, sizeof(sin));
+			sin.sin_family = AF_INET;
+			sin.sin_addr = src_ip_be;
+			if (copy_to_user(src_addr, &sin, sizeof(sin)) != 0)
+				return -EFAULT;
+			if (addrlen)
+			{
+				socklen_t slen = sizeof(sin);
+
+				if (copy_to_user(addrlen, &slen, sizeof(slen)) != 0)
+					return -EFAULT;
+			}
+		}
+		return n;
 	}
 
 	sock = sock_fd_lookup(fd);
@@ -565,7 +744,9 @@ int64_t sys_connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
 				return -EINVAL;
 			if (copy_from_user(&sin, addr, sizeof(sin)) != 0)
 				return -EFAULT;
-			return sock_stream_connect_inet(ss, sin.sin_addr, ntohs(sin.sin_port));
+			return sock_stream_connect_inet_flags(ss, sin.sin_addr,
+							      ntohs(sin.sin_port),
+							      sock_nonblock_fd(fd, 0));
 		}
 		return -EAFNOSUPPORT;
 	}
@@ -741,6 +922,8 @@ static void scm_rights_dtor(void *entry, size_t sz)
 	{
 		if (sock_stream_is(e->vfs_file))
 			sock_stream_release((struct sock_stream *)e->vfs_file);
+		else if (sock_icmp_is(e->vfs_file))
+			sock_icmp_release((struct sock_icmp *)e->vfs_file);
 		else if (!sock_stream_is_slot(e->vfs_file))
 			sock_udp_release((struct sock_udp *)e->vfs_file);
 	}
@@ -789,6 +972,8 @@ static int scm_clone_fd_entry(fd_entry_t *dst, int srcfd)
 	{
 		if (sock_stream_is(dst->vfs_file))
 			sock_stream_acquire((struct sock_stream *)dst->vfs_file);
+		else if (sock_icmp_is(dst->vfs_file))
+			sock_icmp_acquire((struct sock_icmp *)dst->vfs_file);
 		else if (!sock_stream_is_slot(dst->vfs_file))
 			sock_udp_acquire((struct sock_udp *)dst->vfs_file);
 	}
@@ -1165,6 +1350,7 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 		       socklen_t optlen)
 {
 	struct sock_stream *ss;
+	struct sock_icmp *icmp;
 	int val = 0;
 
 #if !CONFIG_ENABLE_NETWORKING
@@ -1176,6 +1362,68 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 	return -ENOSYS;
 #endif
 	ss = sock_stream_fd_lookup(fd);
+	icmp = sock_icmp_fd_lookup(fd);
+
+	if (icmp)
+	{
+		if (level == IPPROTO_IP && optname == IP_TTL)
+		{
+			if (optlen < sizeof(int) || !optval)
+				return -EINVAL;
+			if (copy_from_user(&val, optval, sizeof(val)) != 0)
+				return -EFAULT;
+			return sock_icmp_set_ttl(icmp, val);
+		}
+		if (level == IPPROTO_IP && optname == IP_MULTICAST_IF)
+		{
+			/*
+			 * BusyBox ping -I <addr> passes sockaddr_in (16B). Linux
+			 * treats optlen>=12 as ip_mreqn; imr_address sits at
+			 * offset 4 — same as sin_addr in sockaddr_in.
+			 */
+			uint8_t buf[16];
+			uint32_t addr = 0;
+			size_t n;
+
+			if (!optval || optlen < 4)
+				return -EINVAL;
+			n = optlen;
+			if (n > sizeof(buf))
+				n = sizeof(buf);
+			memset(buf, 0, sizeof(buf));
+			if (copy_from_user(buf, optval, n) != 0)
+				return -EFAULT;
+			if (n >= 8)
+				memcpy(&addr, buf + 4, 4);
+			else
+				memcpy(&addr, buf, 4);
+			return sock_icmp_bind(icmp, addr);
+		}
+		if (level == SOL_SOCKET && optname == SO_BINDTODEVICE)
+		{
+			char name[16];
+			size_t n;
+			size_t i;
+
+			if (!optval || optlen == 0)
+				return sock_icmp_set_bind_device(icmp, NULL, 0);
+			/*
+			 * Linux accepts a C string or struct ifreq (name at offset 0).
+			 * BusyBox setsockopt_bindtodevice() passes sizeof(ifreq).
+			 */
+			n = optlen;
+			if (n > sizeof(name))
+				n = sizeof(name);
+			memset(name, 0, sizeof(name));
+			if (copy_from_user(name, optval, n) != 0)
+				return -EFAULT;
+			for (i = 0; i < n && name[i]; i++)
+				;
+			return sock_icmp_set_bind_device(icmp, name, i);
+		}
+		return -ENOPROTOOPT;
+	}
+
 	if (!ss)
 		return -ENOTSOCK;
 	if (level != SOL_SOCKET)
@@ -1187,6 +1435,26 @@ int64_t sys_setsockopt(int fd, int level, int optname, const void *optval,
 		if (copy_from_user(&val, optval, sizeof(val)) != 0)
 			return -EFAULT;
 		return sock_stream_set_reuseaddr(ss, val);
+	}
+	if (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+	{
+		struct timeval tv;
+		uint64_t ms;
+
+		if (optlen < sizeof(tv) || !optval)
+			return -EINVAL;
+		if (copy_from_user(&tv, optval, sizeof(tv)) != 0)
+			return -EFAULT;
+		if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000)
+			return -EINVAL;
+		ms = (uint64_t)tv.tv_sec * 1000ULL +
+		     (uint64_t)tv.tv_usec / 1000ULL;
+		return sock_stream_set_timeout_ms(ss, optname == SO_RCVTIMEO, ms);
+	}
+	if (optname == SO_BINDTODEVICE)
+	{
+		/* Single-NIC stack: accept and ignore for STREAM. */
+		return 0;
 	}
 	return -ENOPROTOOPT;
 }
@@ -1229,7 +1497,7 @@ int64_t sys_getsockopt(int fd, int level, int optname, void *optval,
 	}
 	if (optname == SO_ERROR)
 	{
-		val = 0;
+		val = sock_stream_take_so_error(ss);
 		if (len < sizeof(val))
 			return -EINVAL;
 		if (copy_to_user(optval, &val, sizeof(val)) != 0)
@@ -1247,6 +1515,22 @@ int64_t sys_getsockopt(int fd, int level, int optname, void *optval,
 		if (copy_to_user(optval, &val, sizeof(val)) != 0)
 			return -EFAULT;
 		len = sizeof(val);
+		if (copy_to_user(optlen, &len, sizeof(len)) != 0)
+			return -EFAULT;
+		return 0;
+	}
+	if (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+	{
+		struct timeval tv;
+		uint64_t ms = sock_stream_get_timeout_ms(ss, optname == SO_RCVTIMEO);
+
+		if (len < sizeof(tv))
+			return -EINVAL;
+		tv.tv_sec = (long)(ms / 1000ULL);
+		tv.tv_usec = (long)((ms % 1000ULL) * 1000ULL);
+		if (copy_to_user(optval, &tv, sizeof(tv)) != 0)
+			return -EFAULT;
+		len = sizeof(tv);
 		if (copy_to_user(optlen, &len, sizeof(len)) != 0)
 			return -EFAULT;
 		return 0;

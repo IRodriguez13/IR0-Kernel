@@ -35,11 +35,16 @@ int sock_stream_connect_unix_n(struct sock_stream *s, const char *path, size_t p
 struct sock_stream *sock_stream_accept(struct sock_stream *s);
 int sock_stream_bind_inet(struct sock_stream *s, uint16_t port);
 int sock_stream_connect_inet(struct sock_stream *s, uint32_t addr, uint16_t port);
+int sock_stream_connect_inet_flags(struct sock_stream *s, uint32_t addr, uint16_t port,
+				   int nonblock);
 ssize_t sock_stream_send(struct sock_stream *s, const void *buf, size_t len);
 ssize_t sock_stream_recv(struct sock_stream *s, void *buf, size_t len);
 ssize_t sock_stream_recv_flags(struct sock_stream *s, void *buf, size_t len, int flags);
 int sock_stream_set_reuseaddr(struct sock_stream *s, int on);
 int sock_stream_get_reuseaddr(const struct sock_stream *s);
+int sock_stream_take_so_error(struct sock_stream *s);
+int sock_stream_set_timeout_ms(struct sock_stream *s, int is_rcv, uint64_t ms);
+uint64_t sock_stream_get_timeout_ms(const struct sock_stream *s, int is_rcv);
 int sock_stream_is(const void *ptr);
 /* Address in g_socks[] even if already released (magic cleared). */
 int sock_stream_is_slot(const void *ptr);
@@ -61,3 +66,32 @@ int sock_stream_buf_space(const struct sock_stream *peer_of_sender);
 int sock_stream_buf_count(const struct sock_stream *s);
 int sock_stream_is_recv_shutdown(const struct sock_stream *s);
 struct sock_stream *sock_stream_get_peer(struct sock_stream *s);
+
+/* /proc/net/{tcp,unix} inventory (BusyBox netstat). */
+struct sock_stream_inet_snap
+{
+	uint32_t local_ip;
+	uint16_t local_port;
+	uint32_t rem_ip;
+	uint16_t rem_port;
+	uint8_t st; /* Linux tcp_state hex */
+	unsigned long inode;
+};
+
+struct sock_stream_unix_snap
+{
+	unsigned long inode;
+	unsigned refcnt;
+	uint8_t type; /* SOCK_STREAM = 1 */
+	uint8_t st;   /* 01 connected, 0A listen, 07 unbound-ish */
+	char path[108];
+	size_t path_len;
+	int is_abstract;
+};
+
+int sock_stream_inet_walk(int (*cb)(const struct sock_stream_inet_snap *s,
+				    void *ctx),
+			  void *ctx);
+int sock_stream_unix_walk(int (*cb)(const struct sock_stream_unix_snap *s,
+				    void *ctx),
+			  void *ctx);

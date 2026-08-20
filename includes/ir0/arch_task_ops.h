@@ -17,29 +17,13 @@
 #include <stdint.h>
 #include <ir0/signals.h>
 #include <ir0/task.h>
+#include <ir0/arch_syscall_frame.h>
 
 /*
- * Linux pt_regs subset mirrored for arch backends — layout matches
- * process.h syscall_user_frame_t without including process.h here.
+ * Same storage as process_t.syscall_frame. Arch backends may open ISA fields;
+ * portable code uses arch_syscall_frame_* / process_syscall_*.
  */
-typedef struct arch_task_syscall_frame
-{
-	uint64_t rip;
-	uint64_t rflags;
-	uint64_t rsp;
-	uint64_t rbx;
-	uint64_t rbp;
-	uint64_t r12;
-	uint64_t r13;
-	uint64_t r14;
-	uint64_t r15;
-	uint64_t rdi;
-	uint64_t rsi;
-	uint64_t rdx;
-	uint64_t r10;
-	uint64_t r8;
-	uint64_t r9;
-} arch_task_syscall_frame_t;
+typedef arch_syscall_frame_t arch_task_syscall_frame_t;
 
 void arch_task_apply_syscall_frame(task_t *task,
 				   const arch_task_syscall_frame_t *sf,

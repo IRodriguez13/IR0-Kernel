@@ -41,6 +41,8 @@ static void (*const ktest_functions[])(void) = {
 	ktest_wait4_specific_no_leak_after_destroy,
 	ktest_wait4_wnohang_specific,
 	ktest_wait4_wnohang_echild_after_reap,
+	ktest_wait4_pgrp,
+	ktest_arch_prctl_set_fs_rejects_nonuser,
 	ktest_kill_sigterm_wait_status,
 	ktest_proc_blockdevices_contract,
 	ktest_proc_cpuinfo_contract,
@@ -60,6 +62,7 @@ static void (*const ktest_functions[])(void) = {
 	ktest_mmap_null_placement,
 	ktest_signal_segv_deliver_irq_frame,
 	ktest_brk_post_exec,
+	ktest_brk_linux_fail_returns_current,
 	ktest_tty_canon_read_immediate,
 	/*
 	 * tty_canon_block_wake: needs cooperative schedule from a real
@@ -88,6 +91,8 @@ static const char *const ktest_names[] = {
 	"wait4_specific_no_leak_after_destroy",
 	"wait4_wnohang_specific",
 	"wait4_wnohang_echild_after_reap",
+	"wait4_pgrp",
+	"arch_prctl_set_fs_rejects_nonuser",
 	"kill_sigterm_wait_status",
 	"proc_blockdevices_contract",
 	"proc_cpuinfo_contract",
@@ -107,6 +112,7 @@ static const char *const ktest_names[] = {
 	"mmap_null_placement",
 	"signal_segv_deliver_irq_frame",
 	"brk_post_exec",
+	"brk_linux_fail_returns_current",
 	"tty_canon_read_immediate",
 	NULL
 };
@@ -134,6 +140,8 @@ static const int ktest_needs_process[] = {
 	1,  /* wait4_specific_no_leak_after_destroy */
 	1,  /* wait4_wnohang_specific */
 	1,  /* wait4_wnohang_echild_after_reap */
+	1,  /* wait4_pgrp */
+	1,  /* arch_prctl_set_fs_rejects_nonuser */
 	1,  /* kill_sigterm_wait_status */
 	1,  /* proc_blockdevices_contract */
 	1,  /* proc_cpuinfo_contract */
@@ -153,6 +161,7 @@ static const int ktest_needs_process[] = {
 	1,  /* mmap_null_placement */
 	1,  /* signal_segv_deliver_irq_frame */
 	1,  /* brk_post_exec */
+	1,  /* brk_linux_fail_returns_current */
 	1,  /* tty_canon_read_immediate */
 };
 

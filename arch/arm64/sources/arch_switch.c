@@ -7,13 +7,14 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: arch_switch.c
- * Description: ARM64 switch_to — TTBR0 sync, SP_EL0/SP_EL1 handoff, EL1 switch.
+ * Description: ARM64 switch_to — TTBR0, SP_EL0/SP_EL1, TPIDR_EL0 TLS, EL1 switch.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/arch_switch.h>
 #include <ir0/arch_task.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/process.h>
 #include <stdint.h>
 
@@ -77,7 +78,27 @@ void arch_switch_to(task_t *prev, task_t *next)
 			__asm__ volatile("msr sp_el0, %0" :: "r"(sp_el0)
 					 : "memory");
 		}
+		set_tls(process_tls_get(next_proc));
 	}
 
 	switch_context_arm64(prev, next);
+}
+
+void set_fs_base(uint64_t base)
+{
+	__asm__ volatile("msr tpidr_el0, %0" :: "r"(base) : "memory");
+}
+
+uint64_t get_fs_base(void)
+{
+	uint64_t base;
+
+	__asm__ volatile("mrs %0, tpidr_el0" : "=r"(base));
+	return base;
+}
+
+void arch_restore_user_fs_base(void)
+{
+	if (current_process)
+		set_fs_base(process_tls_get(current_process));
 }

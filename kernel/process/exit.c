@@ -17,6 +17,10 @@
 #include <ir0/copy_user.h>
 #include <ir0/ktm/checkpoint.h>
 
+#if CONFIG_ENABLE_NETWORKING
+void tcp_wire_on_process_exit(uint32_t pid);
+#endif
+
 /*
  * Teardown ownership policy
  * -------------------------
@@ -66,6 +70,10 @@ __attribute__((noreturn)) void process_exit(int code)
 	}
 	process_fase50_trace_proc("process_exit-entry", dying);
 	dying->irq_frame_saved = 0;
+	dying->signal_defer_catchable = 0;
+#if CONFIG_ENABLE_NETWORKING
+	tcp_wire_on_process_exit((uint32_t)dying->task.pid);
+#endif
 	process_exit_robust_list(dying);
 	if (IR0_DEBUG_WAIT)
 		klog_debug("WAIT", "CLASSIFY ZOMBIE_IRQ_SAVED_CLEARED");

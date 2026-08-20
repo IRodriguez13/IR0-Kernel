@@ -2,7 +2,7 @@
 
 IR0 is a research operating-system kernel (GPL-3.0). Primary bring-up target is
 **x86-64** under QEMU (Multiboot, GRUB, VFS/MINIX, ELF userspace). Version
-string: **`0.0.1-pre-rc3`**.
+string: **`0.0.1-rc4`** (last pre-release before `v0.0.1` final).
 
 It is not a general-purpose production OS. The tree emphasizes narrow facades
 (`includes/ir0/`), Kconfig selection, and honest partial Linux ABI (`-ENOSYS`
@@ -41,6 +41,18 @@ ISD builds a finished image; IR0 boots it.
 </p>
 
 <p align="center"><em>In-guest BusyBox <code>vi</code> after <code>make run</code>: edit C sources on the ISD rootfs (QEMU GTK).</em></p>
+
+<p align="center">
+  <img src="scripts/kconfig/assets/isd-top.png" alt="ISD guest — BusyBox top under runit" width="720" />
+</p>
+
+<p align="center"><em>BusyBox <code>top</code> after login: runit PID 1, <code>runsvdir</code>/<code>runsv</code>, ash, and idle — live process view on the ISD image.</em></p>
+
+<p align="center">
+  <img src="scripts/kconfig/assets/isd-doom.png" alt="IR0/Unix — Doom on QEMU (desktop profile)" width="720" />
+</p>
+
+<p align="center"><em>Doom on IR0/Unix under QEMU: framebuffer + input path on the ISD desktop image (<code>PROFILE=desktop</code>).</em></p>
 
 ## Getting started
 

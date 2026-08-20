@@ -101,6 +101,14 @@ else
 	SMOKES_PASSED=$((SMOKES_PASSED + 1))
 fi
 
+if ! make -s repo-hygiene-guard; then
+	echo "  repo-hygiene-guard: FAIL"
+	FAIL=1
+else
+	echo "  repo-hygiene-guard: OK"
+	SMOKES_PASSED=$((SMOKES_PASSED + 1))
+fi
+
 run_host_tests || true
 check_fmt || true
 

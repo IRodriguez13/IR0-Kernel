@@ -46,13 +46,19 @@ int process_signals_clone(process_t *dst, const process_t *src)
 	dst->signal_pending = 0;
 	dst->signal_mask = src->signal_mask;
 	dst->signal_ignored = src->signal_ignored;
+	/* Linux: interval timers are not inherited by the child. */
+	dst->it_real_expire_ms = 0;
+	dst->it_real_interval_ms = 0;
 	for (i = 0; i < _NSIG; i++)
 	{
 		dst->signal_handlers[i] = src->signal_handlers[i];
 		dst->signal_sa_flags[i] = src->signal_sa_flags[i];
 		dst->signal_sa_mask[i] = src->signal_sa_mask[i];
+		dst->signal_restorer[i] = src->signal_restorer[i];
 	}
 	dst->saved_context = NULL;
+	dst->signal_enter_pending = 0;
+	dst->signal_defer_catchable = 0;
 	return 0;
 }
 

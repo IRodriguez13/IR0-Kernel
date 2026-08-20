@@ -16,6 +16,9 @@
  * Process ownership split (ARCH process monolith):
  *   kernel/process/core.c      — list, PID, syscall frame
  *   kernel/process/create.c    — spawn
+ *   kernel/process/domains.c   — mm/files attach
+ *   kernel/process/mm_struct.c — address-space domain
+ *   kernel/process/files_struct.c — fd-table domain
  *   kernel/process/fork.c      — fork + rollback
  *   kernel/process/exec.c      — CLOEXEC on exec
  *   kernel/process/exit.c      — exit → zombie, destroy on reap

@@ -317,13 +317,14 @@ void isr_handler64(uint64_t interrupt_number, uint64_t *stack)
          */
         if (is_user_exception_frame(stack) && current && signal_to_send != 0)
         {
-#if DEBUG_PROCESS
-            print("Excepción CPU #");
-            print_int32(interrupt_number);
-            print(" -> SIG");
-            print_int32(signal_to_send);
-            print("\n");
-#endif
+            klog_notice_fmt("ISR",
+                            "user_exception int=%llx -> sig=%x pid=%x rip=%llx cs=%llx err=%llx",
+                            (unsigned long long)interrupt_number,
+                            (unsigned)signal_to_send,
+                            (unsigned)((uint32_t)current->task.pid),
+                            (unsigned long long)stack[2],
+                            (unsigned long long)stack[3],
+                            (unsigned long long)stack[1]);
             send_signal(current->task.pid, signal_to_send);
             return;
         }

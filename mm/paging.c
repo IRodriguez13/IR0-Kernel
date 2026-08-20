@@ -7,7 +7,7 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: paging.c
- * Description: IR0 kernel source/header file
+ * Description: Page tables, 2 MiB identity split, and leaf install.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -28,6 +28,7 @@
 #include <ir0/validation.h>
 #include <ir0/ahci_api.h>
 #include <ir0/arch_port.h>
+#include <ir0/arch_cpu.h>
 
 static uint32_t fase40_copy_diag_events;
 
@@ -327,19 +328,32 @@ int is_page_mapped_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t *fl
 	if (!mm_pte_present(pml4[idx[0]]))
 		return 0;
 	if (paging_entry_large(pml4[idx[0]]))
-		return 0;
+	{
+		if (flags_out)
+			*flags_out = pml4[idx[0]] & 0xFFFu;
+		return 1;
+	}
 
 	pdpt = paging_entry_table(pml4[idx[0]]);
 	if (!pdpt || !mm_pte_present(pdpt[idx[1]]))
 		return 0;
 	if (paging_entry_large(pdpt[idx[1]]))
-		return 0;
+	{
+		if (flags_out)
+			*flags_out = pdpt[idx[1]] & 0xFFFu;
+		return 1;
+	}
 
 	pd = paging_entry_table(pdpt[idx[1]]);
 	if (!pd || !mm_pte_present(pd[idx[2]]))
 		return 0;
 	if (paging_entry_large(pd[idx[2]]))
-		return 0;
+	{
+		/* Linux pmd_present && pmd_large: a 2 MiB leaf is mapped. */
+		if (flags_out)
+			*flags_out = pd[idx[2]] & 0xFFFu;
+		return 1;
+	}
 
 	pt = paging_entry_table(pd[idx[2]]);
 	if (!pt || !mm_pte_present(pt[idx[3]]))
@@ -572,6 +586,46 @@ static uint64_t alloc_page_table(int level)
     return (uint64_t)page;
 }
 
+/*
+ * Linux split_huge_pmd: replace a PD-level 2 MiB leaf with 512×4 KiB
+ * supervisor leaves so a later 4 KiB USER PTE can be installed.
+ */
+static int paging_split_large_pde(uint64_t *pd, size_t index)
+{
+	uint64_t pde;
+	uint64_t phys_base;
+	uint64_t pt_phys;
+	uint64_t *pt;
+	uint64_t leaf_flags;
+	int exec;
+	size_t i;
+
+	if (!pd)
+		return -1;
+	pde = pd[index];
+	if (!mm_pte_present(pde) || !paging_entry_large(pde))
+		return -1;
+
+	pt_phys = alloc_page_table(3);
+	if (pt_phys == 0)
+		return -1;
+	pt = (uint64_t *)(uintptr_t)pt_phys;
+	phys_base = paging_entry_pfn(pde);
+	leaf_flags = PAGE_RW;
+	if (pde & PAGE_NX)
+		exec = 0;
+	else
+		exec = 1;
+
+	for (i = 0; i < 512; i++)
+		pt[i] = mm_make_leaf_pte(phys_base + (i * PAGE_SIZE_4KB),
+					 leaf_flags, exec);
+
+	pd[index] = mm_make_table_pte((uintptr_t)pt_phys, 0);
+	tlb_invalidate_all();
+	return 0;
+}
+
 /**
  * Get or create a page table at the specified level
  * @pml4: PML4 table address
@@ -604,7 +658,12 @@ static uint64_t *get_or_create_table(uint64_t *parent, size_t index, int create,
 	}
 
 	if (paging_entry_large(parent[index]))
-		return NULL;
+	{
+		if (!create || level != 3)
+			return NULL;
+		if (paging_split_large_pde(parent, index) != 0)
+			return NULL;
+	}
 
 	/*
 	 * Propagate PAGE_USER onto existing table levels (e.g. supervisor identity
@@ -632,6 +691,15 @@ int map_page_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t phys_addr
 	uint64_t *pt;
 
 	if (!pml4)
+		return -1;
+
+	/*
+	 * Kernel heap is identity-mapped under process CR3 (kmalloc + COW
+	 * memcpy use PA as VA). PAGE_USER there hides the allocator.
+	 */
+	if ((flags & PAGE_USER) &&
+	    virt_addr >= (uint64_t)SIMPLE_HEAP_START &&
+	    virt_addr < (uint64_t)PMM_PHYS_BASE)
 		return -1;
 
 	mm_va_indices((uintptr_t)virt_addr, idx);

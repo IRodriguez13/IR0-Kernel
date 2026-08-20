@@ -77,12 +77,18 @@ def main() -> int:
     ap.add_argument(
         "--disk",
         default="",
-        help="Prebuilt MINIX disk image (skip copy of disk.img and init inject; caller owns cleanup)",
+        help="Prebuilt MINIX disk (e.g. packed ISD). Copied before "
+        "--legacy-disk-init/--inject so the source image is not mutated.",
     )
     ap.add_argument(
         "--no-fsdev",
         action="store_true",
         help="Omit virtio-9p share (product disks that do not need hostshare)",
+    )
+    ap.add_argument(
+        "--mem",
+        default="256M",
+        help="QEMU guest RAM (default 256M)",
     )
     args = ap.parse_args()
     require = list(args.require)
@@ -152,16 +158,26 @@ def main() -> int:
     if log.exists():
         log.unlink()
 
+    mutate = bool(args.legacy_disk_init or injects)
     own_disk = False
     if prebuilt_disk is not None:
-        disk = prebuilt_disk
+        if mutate:
+            disk = Path(tempfile.mktemp(prefix="ir0-ktm-userdev-", suffix=".img"))
+            own_disk = True
+        else:
+            disk = prebuilt_disk
     else:
         disk = Path(tempfile.mktemp(prefix="ir0-ktm-userdev-", suffix=".img"))
         own_disk = True
 
     try:
-        if own_disk:
+        if prebuilt_disk is not None and own_disk:
+            shutil.copy2(prebuilt_disk, disk)
+        elif prebuilt_disk is None:
             subprocess.check_call(["cp", "-f", str(base), str(disk)], cwd=str(ROOT))
+        # Replace PID1 on a work copy: empty kernel disk.img (stub or payload)
+        # or a packed ISD disk (--legacy-disk-init runs the case as /sbin/init).
+        if prebuilt_disk is None or args.legacy_disk_init:
             disk_init = payload_bin if args.legacy_disk_init else stub_bin
             subprocess.check_call(
                 [
@@ -173,8 +189,7 @@ def main() -> int:
                 ],
                 cwd=str(ROOT),
             )
-        # Extra --inject applies to both copied disk.img and prebuilt --disk
-        # (e.g. runit rootfs needs /bin/f41true for exec-drain).
+        # Extra --inject applies to the work copy (never the caller's --disk).
         for src, dest in injects:
             subprocess.check_call(
                 [
@@ -220,7 +235,7 @@ def main() -> int:
             "-display",
             "none",
             "-m",
-            "256M",
+            args.mem,
             "-no-reboot",
         ]
         if not has_netdev:

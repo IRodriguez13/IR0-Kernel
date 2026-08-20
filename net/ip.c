@@ -373,7 +373,7 @@ void ip_receive_handler(struct net_device *dev, const void *data,
 static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip, 
                             uint8_t protocol, const void *payload, size_t len,
                             uint16_t frag_id, uint16_t frag_offset, bool more_fragments,
-                            ip4_addr_t next_hop_ip)
+                            ip4_addr_t next_hop_ip, uint8_t ttl)
 {
     size_t ip_header_len = sizeof(struct ip_header);
     size_t fragment_len = ip_header_len + len;
@@ -398,7 +398,7 @@ static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip,
         flags_frag |= IP_FLAG_MF;
     ip->flags_frag_off = htons(flags_frag);
     
-    ip->ttl = 64;
+    ip->ttl = ttl ? ttl : 64;
     ip->protocol = protocol;
     ip->checksum = 0;
     /* Source IP: use interface-specific IP if available, else default */
@@ -430,8 +430,14 @@ static int ip_send_fragment(struct net_device *dev, ip4_addr_t dest_ip,
     return ret;
 }
 
-int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol, 
+int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
             const void *payload, size_t len)
+{
+	return ip_send_ttl(dev, dest_ip, protocol, payload, len, 64);
+}
+
+int ip_send_ttl(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
+		const void *payload, size_t len, uint8_t ttl)
 {
     if (!dev || !payload)
         return -1;
@@ -545,7 +551,7 @@ int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
         uint16_t frag_id = ip_frag_id_counter++;
         ip->id = htons(frag_id);  /* Unique fragment ID */
         ip->flags_frag_off = 0;         /* No fragmentation flags (unfragmented packet) */
-        ip->ttl = 64;                    /* Time To Live: 64 hops */
+        ip->ttl = ttl ? ttl : 64;            /* Time To Live */
         ip->protocol = protocol;         /* Upper-layer protocol (ICMP, UDP) */
         ip->checksum = 0;                /* Zero for checksum calculation */
         /* Source IP: use interface-specific IP if available, else default */
@@ -622,7 +628,8 @@ int ip_send(struct net_device *dev, ip4_addr_t dest_ip, uint8_t protocol,
         /* Send fragment */
         int ret = ip_send_fragment(dev, dest_ip, protocol, 
                                    payload_ptr + offset, fragment_payload_len,
-                                   frag_id, offset, more_fragments, next_hop_ip);
+                                   frag_id, offset, more_fragments, next_hop_ip,
+				   ttl);
         
         if (ret != 0)
         {
@@ -693,6 +700,9 @@ int ip_init(void)
 
     LOG_INFO_FMT("IP", "Initializing IPv4 with address " IP4_FMT, IP4_ARGS(ntohl(ip_local_addr)));
 
+    /* Soft FIB mirrors globals so /proc/net/route is not synthesis-only. */
+    (void)ip_routes_seed_from_globals();
+
     /* Register IP protocol handler */
     memset(&ip_proto, 0, sizeof(ip_proto));
     ip_proto.name = "IP";
@@ -709,6 +719,28 @@ int ip_init(void)
 
     LOG_INFO("IP", "IPv4 protocol initialized");
     return 0;
+}
+
+/**
+ * ip_routes_seed_from_globals - Install connected + default into soft FIB.
+ *
+ * Called from ip_init / DHCP / NET_SET_CONFIG so /proc/net/route and LPM
+ * share the same table (ip_route_add updates duplicates in place).
+ */
+int ip_routes_seed_from_globals(void)
+{
+	ip4_addr_t connected;
+	int ret = 0;
+
+	if (ip_local_addr == 0 || ip_netmask == 0)
+		return -EINVAL;
+
+	connected = ip_local_addr & ip_netmask;
+	if (ip_route_add(connected, ip_netmask, 0) != 0)
+		ret = -1;
+	if (ip_gateway != 0 && ip_route_add(0, 0, ip_gateway) != 0)
+		ret = -1;
+	return ret;
 }
 
 /**
@@ -804,5 +836,26 @@ int ip_route_del(ip4_addr_t dest_network, ip4_addr_t netmask)
     }
     
     return -1;
+}
+
+/**
+ * ip_route_walk - Invoke @cb for each entry in the software route list.
+ * Does not synthesize the connected/default routes from globals (caller does).
+ */
+int ip_route_walk(int (*cb)(ip4_addr_t dest, ip4_addr_t mask, ip4_addr_t gw,
+			     void *ctx),
+		  void *ctx)
+{
+	struct ip_route_entry *route;
+
+	if (!cb)
+		return -EINVAL;
+
+	for (route = ip_routes; route; route = route->next)
+	{
+		if (cb(route->dest_network, route->netmask, route->gateway, ctx) != 0)
+			return -1;
+	}
+	return 0;
 }
 

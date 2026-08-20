@@ -17,21 +17,55 @@
 #include <ir0/errno.h>
 #include <kernel/process.h>
 #include <stddef.h>
+#include <string.h>
+
+static void arm64_copy_exc_gprs(arch_syscall_frame_t *sf, const uint64_t *frame)
+{
+	memcpy(&sf->x0, frame, 31 * sizeof(uint64_t));
+}
 
 void arch_process_capture_syscall_frame_at_entry(struct process *p,
 						 uint64_t *frame_base,
 						 uint64_t rip_hw)
 {
-	(void)p;
-	(void)frame_base;
-	(void)rip_hw;
+	arch_syscall_frame_t *sf;
+	uint64_t elr;
+	uint64_t spsr;
+	uint64_t sp_el0;
+
+	if (!frame_base || !p || p->mode != USER_MODE)
+		return;
+
+	sf = &p->syscall_frame;
+	arm64_copy_exc_gprs(sf, frame_base);
+
+	__asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
+	__asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
+	__asm__ volatile("mrs %0, sp_el0" : "=r"(sp_el0));
+
+	sf->elr = elr;
+	if (!sf->elr && rip_hw)
+		sf->elr = rip_hw;
+	sf->spsr = spsr;
+	sf->sp = sp_el0;
+	p->syscall_frame_fresh = 1;
+	process_sync_task_user_ip_from_syscall_frame(p);
 }
 
 void arch_process_syscall_restore_exit_regs(struct process *p,
 					    uint64_t *stack_r9_slot)
 {
-	(void)p;
-	(void)stack_r9_slot;
+	const arch_syscall_frame_t *sf;
+
+	if (!stack_r9_slot || !p || p->mode != USER_MODE)
+		return;
+
+	sf = &p->syscall_frame;
+	memcpy(stack_r9_slot, &sf->x0, 31 * sizeof(uint64_t));
+
+	__asm__ volatile("msr elr_el1, %0" :: "r"(sf->elr) : "memory");
+	__asm__ volatile("msr spsr_el1, %0" :: "r"(sf->spsr) : "memory");
+	__asm__ volatile("msr sp_el0, %0" :: "r"(sf->sp) : "memory");
 }
 
 int arch_irq_frame_is_user(const uint64_t *iretq_frame)

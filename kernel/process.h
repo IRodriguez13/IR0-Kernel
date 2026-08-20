@@ -490,6 +490,7 @@ void process_arm_blocked_syscall_resume(process_t *p, uint64_t rax);
 void process_arm_coop_resched_resume(process_t *p, uint64_t rax);
 void process_clear_in_thread_syscall_block(process_t *p);
 void process_reset_blocked_syscall_state(process_t *p);
+/* "arm" = prepare/enable a resume path (English verb), not ARM64. */
 void process_arm_kernel_syscall_sleep(process_t *p);
 /* After switch_context saved prev: honour want_kernel_ret (Class B close). */
 void process_after_task_save(task_t *prev);
@@ -583,15 +584,14 @@ int process_signal_default_kill(process_t *target, int signal);
  */
 void process_reap_zombie_on_wait_resume(process_t *parent, pid_t child_pid);
 
-/* IR0 PHILOSOPHY: Only spawn() creates processes - total simplicity
- * Mode must be explicitly specified - no magic address detection */
+/* spawn() — explicit-mode process creation (kernel vs user). */
 pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode);
 
 /* Convenience wrappers for explicit mode specification */
 pid_t spawn_user(void (*entry)(void), const char *name);
 pid_t spawn_kernel(void (*entry)(void), const char *name);
 
-/* Fork exists only for POSIX syscall compatibility - uses spawn() internally */
+/* POSIX fork/clone: kernel/process/fork.c (not spawn internally). */
 pid_t fork(void);
 pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 		   int *child_tid, unsigned long tls);

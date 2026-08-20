@@ -219,6 +219,10 @@ void process_sync_task_user_ip_from_syscall_frame(process_t *p)
 
 void process_capture_syscall_frame(process_t *p)
 {
+	/*
+	 * Capture is at syscall entry (arch_process_capture_syscall_frame_at_entry).
+	 * Dispatch still calls this; keep it as a documented no-op.
+	 */
 	(void)p;
 }
 
@@ -316,8 +320,10 @@ static void process_apply_kernel_ret_segments(process_t *p)
 }
 
 /*
- * process_arm_kernel_syscall_sleep - Linux-like: mark blocked syscall for
+ * process_arm_kernel_syscall_sleep - Prepare a blocked syscall for
  * kernel_ret resume after switch_context save (not via user RIP).
+ *
+ * Name: "arm" is the English verb (prepare/enable), not the ARM ISA.
  *
  * User regs live in syscall_frame (pt_regs). If task.arch.rip still looks like
  * userspace (stale from a prior iretq), only set want_kernel_ret — never pair

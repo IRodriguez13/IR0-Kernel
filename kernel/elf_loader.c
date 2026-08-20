@@ -446,10 +446,10 @@ static int elf_load_segments(elf64_header_t *header, uint8_t *file_data, size_t 
     return 0;
 }
 
-/* Dummy entry function for ELF processes (will be overridden) */
+/* Dummy entry: spawn() needs a function pointer; ELF overwrites the IP. */
 static void elf_dummy_entry(void)
 {
-    /* This should never be called as we override RIP */
+    /* This should never be called as we override the task IP */
     panic("ELF dummy entry should never be called :)\n");
 }
 
@@ -500,10 +500,10 @@ static process_t *elf_create_process(elf64_header_t *header, const char *path)
     task_set_ip(&process->task, header->e_entry);
     arch_task_set_user_segments(&process->task);
 
-    /* Stack is already set up by spawn() at 0x7FFFF000 */
+    /* Stack window is USER_STACK_TOP (spawn_user / process_set_stack_layout). */
 
     /* Enable interrupts in user mode */
-    task_set_flags(&process->task, ir0_rflags_sanitize_user(0x202ULL));
+    task_set_flags(&process->task, ir0_rflags_sanitize_user(RFLAGS_IF));
 
     klog_debug_fmt("ELF", "SERIAL: ELF: Process created with PID %x", (unsigned)(process->task.pid));
     klog_debug_fmt("ELF", "SERIAL: ELF: Entry point: 0x%x", (unsigned)((uint32_t)task_get_ip(&process->task)));
@@ -513,22 +513,13 @@ static process_t *elf_create_process(elf64_header_t *header, const char *path)
 }
 
 /**
- * elf_setup_stack - Initialize stack with argc, argv, envp (x86-64 ABI)
+ * elf_setup_stack - argc/argv/envp + auxv (SysV ABI stack; ISA-neutral).
  * @process: Process to set up stack for
  * @argv: Command line arguments (NULL-terminated)
  * @envp: Environment variables (NULL-terminated)
- * 
- * Sets up the stack according to x86-64 ABI:
- * - argc at bottom of stack
- * - argv[] array (pointers, NULL-terminated)
- * - envp[] array (pointers, NULL-terminated)
- * - Argument strings
- * - Environment strings
- * 
- * Registers will be set by context switch:
- * - rdi = argc
- * - rsi = argv
- * - rdx = envp
+ *
+ * Stack: argc, argv[], envp[], auxv, strings.
+ * Entry registers (task_set_arg0/1/2): argc, argv, envp.
  */
 static int elf_setup_stack(process_t *process, char *const argv[], char *const envp[],
                            const elf64_header_t *header, uint64_t at_phdr,
@@ -791,10 +782,10 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
     task_set_sp(&process->task, argc_slot);
     arch_task_set_frame_pointer(&process->task, argc_slot);
 
-    /* Set registers for x86-64 ABI: rdi=argc, rsi=argv, rdx=envp */
+    /* SysV entry: arg0=argc, arg1=argv, arg2=envp (x86 rdi/rsi/rdx, ARM x0/x1/x2). */
     task_set_arg0(&process->task, (uint64_t)argc);
-    task_set_rsi(&process->task, argv_array);
-    task_set_rdx(&process->task, envp_array);
+    task_set_arg1(&process->task, argv_array);
+    task_set_arg2(&process->task, envp_array);
 
     kfree(argv_ptrs);
     kfree(envp_ptrs);
@@ -1332,7 +1323,7 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     task_set_ip(&proc->task, header->e_entry);
     exec_commit_ctx.entry_rip = header->e_entry;
     arch_task_set_user_segments(&proc->task);
-    task_set_flags(&proc->task, ir0_rflags_sanitize_user(0x202ULL));
+    task_set_flags(&proc->task, ir0_rflags_sanitize_user(RFLAGS_IF));
 
     if (elf_setup_stack(proc, argv, envp, header, at_phdr, at_base,
                         "exec_replace_current", path) != 0)

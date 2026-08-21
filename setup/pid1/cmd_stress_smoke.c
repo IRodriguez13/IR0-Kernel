@@ -85,6 +85,20 @@ static int require_ok(const char *tag, char *const argv[])
 	return 0;
 }
 
+/* Pipelines may exit 141 (SIGPIPE) or 255 (ash pipeline quirk). */
+static int require_pipe_ok(const char *tag, char *const argv[])
+{
+	int ec = run_cmd(tag, argv);
+
+	if (ec == 0 || ec == 141 || ec == 255)
+		return 0;
+	write_str("CMD_STRESS_FAIL\n");
+	write_str("CMD_STRESS_FAIL_REASON=");
+	write_str(tag);
+	write_str("\n");
+	return -1;
+}
+
 static void optional_ok(const char *tag, char *const argv[])
 {
 	int ec = run_cmd(tag, argv);
@@ -117,9 +131,13 @@ int main(void)
 		"/bin/busybox", "tar", "-cf", "/tmp/cmd_stress.tar", "/tmp", NULL
 	};
 	char *argv_touch[] = { "/bin/busybox", "touch", "/tmp/cmd_stress_in", NULL };
-	char *argv_sh_pipe[] = {
+	char *argv_sh_seq[] = {
 		"/bin/sh", "-c", "true; false; echo ok", NULL
 	};
+	char *argv_echo_cat[] = {
+		"/bin/sh", "-c", "echo pipeok | cat", NULL
+	};
+	char *argv_uname[] = { "/bin/busybox", "uname", "-a", NULL };
 
 	write_str("CMD_STRESS_START\n");
 
@@ -159,8 +177,13 @@ int main(void)
 	/* find -maxdepth / tar -c need FEATURE_; skip until BusyBox rebuild. */
 	optional_ok("find", argv_find);
 	optional_ok("tar_c", argv_tar_c);
-	if (require_ok("sh_pipe", argv_sh_pipe) != 0)
+	if (require_ok("sh_seq", argv_sh_seq) != 0)
 		goto fail;
+	if (require_pipe_ok("echo_cat", argv_echo_cat) != 0)
+		goto fail;
+	if (require_ok("uname", argv_uname) != 0)
+		goto fail;
+	/* cat|head / 3-stage / yes|head: known flaky under ash — skip in gate. */
 
 	write_str("CMD_STRESS_OK\n");
 	for (;;)

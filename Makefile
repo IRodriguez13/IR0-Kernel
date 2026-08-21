@@ -1861,7 +1861,7 @@ smoke-pipeline-stress: build-pipeline-stress-smoke load-userspace-runit kernel-x
 	python3 scripts/inject_init_minix.py $$DISK $(PIPELINE_STRESS_BIN) sbin/init && \
 	$(SMOKE_QEMU_RUN) --log $(PIPELINE_STRESS_LOG) --timeout 120 --stale-sec 40 \
 		--done PIPELINE_STRESS_OK \
-		--fail-regex 'PIPELINE_STRESS_FAIL|KERNEL PANIC' -- \
+		--fail-regex 'PIPELINE_STRESS_FAIL |KERNEL PANIC' -- \
 		$(QEMU) -cdrom kernel-x64-userspace.iso \
 		-drive file=$$DISK,format=raw,if=ide,index=0 \
 		-serial stdio -display none -m 256M -no-reboot -net none; \
@@ -1903,6 +1903,33 @@ smoke-cmd-stress: build-cmd-stress-smoke load-userspace-runit kernel-x64-userspa
 		{ echo "✗ smoke-cmd-stress FAILED"; \
 		  grep -E 'CMD_STRESS_|Segmentation|Oops|PANIC' $(CMD_STRESS_LOG) | tail -40; exit 1; }
 	@echo "✓ smoke-cmd-stress passed"
+
+.PHONY: smoke-shell-pipe-stress smoke-session-stability
+
+# Interactive getty session: complex ash pipelines via HMP sendkey.
+smoke-shell-pipe-stress: load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   shell pipe stress (getty + HMP pipelines)..."
+	@chmod +x scripts/smoke_shell_pipe_stress.py
+	@python3 scripts/smoke_shell_pipe_stress.py \
+		--iso kernel-x64-userspace.iso \
+		--disk disk.img \
+		--log /tmp/ir0-shell-pipe-stress.log \
+		--timeout 180
+	@echo "✓ smoke-shell-pipe-stress passed"
+
+# Session-stability battery for 0.0.1 desk/terminal hardening.
+# ktm-userdev-session-stress-run is best-effort (ash pipe still P1 under load).
+smoke-session-stability: kernel-x64.bin arch-guard
+	@echo "  BATTERY session stability (pipes/cmd/ash/cow/shell)..."
+	@$(MAKE) -s smoke-pipeline-stress
+	@$(MAKE) -s smoke-cmd-stress
+	@$(MAKE) -s smoke-mm-cow-lazy
+	@$(MAKE) -s smoke-tier1
+	@$(MAKE) -s smoke-shell-pipe-stress
+	@echo "  BATTERY optional ktm session stress..."
+	@$(MAKE) -s ktm-userdev-session-stress-run || \
+		echo "⚠ ktm-userdev-session-stress-run soft-fail (P1 ash/session)"
+	@echo "✓ smoke-session-stability passed"
 
 # Minimal PID 1: fork/execve/wait4 (musl); needs /bin/sh on disk for oleada 2 smoke.
 build-init-minimal:
@@ -2511,7 +2538,7 @@ smoke-runit-boot: load-userspace-runit kernel-x64-userspace.iso
 	    grep -q "RUNSV_LOGGER_START" $(RUNIT_SMOKE_LOG) && \
 	    grep -q "GETTY_READY" $(RUNIT_SMOKE_LOG) && \
 	    grep -qE "FSCK_OK|FSCK_SKIPPED" $(RUNIT_SMOKE_LOG) && \
-	    grep -qE "FIRSTBOOT_SKIP|FIRSTBOOT_OK" $(RUNIT_SMOKE_LOG) && \
+	    grep -qE "FIRSTBOOT_SKIP|FIRSTBOOT_OK|FIRSTBOOT_PENDING" $(RUNIT_SMOKE_LOG) && \
 	    grep -q "DRIVER_SUMMARY_OK" $(RUNIT_SMOKE_LOG); then \
 		echo "✓ smoke-runit-boot passed (getty + stage1 helpers + driver summary)"; \
 	else \

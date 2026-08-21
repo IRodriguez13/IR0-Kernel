@@ -71,17 +71,21 @@ FAIL_RES = [
 BUSYBOX_CONFIG_PROMPT = re.compile(
     r"PASSWORD_MINLEN|FEATURE_SHADOWPASSWDS|ASH_IDLE_TIMEOUT|\(NEW\)"
 )
-ASH_PROMPT_RE = re.compile(r"(?:^|\n)#\s")
-ASH_PROMPT_STABLE_RE = re.compile(r"(?:^|\n)#\s*KBD_")
+ASH_PROMPT_RE = re.compile(r"(?:^|\n)(?:#\s|[^ \n]+@[^\n]+[#$]\s)")
+ASH_PROMPT_STABLE_RE = re.compile(r"(?:^|\n)(?:#\s*KBD_|[^ \n]+@[^\n]+[#$]\s)")
 ASH_PROMPT_AUDIT_RE = re.compile(r"(?:^|\n)#\s*\[WAIT_EXIT")
 ECHO_GARBLED_RE = re.compile(
     r"\bechoo\b|\bcho hi\b|: not found|: Invalid argument"
 )
 
 ECHO_KEYS = ["e", "c", "h", "o", "spc", "h", "i", "ret"]
-# Dev account: root / (empty password) — see IR0-userspace/rootfs/etc/shadow
-LOGIN_KEYS = ["r", "o", "o", "t", "ret"]
-PASSWORD_KEYS = ["ret"]
+# Seeded lab account (see firstboot.seed inject below).
+LOGIN_KEYS = [
+    "l", "a", "b", "u", "s", "e", "r", "ret",
+]
+PASSWORD_KEYS = [
+    "t", "e", "s", "t", "p", "a", "s", "s", "ret",
+]
 
 SERIAL_SMOKE_TAGS = RUNIT_TAGS + PREREQ_TAGS + PASS_TAGS + DIAG_TAGS
 
@@ -252,6 +256,32 @@ def run_once(args: argparse.Namespace) -> int:
 
     disk = Path(tempfile.mktemp(prefix="ir0-runit-ash-smoke.", suffix=".img"))
     shutil.copy2(src_disk, disk)
+
+    # Minimal profile disks stop at FIRSTBOOT_PENDING (wizard). Seed a lab
+    # account so getty reaches ash without blocking the smoke gate.
+    seed_path = Path(tempfile.mktemp(prefix="ir0-ash-seed.", suffix=".txt"))
+    try:
+        import crypt
+
+        hashed = crypt.crypt("testpass", crypt.METHOD_SHA512)
+        seed_path.write_text(
+            "username=labuser\n"
+            "hostname=unix\n"
+            f"password_hash={hashed}\n"
+            "wheel=1\n"
+            "lock_root=1\n"
+            "recovery=1\n",
+            encoding="utf-8",
+        )
+        inject = ROOT / "scripts" / "inject_init_minix.py"
+        subprocess.run(
+            [sys.executable, str(inject), str(disk), str(seed_path), "etc/firstboot.seed"],
+            check=True,
+            cwd=ROOT,
+        )
+    finally:
+        seed_path.unlink(missing_ok=True)
+
     monitor = f"tcp:127.0.0.1:{args.monitor_port},server,nowait"
 
     qemu_cmd = [
@@ -279,6 +309,7 @@ def run_once(args: argparse.Namespace) -> int:
     echo_sent_at = 0.0
     echo_retries = 0
     busybox_seen_at = 0.0
+    login_sent = False
     start = time.monotonic()
 
     def inject_echo(*, retry: bool = False) -> bool:
@@ -290,6 +321,17 @@ def run_once(args: argparse.Namespace) -> int:
         except OSError as exc:
             print(f"✗ monitor key injection failed: {exc}")
             print("  classify: A) QEMU monitor sendkey failed")
+            return False
+
+    def inject_login() -> bool:
+        try:
+            time.sleep(0.8)
+            send_keys(args.monitor_port, LOGIN_KEYS)
+            time.sleep(0.5)
+            send_keys(args.monitor_port, PASSWORD_KEYS)
+            return True
+        except OSError as exc:
+            print(f"✗ monitor login injection failed: {exc}")
             return False
 
     try:
@@ -317,6 +359,18 @@ def run_once(args: argparse.Namespace) -> int:
                     f"(SYS_READ_RETURN_OK + ASH_COMMAND_ECHO_OK, {elapsed:.1f}s)"
                 )
                 return 0
+
+            # After seeded firstboot + getty, log in as labuser.
+            if (
+                not login_sent
+                and "GETTY_READY" in text
+                and ("FIRSTBOOT_OK" in text or "login:" in text.lower())
+                and "LOGIN_OK" not in text
+            ):
+                if inject_login():
+                    login_sent = True
+                else:
+                    return 1
 
             if ash_ready_for_input(text, busybox_seen_at, now) and not echo_sent:
                 time.sleep(ECHO_STABILIZE_SEC)

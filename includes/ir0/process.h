@@ -7,14 +7,17 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: process.h
- * Description: Process/task public API facade (implementation in kernel/process.c).
- *              Include as <ir0/process.h>; do not include <kernel/process.h> elsewhere.
+ * Description: Process/task public include. Layout is not fully encapsulated yet.
+ *
+ * Include as <ir0/process.h>. kernel/process.h still publishes process_t
+ * (signals, wait, blocked-syscall resume, creds, timers, stacks, ...).
+ * Domain extraction is in progress (mm_struct, files_struct); new code
+ * should use accessors rather than growing the struct further.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #pragma once
-
 
 #include <kernel/process.h>
 

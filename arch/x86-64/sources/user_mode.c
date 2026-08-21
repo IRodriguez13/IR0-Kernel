@@ -73,7 +73,7 @@ void switch_to_user(arch_addr_t entry, arch_addr_t stack_top)
 #else
     uintptr_t uentry = (uintptr_t)entry;
     uintptr_t ursp = (uintptr_t)stack_top;
-    uint64_t fsbase = current_process ? current_process->fs_base : 0;
+    uint64_t fsbase = current_process ? process_tls_get(current_process) : 0;
 
     /*
      * iretq to user code with user DS/ES; RFLAGS_IF set so device IRQs work.
@@ -217,7 +217,7 @@ uint64_t get_fs_base(void)
 void arch_restore_user_fs_base(void)
 {
 	if (current_process)
-		set_fs_base(current_process->fs_base);
+		set_fs_base(process_tls_get(current_process));
 }
 
 [[maybe_unused]]void syscall_handler_c(void)

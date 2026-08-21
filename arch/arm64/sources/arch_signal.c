@@ -16,6 +16,7 @@
 
 #include <ir0/arch_signal.h>
 #include <ir0/arch_task.h>
+#include <ir0/arch_syscall_frame.h>
 #include <ir0/signals.h>
 #include <stdint.h>
 #include <string.h>
@@ -23,6 +24,55 @@
 uint64_t arch_sigcontext_ip(const struct sigcontext *ctx)
 {
 	return ctx ? ctx->pc : 0;
+}
+
+uint64_t arch_sigcontext_sp(const struct sigcontext *ctx)
+{
+	return ctx ? ctx->sp : 0;
+}
+
+void arch_signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
+						    const struct arch_syscall_frame *sf,
+						    uint64_t retval)
+{
+	if (!ctx || !sf)
+		return;
+
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->regs[0] = retval;
+	ctx->regs[1] = sf->x1;
+	ctx->regs[2] = sf->x2;
+	ctx->regs[3] = sf->x3;
+	ctx->regs[4] = sf->x4;
+	ctx->regs[5] = sf->x5;
+	ctx->regs[6] = sf->x6;
+	ctx->regs[7] = sf->x7;
+	ctx->regs[8] = sf->x8;
+	ctx->regs[9] = sf->x9;
+	ctx->regs[10] = sf->x10;
+	ctx->regs[11] = sf->x11;
+	ctx->regs[12] = sf->x12;
+	ctx->regs[13] = sf->x13;
+	ctx->regs[14] = sf->x14;
+	ctx->regs[15] = sf->x15;
+	ctx->regs[16] = sf->x16;
+	ctx->regs[17] = sf->x17;
+	ctx->regs[18] = sf->x18;
+	ctx->regs[19] = sf->x19;
+	ctx->regs[20] = sf->x20;
+	ctx->regs[21] = sf->x21;
+	ctx->regs[22] = sf->x22;
+	ctx->regs[23] = sf->x23;
+	ctx->regs[24] = sf->x24;
+	ctx->regs[25] = sf->x25;
+	ctx->regs[26] = sf->x26;
+	ctx->regs[27] = sf->x27;
+	ctx->regs[28] = sf->x28;
+	ctx->regs[29] = sf->x29;
+	ctx->regs[30] = sf->x30;
+	ctx->sp = sf->sp;
+	ctx->pc = sf->elr;
+	ctx->pstate = sf->spsr;
 }
 
 void arch_signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,

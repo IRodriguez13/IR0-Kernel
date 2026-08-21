@@ -68,6 +68,8 @@ REQUIRED_FACADES = [
     ROOT / "includes" / "ir0" / "arch_switch.h",
     ROOT / "includes" / "ir0" / "arch_mm.h",
     ROOT / "includes" / "ir0" / "arch_signal.h",
+    ROOT / "includes" / "ir0" / "arch_elf.h",
+    ROOT / "includes" / "ir0" / "arch_syscall_frame.h",
 ]
 
 REQUIRED_ARM64_SCAFFOLD = [
@@ -919,12 +921,13 @@ def check_process_pgd_accessor():
 
 # syscall_user_frame_t fields — portable code uses process_syscall_* accessors.
 SYSCALL_FRAME_FIELD_RE = re.compile(
-    r"syscall_frame\.(rip|rsp|rflags|rdi|rsi|rdx|r10|r8|r9|rbx|rbp|r12|r13|r14|r15)\b"
+    r"syscall_frame\.(rip|rsp|rflags|rdi|rsi|rdx|r10|r8|r9|rbx|rbp|r12|r13|r14|r15|"
+    r"elr|spsr|sp|x0|x1|x2|x3|x4|x5)\b"
 )
 
 SYSCALL_FRAME_ALLOWLIST = {
-    ROOT / "kernel" / "process.h",
-    ROOT / "kernel" / "process" / "core.c",
+    ROOT / "includes" / "ir0" / "arch_syscall_frame_x86_64.h",
+    ROOT / "includes" / "ir0" / "arch_syscall_frame_arm64.h",
 }
 
 

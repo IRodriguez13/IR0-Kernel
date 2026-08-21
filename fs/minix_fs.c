@@ -381,101 +381,93 @@ static minix_inode_t cached_result_inode;
 static bool root_inode_cached = false;
 static uint16_t minix_last_resolved_ino;
 
-minix_inode_t *minix_fs_find_inode(const char *pathname)
+/*
+ * Path walk that copies the inode onto the caller. find_inode() used to
+ * return a pointer to one of two static buffers; a preempted stat() then
+ * filled struct stat from whatever the next walk left there (or from a
+ * second get_inode_number() walk that raced with exec/ls).
+ */
+static int minix_lookup(const char *pathname, minix_inode_t *out, uint16_t *ino_out)
 {
-  // Using typewriter_print for kernel output
-  static minix_inode_t result_inode;
   uint16_t current_inode_num = MINIX_ROOT_INODE;
+  minix_inode_t current_inode;
+  char path_copy[VFS_PATH_MAX];
+  char *token;
+  char *next;
 
   minix_last_resolved_ino = 0;
 
-  if (!pathname || !minix_fs.initialized)
-  {
-    return NULL;
-  }
+  if (!pathname || !out || !ino_out || !minix_fs.initialized)
+    return -EINVAL;
+
   if (kstrcmp(pathname, "/") == 0)
   {
     int read_result = minix_read_inode(MINIX_ROOT_INODE, &cached_root_inode);
-    if (read_result == 0)
+
+    if (read_result != 0)
     {
-      root_inode_cached = true;
-      kmemcpy(&result_inode, &cached_root_inode, sizeof(minix_inode_t));
-      minix_last_resolved_ino = MINIX_ROOT_INODE;
-      return &result_inode;
+      log_debug_fmt("MINIX", "find_inode('/') read failed=%d", read_result);
+      return -EIO;
     }
-    log_debug_fmt("MINIX", "find_inode('/') read failed=%d", read_result);
-    return NULL;
+    root_inode_cached = true;
+    kmemcpy(out, &cached_root_inode, sizeof(*out));
+    *ino_out = MINIX_ROOT_INODE;
+    minix_last_resolved_ino = MINIX_ROOT_INODE;
+    return 0;
   }
 
-  // Parsear el path
-  char path_copy[VFS_PATH_MAX];
   kstrncpy(path_copy, pathname, sizeof(path_copy) - 1);
   path_copy[sizeof(path_copy) - 1] = '\0';
 
-  // Empezar desde el inode raíz
-  minix_inode_t current_inode;
   if (minix_read_inode(MINIX_ROOT_INODE, &current_inode) != 0)
-  {
-    return NULL;
-  }
+    return -EIO;
 
-  // Dividir el path en componentes
-  // Simple tokenizer to replace strtok
-  char *token = path_copy;
+  token = path_copy;
   if (*token == '/')
-    token++; // Skip leading slash
-  
-  // Handle trailing slash or empty path after leading slash
+    token++;
+
   if (*token == '\0')
   {
-     kmemcpy(&cached_result_inode, &current_inode, sizeof(minix_inode_t));
-     minix_last_resolved_ino = current_inode_num;
-     return &cached_result_inode;
+    kmemcpy(out, &current_inode, sizeof(*out));
+    *ino_out = current_inode_num;
+    minix_last_resolved_ino = current_inode_num;
+    return 0;
   }
 
-  char *next = token;
+  next = token;
   while (*next && *next != '/')
     next++;
-  
+
   if (*next == '/')
     *next++ = '\0';
   else
-    next = NULL; // End of string
+    next = NULL;
 
   while (token != NULL && *token != '\0')
   {
-    // Verificar que el inode actual es un directorio
-    if (!(current_inode.i_mode & MINIX_IFDIR))
-    {
-      return NULL;
-    }
+    uint16_t found_inode;
 
-    // Buscar la entrada en el directorio actual
-    uint16_t found_inode = minix_fs_find_dir_entry(&current_inode, token);
+    if (!(current_inode.i_mode & MINIX_IFDIR))
+      return -ENOTDIR;
+
+    found_inode = minix_fs_find_dir_entry(&current_inode, token);
     if (found_inode == 0)
-    {
-      return NULL;
-    }
+      return -ENOENT;
 
     current_inode_num = found_inode;
-
-    // Leer el inode encontrado
     if (minix_read_inode(found_inode, &current_inode) != 0)
-    {
-      return NULL;
-    }
+      return -EIO;
 
-    // Get next token
     if (next)
     {
       token = next;
       while (*next && *next != '/')
         next++;
-      
+
       if (*next == '/')
         *next++ = '\0';
       else
-        next = NULL; // End of string
+        next = NULL;
     }
     else
     {
@@ -483,19 +475,28 @@ minix_inode_t *minix_fs_find_inode(const char *pathname)
     }
   }
 
-  // Retornar una copia estática del inode encontrado
-  kmemcpy(&cached_result_inode, &current_inode, sizeof(minix_inode_t));
+  kmemcpy(out, &current_inode, sizeof(*out));
+  *ino_out = current_inode_num;
   minix_last_resolved_ino = current_inode_num;
+  return 0;
+}
 
+minix_inode_t *minix_fs_find_inode(const char *pathname)
+{
+  if (minix_lookup(pathname, &cached_result_inode, &minix_last_resolved_ino) != 0)
+    return NULL;
   return &cached_result_inode;
 }
 
-// Función auxiliar para obtener el número de inode de un path
 uint16_t minix_fs_get_inode_number(const char *pathname)
 {
-  if (minix_fs_find_inode(pathname))
-    return minix_last_resolved_ino;
-  return 0;
+  minix_inode_t tmp;
+  uint16_t ino;
+
+  if (minix_lookup(pathname, &tmp, &ino) != 0)
+    return 0;
+  kmemcpy(&cached_result_inode, &tmp, sizeof(tmp));
+  return ino;
 }
 
 uint16_t minix_fs_find_dir_entry(const minix_inode_t *dir_inode,
@@ -3091,9 +3092,12 @@ int minix_fs_read_file(const char *path, void **data, size_t *size)
     return -EINVAL;
   }
 
-  // Resolve path once (stat and read share the same lookup semantics).
-  minix_inode_t *inode_ref = minix_fs_find_inode(path);
-  if (!inode_ref)
+  minix_inode_t inode;
+  uint16_t inode_num;
+  int rc;
+
+  rc = minix_lookup(path, &inode, &inode_num);
+  if (rc != 0)
   {
     if (vfs_exec_audit_is_active())
     {
@@ -3101,10 +3105,9 @@ int minix_fs_read_file(const char *path, void **data, size_t *size)
       klog_print(path);
       klog_print(" inode=0\n");
     }
-    return -ENOENT;
+    return rc;
   }
 
-  uint16_t inode_num = minix_last_resolved_ino;
   if (inode_num == 0)
   {
     if (vfs_exec_audit_is_active())
@@ -3124,9 +3127,6 @@ int minix_fs_read_file(const char *path, void **data, size_t *size)
     klog_hex32((uint32_t)inode_num);
     klog_print("\n");
   }
-
-  minix_inode_t inode;
-  kmemcpy(&inode, inode_ref, sizeof(inode));
 
   exec_read_trace_minix_file_begin(path, inode_num, inode.i_mode, inode.i_size);
   exec_read_trace_minix_zones(inode.i_zone);
@@ -3432,6 +3432,7 @@ int minix_fs_stat(const char *pathname, stat_t *buf)
 {
   minix_inode_t inode;
   uint16_t inode_num;
+  int rc;
 
   if (!minix_fs.initialized || !pathname || !buf)
   {
@@ -3442,18 +3443,13 @@ int minix_fs_stat(const char *pathname, stat_t *buf)
     return -EINVAL;
   }
 
-  if (!minix_fs_find_inode(pathname))
+  kmemset(buf, 0, sizeof(*buf));
+  rc = minix_lookup(pathname, &inode, &inode_num);
+  if (rc != 0)
   {
     log_debug_fmt("MINIX", "stat('%s') inode not found", pathname);
-    return -ENOENT;
+    return rc;
   }
-
-  inode_num = minix_fs_get_inode_number(pathname);
-  if (inode_num == 0)
-    return -ENOENT;
-
-  if (minix_read_inode(inode_num, &inode) != 0)
-    return -EIO;
 
   if ((inode.i_mode & MINIX_IFMT) == 0)
   {
@@ -3468,13 +3464,11 @@ int minix_fs_stat(const char *pathname, stat_t *buf)
   buf->st_uid = inode.i_uid;
   buf->st_gid = inode.i_gid;
   buf->st_size = inode.i_size;
+  buf->st_blksize = MINIX_BLOCK_SIZE;
+  buf->st_blocks = (blkcnt_t)(((uint64_t)inode.i_size + 511ULL) / 512ULL);
   buf->st_atime = inode.i_time;
   buf->st_mtime = inode.i_time;
   buf->st_ctime = inode.i_time;
-
-  // Convert MINIX mode to UNIX mode - simplified approach
-  // Since MINIX and UNIX use the same permission bit layout, we can copy
-  // directly
   buf->st_mode = inode.i_mode;
 
   if (kstrcmp(pathname, "/") == 0 && klog_trace_enabled(KLOG_TRACE_VFS_STAT))
@@ -3491,22 +3485,19 @@ int minix_fs_stat(const char *pathname, stat_t *buf)
  */
 int minix_fs_chown(const char *path, uid_t owner, gid_t group)
 {
+  minix_inode_t inode_copy;
+  uint16_t inode_num;
+  int rc;
+
   if (!ir0_current_cred())
     return -ESRCH;
 
-  minix_inode_t *inode = minix_fs_find_inode(path);
-  if (!inode)
-    return -ENOENT;
+  rc = minix_lookup(path, &inode_copy, &inode_num);
+  if (rc != 0)
+    return rc;
 
   if (!ir0_cred_is_root())
     return -EPERM;
-
-  uint16_t inode_num = minix_fs_get_inode_number(path);
-  if (inode_num == 0)
-    return -ENOENT;
-
-  minix_inode_t inode_copy;
-  kmemcpy(&inode_copy, inode, sizeof(minix_inode_t));
 
   if (owner != (uid_t)-1)
     inode_copy.i_uid = (uint16_t)owner;
@@ -3526,27 +3517,22 @@ int minix_fs_chown(const char *path, uid_t owner, gid_t group)
 static int minix_fs_utimens(const char *path, const struct timespec times[2])
 {
   const struct ir0_task_cred *cr = ir0_current_cred();
-  minix_inode_t *inode;
   minix_inode_t inode_copy;
   uint16_t inode_num;
+  int rc;
 
   if (!path)
     return -EINVAL;
   if (!cr)
     return -ESRCH;
 
-  inode = minix_fs_find_inode(path);
-  if (!inode)
-    return -ENOENT;
+  rc = minix_lookup(path, &inode_copy, &inode_num);
+  if (rc != 0)
+    return rc;
 
-  if (!ir0_cred_is_root() && cr->euid != inode->i_uid)
+  if (!ir0_cred_is_root() && cr->euid != inode_copy.i_uid)
     return -EPERM;
 
-  inode_num = minix_fs_get_inode_number(path);
-  if (inode_num == 0)
-    return -ENOENT;
-
-  kmemcpy(&inode_copy, inode, sizeof(minix_inode_t));
   if (times)
     inode_copy.i_time = (uint32_t)times[1].tv_sec;
   else
@@ -3601,7 +3587,6 @@ static int minix_create(const char *path, mode_t mode)
  */
 static int minix_truncate(const char *path, size_t length)
 {
-  minix_inode_t *inode_ptr;
   minix_inode_t inode;
   uint16_t inode_num;
   size_t old_size;
@@ -3613,15 +3598,9 @@ static int minix_truncate(const char *path, size_t length)
   if (length > minix_fs.superblock.s_max_size)
     return -EFBIG;
 
-  inode_ptr = minix_fs_find_inode(path);
-  if (!inode_ptr)
+  if (minix_lookup(path, &inode, &inode_num) != 0)
     return -ENOENT;
 
-  inode_num = minix_fs_get_inode_number(path);
-  if (inode_num == 0)
-    return -ENOENT;
-
-  kmemcpy(&inode, inode_ptr, sizeof(inode));
   if (inode.i_mode & MINIX_IFDIR)
     return -EISDIR;
 
@@ -3737,26 +3716,23 @@ static int minix_fs_readdir(const char *path, struct vfs_dirent *entries, int ma
  */
 static int minix_fs_chmod(const char *path, mode_t mode)
 {
+	minix_inode_t inode;
+	uint16_t inode_num;
+	int rc;
+
 	if (!ir0_current_cred())
 		return -ESRCH;
 
-	minix_inode_t *inode_ptr = minix_fs_find_inode(path);
-	if (!inode_ptr)
-		return -ENOENT;
+	rc = minix_lookup(path, &inode, &inode_num);
+	if (rc != 0)
+		return rc;
 
 	{
 		const struct ir0_task_cred *cr = ir0_current_cred();
 
-		if (!ir0_cred_is_root() && cr->euid != inode_ptr->i_uid)
+		if (!ir0_cred_is_root() && cr->euid != inode.i_uid)
 			return -EPERM;
 	}
-
-	uint16_t inode_num = minix_fs_get_inode_number(path);
-	if (inode_num == 0)
-		return -ENOENT;
-
-	minix_inode_t inode;
-	kmemcpy(&inode, inode_ptr, sizeof(minix_inode_t));
 
 	inode.i_mode = (uint16_t)((inode.i_mode & (uint16_t)~07777) |
 				  ((uint16_t)mode & 07777));

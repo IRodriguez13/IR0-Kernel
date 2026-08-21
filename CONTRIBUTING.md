@@ -70,7 +70,11 @@ Signed-off-by: Iván Ezequiel Rodriguez <ivanrwcm25@gmail.com>
 ```
 
 Tipos: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`.
-Sin trailers de agente (`Co-authored-by: Cursor`, etc.).
+Sin ningún `Co-authored-by:` (ni del agente, ni del mantenedor como
+co-autor). Author y Committer: Iván Ezequiel Rodriguez
+`<ivanrwcm25@gmail.com>`. Los agentes de la nube deben usar
+`python3 scripts/ir0_git_commit.py` (o `git commit-tree`) y no publicar
+si un hook inyectó trailers.
 
 ## 5. Parche
 

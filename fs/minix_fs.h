@@ -162,6 +162,7 @@ int minix_fs_link(const char *oldpath, const char *newpath);
 void minix_fs_cleanup(void);
 
 // Operaciones de inodes
+/* Returns static storage. Copy immediately; prefer a VFS-serialized caller. */
 minix_inode_t *minix_fs_find_inode(const char *pathname);
 uint16_t minix_fs_get_inode_number(const char *pathname);
 int minix_fs_write_inode(uint16_t inode_num, const minix_inode_t *inode);

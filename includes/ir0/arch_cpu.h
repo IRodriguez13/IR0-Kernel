@@ -7,8 +7,8 @@
  * Distributed under the terms of the GNU General Public License v3.0.
  * See the LICENSE file in the project root for full license information.
  *
- * File: arch_portable.h
- * Description: IR0 kernel source/header file
+ * File: arch_cpu.h
+ * Description: Portable CPU/TLS/MM activate facades (x86 FS / ARM TPIDR, CR3/TTBR).
  */
 
 // ===============================================================================
@@ -238,17 +238,16 @@ struct process;
 void first_switch_to(struct process *next);
 
 /*
- * set_fs_base - Set x86-64 FS base (TLS) for the running hardware thread.
- * Used by sys_arch_prctl(ARCH_SET_FS). No-op on non-x86 builds.
+ * set_fs_base - Install the running thread's TLS base.
+ * x86-64: IA32_FS_BASE. ARM64: TPIDR_EL0. Prefer set_tls() from portable code.
  */
 void set_fs_base(uint64_t base);
 
-/* Re-apply current_process->fs_base before sysret / user iretq. */
+/* Re-apply current_process TLS before returning to userspace. */
 void arch_restore_user_fs_base(void);
 
 /*
- * set_tls - Portable TLS base install (x86: FS base; other arch: stub).
- * Prefer this from portable code instead of CPUID/MSR details.
+ * set_tls - Portable TLS base install (x86: FS base; ARM64: TPIDR_EL0).
  */
 static inline void set_tls(uint64_t base)
 {
@@ -325,7 +324,7 @@ uint64_t mm_make_leaf_pte(uintptr_t phys, uint64_t flags12, int exec);
 void mm_pte_set_user(uint64_t *e);
 
 /*
- * get_fs_base - Read x86-64 FS base MSR.
+ * get_fs_base - Read the running thread's TLS base (x86 FS / ARM TPIDR_EL0).
  */
 uint64_t get_fs_base(void);
 

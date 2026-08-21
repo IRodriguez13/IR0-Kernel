@@ -304,21 +304,34 @@ void process_reap_zombies(process_t *parent)
 	process_fase44_list_checkpoint("reap-zombie-after");
 }
 
+static int process_wait_pid_matches_child(pid_t wait_pid,
+					  const process_t *parent,
+					  const process_t *child)
+{
+	if (!parent || !child)
+		return 0;
+	if (wait_pid == (pid_t)-1)
+		return 1;
+	if (wait_pid > 0)
+		return child->task.pid == wait_pid;
+	if (wait_pid == 0)
+		return child->pgid == parent->pgid;
+	return child->pgid == (pid_t)(-wait_pid);
+}
+
 int process_wait_child_matches_blocked_target(const process_t *parent,
 					    pid_t child_pid)
 {
-	pid_t target;
-	int any_child;
+	process_t *child;
 
 	if (!parent || child_pid <= 0 || !parent->wait_blocked)
 		return 0;
 
-	target = parent->wait_target_pid;
-	any_child = (target == (pid_t)-1 || target == 0);
-	if (!any_child && child_pid != target)
+	child = process_find_by_pid(child_pid);
+	if (!child || child->ppid != parent->task.pid)
 		return 0;
-
-	return 1;
+	return process_wait_pid_matches_child(parent->wait_target_pid, parent,
+					      child);
 }
 
 int process_child_wait_status_word(const process_t *child)
@@ -433,16 +446,16 @@ int process_wait(pid_t pid, int *status, int options)
 	process_fase43_proc_audit("wait-before");
 	process_fase44_list_checkpoint("wait-before");
 	/*
-	 * wait4 contract (D1.17):
-	 *   pid > 0  — block until that child is ZOMBIE, then reap only that pid.
-	 *   pid -1/0 — any child of this process (groups not implemented).
-	 *   WNOHANG  — 0 if no matching zombie yet (never ECHILD when children exist).
+	 * wait4 contract (D1.17 / Linux waitpid):
+	 *   pid > 0  — that child.
+	 *   pid -1   — any child of this process.
+	 *   pid  0   — any child in the caller's process group.
+	 *   pid < -1 — any child whose pgid is -pid.
+	 *   WNOHANG  — 0 if no matching zombie yet (never ECHILD when matches exist).
 	 *   ECHILD   — no matching child relationship at all.
 	 * User-mode block stores wait_target_pid; wake/resume must not complete or
 	 * reap a different child (see process_wait_wake_blocked_parent / wait-resume).
 	 */
-	const int any_child = (pid == (pid_t)-1 || pid == 0);
-
 	if (!current_process) {
 		klog_debug("KERN", "[ERROR] process_wait called without current process context\n");
 		return -ESRCH;
@@ -464,7 +477,7 @@ int process_wait(pid_t pid, int *status, int options)
 		for (p = process_list; p; p = p->next) {
 			if (p->ppid != current_process->task.pid)
 				continue;
-			if (!any_child && p->task.pid != pid)
+			if (!process_wait_pid_matches_child(pid, current_process, p))
 				continue;
 
 			found_child = 1;
@@ -591,7 +604,7 @@ int process_wait(pid_t pid, int *status, int options)
 		{
 			if (p->ppid != current_process->task.pid)
 				continue;
-			if (!any_child && p->task.pid != pid)
+			if (!process_wait_pid_matches_child(pid, current_process, p))
 				continue;
 			if (p->state == PROCESS_ZOMBIE)
 			{

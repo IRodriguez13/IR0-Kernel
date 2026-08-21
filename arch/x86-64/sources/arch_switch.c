@@ -174,7 +174,12 @@ static void wait_exit_audit_ctx_resume(process_t *prev_proc, process_t *next_pro
 
 void arch_switch_to(task_t *prev, task_t *next)
 {
-process_t *prev_proc;
+    /*
+     * High-regression area: wait4, irq_frame_saved, syscall_resume_rax,
+     * and kernel_ret vs user-iret. Do not simplify these gates without
+     * wait4 + blocked-syscall coverage.
+     */
+    process_t *prev_proc;
     process_t *next_proc = NULL;
 
     if (next)
@@ -195,6 +200,17 @@ process_t *prev_proc;
     if (prev_proc)
         prev_proc->saved_user_rsp = user_rsp_save;
     arch_set_current_kernel_stack(next_proc);
+
+    /*
+     * IA32_FS_BASE is per-CPU. Child execve / ARCH_SET_FS writes the MSR
+     * while current==child; wait4/pipe kernel_ret and some user-iret
+     * resumes never hit syscall sysret's arch_restore_user_fs_base.
+     * Parent ash then ran with FS=0 and the next TLS store #PF'd at
+     * 0xffffffffffffffe2 (TP + negative TCB offset). Match ARM64:
+     * always install next's saved base before the context switch.
+     */
+    if (next_proc)
+        set_tls(process_tls_get(next_proc));
 
     /*
      * wait4 in progress without a staged child pid: force kernel resume.

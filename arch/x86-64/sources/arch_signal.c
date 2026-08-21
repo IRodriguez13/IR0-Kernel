@@ -14,11 +14,49 @@
 
 #include <ir0/arch_signal.h>
 #include <ir0/arch_task.h>
+#include <ir0/arch_syscall_frame.h>
 #include <ir0/signals.h>
+#include <config.h>
+#include <string.h>
 
 uint64_t arch_sigcontext_ip(const struct sigcontext *ctx)
 {
 	return ctx ? ctx->rip : 0;
+}
+
+uint64_t arch_sigcontext_sp(const struct sigcontext *ctx)
+{
+	return ctx ? ctx->rsp : 0;
+}
+
+void arch_signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
+						    const struct arch_syscall_frame *sf,
+						    uint64_t retval)
+{
+	if (!ctx || !sf)
+		return;
+
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->rip = sf->rip;
+	ctx->rsp = sf->rsp;
+	ctx->rflags = sf->rflags ? sf->rflags : (uint64_t)RFLAGS_IF;
+	ctx->rax = retval;
+	ctx->rdi = sf->rdi;
+	ctx->rsi = sf->rsi;
+	ctx->rdx = sf->rdx;
+	ctx->r10 = sf->r10;
+	ctx->r8 = sf->r8;
+	ctx->r9 = sf->r9;
+	ctx->rbx = sf->rbx;
+	ctx->rbp = sf->rbp;
+	ctx->r12 = sf->r12;
+	ctx->r13 = sf->r13;
+	ctx->r14 = sf->r14;
+	ctx->r15 = sf->r15;
+#if defined(USER_CODE_SEL) && defined(USER_DATA_SEL)
+	ctx->cs = (uint64_t)USER_CODE_SEL;
+	ctx->ss = (uint64_t)USER_DATA_SEL;
+#endif
 }
 
 void arch_signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,

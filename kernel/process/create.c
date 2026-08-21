@@ -14,19 +14,11 @@
 
 #include "process_internal.h"
 
-/* 
- * spawn() - Create a new process (IR0's ONLY process creation method)
- * 
- * IR0 PHILOSOPHY: Total simplicity with explicit mode specification
- * Only spawn() creates processes. No fork(), no clone(), no other methods.
- * Mode must be explicitly specified - no magic address detection.
- * 
- * This avoids fragile heuristics based on memory layout that could:
- * - Break if layout changes
- * - Allow user code to run in kernel mode
- * - Create hard-to-track bugs
- * 
- * process_fork() exists only for POSIX syscall compatibility and uses spawn() internally.
+/*
+ * spawn() creates a new process with an explicit mode (kernel vs user).
+ * POSIX fork()/clone() live in fork.c: they build the child with
+ * fork_process_create() and domain clones (mm, files, ...). They do not
+ * call spawn() internally.
  */
 int process_kernel_stack_alloc(process_t *p)
 {

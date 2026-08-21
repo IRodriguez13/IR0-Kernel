@@ -17,6 +17,7 @@
 #include <ir0/abi/brk_contract.h>
 #include <ir0/paging.h>
 #include <ir0/process.h>
+#include <config.h>
 #include <stdint.h>
 
 #define KTEST_BUSYBOX_INITIAL_BRK 0x453000UL
@@ -73,6 +74,40 @@ void ktest_brk_post_exec(void)
 	KASSERT_EQ((uint64_t)grown, KTEST_BRK_ACROSS_6M);
 	KASSERT(ktest_pte_present(0x600000UL));
 	KASSERT(ktest_pte_user(0x600000UL));
+
+	process_set_heap_start(current_process, saved_start);
+	process_set_heap_end(current_process, saved_end);
+
+	KTEST_END();
+}
+
+void ktest_brk_linux_fail_returns_current(void)
+{
+	uint64_t saved_start;
+	uint64_t saved_end;
+	int64_t cur;
+	int64_t ret;
+
+	KTEST_BEGIN("brk_linux_fail_returns_current");
+
+	saved_start = process_heap_start(current_process);
+	saved_end = process_heap_end(current_process);
+
+	process_set_heap_start(current_process, KTEST_BUSYBOX_INITIAL_BRK);
+	process_set_heap_end(current_process, KTEST_BUSYBOX_INITIAL_BRK);
+
+	cur = sys_brk(NULL);
+	KASSERT_EQ((uint64_t)cur, KTEST_BUSYBOX_INITIAL_BRK);
+
+	/* Below heap_lo: Linux keeps the old break (not -EFAULT). */
+	ret = sys_brk((void *)(KTEST_BUSYBOX_INITIAL_BRK - 1UL));
+	KASSERT_EQ((uint64_t)ret, (uint64_t)cur);
+
+	/* Past USER_HEAP_MAX_SIZE: same contract. */
+	ret = sys_brk((void *)(KTEST_BUSYBOX_INITIAL_BRK + USER_HEAP_MAX_SIZE +
+			       PAGE_SIZE_4KB));
+	KASSERT_EQ((uint64_t)ret, (uint64_t)cur);
+	KASSERT_EQ((uint64_t)sys_brk(NULL), (uint64_t)cur);
 
 	process_set_heap_start(current_process, saved_start);
 	process_set_heap_end(current_process, saved_end);

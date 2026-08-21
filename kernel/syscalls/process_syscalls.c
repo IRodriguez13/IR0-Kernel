@@ -1340,6 +1340,14 @@ int64_t sys_arch_prctl(int code, unsigned long addr)
 
   if (code == ARCH_SET_FS)
   {
+    /*
+     * Linux do_arch_prctl_64: ARCH_SET_FS rejects addr >= TASK_SIZE
+     * (-EPERM). 0 clears the base. A failed mmap/brk (-EROFS == -30)
+     * used as the TLS pointer installed FS=0xffffffffffffffe2; the next
+     * TCB store then #PF'd the session shell at that address.
+     */
+    if (addr != 0 && !is_user_address((void *)(uintptr_t)addr, 1))
+      return -EPERM;
     process_tls_set(current_process, (uint64_t)addr);
     set_tls((uint64_t)addr);
     return 0;

@@ -7,10 +7,10 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: arch_syscall_frame.h
- * Description: ISA hooks for syscall/IRQ user-frame capture (portable core.c).
+ * Description: ISA syscall-frame type + capture/restore hooks for portable core.
  *
- * Storage type: arch_syscall_frame_t in kernel/process.h (legacy alias
- * syscall_user_frame_t). This header only declares ISA capture/restore ops.
+ * Storage: arch_syscall_frame_t is selected from arch_syscall_frame_{x86_64,arm64}.h.
+ * Semantic accessors live with the layout. Decode/fill stays in arch backends.
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -20,6 +20,15 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ir0/task.h>
+
+#if defined(ARCH_ARM64) || defined(__aarch64__)
+#include <ir0/arch_syscall_frame_arm64.h>
+#else
+#include <ir0/arch_syscall_frame_x86_64.h>
+#endif
+
+/* Legacy alias — same type; do not invent a second frame layout. */
+typedef arch_syscall_frame_t syscall_user_frame_t;
 
 struct process;
 

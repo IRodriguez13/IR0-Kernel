@@ -362,9 +362,6 @@ int64_t sys_brk(void *addr)
 		return (int64_t)process_heap_end(current_process);
 	}
 
-	if (!is_user_address(addr, 0))
-		return -EFAULT;
-
 	new_brk = (uintptr_t)addr;
 	current_brk = process_heap_end(current_process);
 	heap_lo = process_heap_start(current_process);
@@ -381,10 +378,14 @@ int64_t sys_brk(void *addr)
 		current_brk = heap_lo;
 	}
 
-	if (new_brk < heap_lo)
-		return -EFAULT;
-	if (new_brk > heap_lo + USER_HEAP_MAX_SIZE)
-		return -EFAULT;
+	/*
+	 * Linux brk(2) never returns -errno. A rejected request keeps the
+	 * current program break so musl's `__syscall(SYS_brk) < end` probe
+	 * sees a real VA instead of -EFAULT.
+	 */
+	if (!is_user_address(addr, 0) || new_brk < heap_lo ||
+	    new_brk > heap_lo + USER_HEAP_MAX_SIZE)
+		return (int64_t)current_brk;
 
 	/* If expanding heap, map only pages past the current break.
 	 * Align start UP: aligning down would remap the partially used

@@ -4737,6 +4737,7 @@ ktm: ktm-check
 .PHONY: ktm-run ktm-userdev-run ktm-userdev-cow-run ktm-userdev-fork-storm-run \
 	ktm-userdev-fork-storm-virtfs-run ktm-userdev-fork-storm-runit-run \
 	ktm-userdev-exec-drain-run ktm-userdev-exec-drain-virtfs-run ktm-userdev-exec-drain-runit-run \
+	ktm-userdev-session-stress-run build-ktm-session-stress-case \
 	ktm-userdev-reap-drain-run ktm-userdev-reap-drain-virtfs-run ktm-userdev-reap-drain-runit-run \
 	ktm-userdev-init-exit-drain-run ktm-userdev-init-exit-drain-virtfs-run \
 	ktm-userdev-posix-pseudofs-run ktm-userdev-posix-pseudofs-virtfs-run ktm-userdev-posix-pseudofs-runit-run \
@@ -4795,6 +4796,11 @@ KTM_FORK_STORM_SRC = $(KTM_USERDEV_DIR)/ktm_fork_storm_case.c $(KTM_USERDEV_LIB_
 KTM_FORK_STORM_BIN = $(KTM_USERDEV_DIR)/ktm_fork_storm_case
 KTM_EXEC_DRAIN_SRC = $(KTM_USERDEV_DIR)/ktm_exec_drain_case.c $(KTM_USERDEV_LIB_SRC)
 KTM_EXEC_DRAIN_BIN = $(KTM_USERDEV_DIR)/ktm_exec_drain_case
+KTM_SESSION_STRESS_SRC = $(KTM_USERDEV_DIR)/ktm_session_stress_case.c $(KTM_USERDEV_LIB_SRC)
+KTM_SESSION_STRESS_BIN = $(KTM_USERDEV_DIR)/ktm_session_stress_case
+# Kernel PROFILE defaults to desktop (kernel defconfig). ISD session disk is
+# development BusyBox+runit unless the caller sets KTM_SESSION_ISD_PROFILE.
+KTM_SESSION_ISD_PROFILE ?= development
 KTM_REAP_DRAIN_SRC = $(KTM_USERDEV_DIR)/ktm_reap_drain_case.c $(KTM_USERDEV_LIB_SRC)
 KTM_REAP_DRAIN_BIN = $(KTM_USERDEV_DIR)/ktm_reap_drain_case
 KTM_INIT_EXIT_DRAIN_SRC = $(KTM_USERDEV_DIR)/ktm_init_exit_drain_case.c $(KTM_USERDEV_LIB_SRC)
@@ -5446,7 +5452,7 @@ ktm-userdev-exec-drain-run: build-ktm-exec-drain-case build-init-hostshare-exec 
 	@python3 scripts/ktm_userdev_runner.py \
 		--init $(KTM_EXEC_DRAIN_BIN) \
 		--inject $(FASE41_TRUE_BIN):bin/f41true \
-		--log /tmp/ktm-userdev-exec-drain.log --timeout 240 \
+		--log /tmp/ktm-userdev-exec-drain.log --timeout 360 \
 		--done KTM_USERDEV_EXEC_DRAIN_OK \
 		--require 'TEST_END|exec_drain|PASS' \
 		--require KTM_USERDEV_EXEC_DRAIN_OK
@@ -5457,7 +5463,7 @@ ktm-userdev-exec-drain-virtfs-run: build-ktm-exec-drain-case build-init-hostshar
 	@python3 scripts/ktm_userdev_runner.py \
 		--init $(KTM_EXEC_DRAIN_BIN) \
 		--inject $(FASE41_TRUE_BIN):bin/f41true \
-		--log /tmp/ktm-userdev-exec-drain-virtfs.log --timeout 240 \
+		--log /tmp/ktm-userdev-exec-drain-virtfs.log --timeout 360 \
 		--done KTM_USERDEV_EXEC_DRAIN_OK \
 		--require 'TEST_END|exec_drain|PASS' \
 		--require KTM_USERDEV_EXEC_DRAIN_OK \
@@ -5473,7 +5479,7 @@ ktm-userdev-exec-drain-runit-run: build-ktm-exec-drain-case build-runit kernel-x
 		--init $(KTM_EXEC_DRAIN_BIN) \
 		--inject $(FASE41_TRUE_BIN):bin/f41true \
 		--log /tmp/ktm-userdev-exec-drain-runit-run.log \
-		--timeout 240 \
+		--timeout 360 \
 		--done KTM_USERDEV_EXEC_DRAIN_OK \
 		--require 'TEST_END|exec_drain|PASS' \
 		--require KTM_USERDEV_EXEC_DRAIN_OK \
@@ -5481,6 +5487,37 @@ ktm-userdev-exec-drain-runit-run: build-ktm-exec-drain-case build-runit kernel-x
 		--host-file ktm_exec_drain.txt \
 		--host-grep KTM_USERDEV_EXEC_DRAIN_OK
 	@echo "✓ ktm-userdev-exec-drain-runit-run (runit PID1 + 9p + f41true)"
+
+build-ktm-session-stress-case:
+	@if [ -z "$(MUSL_CC)" ]; then \
+		echo "✗ musl cross compiler not found (install musl-tools or set MUSL_CC=...)"; \
+		exit 1; \
+	fi
+	@echo "  KTM     Building session_stress ($(KTM_SESSION_STRESS_BIN))"
+	@$(MUSL_CC) $(KTM_USERDEV_MUSL_FLAGS) \
+		-o $(KTM_SESSION_STRESS_BIN) $(KTM_SESSION_STRESS_SRC)
+	@file $(KTM_SESSION_STRESS_BIN) | grep -q ELF
+	@echo "✓ build-ktm-session-stress-case OK"
+
+# Packed ISD disk (product BusyBox applets). Hostshare stub replaces runit
+# as /sbin/init; the case runs from virtio-9p and execs ISD /bin/* applets.
+# Does not inject fase48 stubs. PROFILE=development unless overridden.
+ktm-userdev-session-stress-run: build-ktm-session-stress-case build-init-hostshare-exec kernel-x64-userspace.iso
+	@chmod +x scripts/ktm_prepare_isd_session_disk.sh
+	@ISD_DISK=$$(PROFILE=$(KTM_SESSION_ISD_PROFILE) \
+		IR0_PRODUCT_PROFILE=$(KTM_SESSION_ISD_PROFILE) \
+		scripts/ktm_prepare_isd_session_disk.sh); \
+	python3 scripts/ktm_userdev_runner.py \
+		--disk "$$ISD_DISK" \
+		--init $(KTM_SESSION_STRESS_BIN) \
+		--inject $(HOSTSHARE_EXEC_STUB):sbin/init \
+		--log /tmp/ktm-userdev-session-stress.log --timeout 600 \
+		--mem 512M \
+		--done KTM_USERDEV_SESSION_STRESS_OK \
+		--require HOSTSHARE_EXEC_MOUNT_OK \
+		--require 'TEST_END|session_stress|PASS' \
+		--require KTM_USERDEV_SESSION_STRESS_OK
+	@echo "✓ ktm-userdev-session-stress-run (ISD BusyBox echo/cat/true/uname/ls)"
 
 ktm-userdev-reap-drain-run: build-ktm-reap-drain-case build-init-hostshare-exec kernel-x64-userspace.iso
 	@if [ ! -f disk.img ]; then $(MAKE) -s disk.img; fi

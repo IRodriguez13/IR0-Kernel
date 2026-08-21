@@ -1871,6 +1871,39 @@ smoke-pipeline-stress: build-pipeline-stress-smoke load-userspace-runit kernel-x
 		  grep -E 'PIPELINE_|Segmentation|Oops|PANIC' $(PIPELINE_STRESS_LOG) | tail -40; exit 1; }
 	@echo "✓ smoke-pipeline-stress passed"
 
+CMD_STRESS_SRC = setup/pid1/cmd_stress_smoke.c
+CMD_STRESS_BIN = setup/pid1/cmd_stress_smoke
+CMD_STRESS_LOG = /tmp/ir0-cmd-stress.log
+
+.PHONY: build-cmd-stress-smoke smoke-cmd-stress
+
+build-cmd-stress-smoke: $(CMD_STRESS_SRC)
+	@if [ -z "$(MUSL_CC)" ]; then \
+		echo "✗ musl cross compiler not found (set MUSL_CC=...)"; \
+		exit 1; \
+	fi
+	@echo "  MUSL    Building cmd stress ($(CMD_STRESS_BIN))"
+	@$(MUSL_CC) -static -Os -o $(CMD_STRESS_BIN) $(CMD_STRESS_SRC)
+	@file $(CMD_STRESS_BIN) | grep -q ELF
+	@echo "✓ build-cmd-stress-smoke OK"
+
+smoke-cmd-stress: build-cmd-stress-smoke load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   BusyBox cmd battery (PID1)..."
+	@DISK=$$(mktemp /tmp/ir0-cmd-stress.XXXXXX.img); \
+	cp -f disk.img $$DISK && \
+	python3 scripts/inject_init_minix.py $$DISK $(CMD_STRESS_BIN) sbin/init && \
+	$(SMOKE_QEMU_RUN) --log $(CMD_STRESS_LOG) --timeout 120 --stale-sec 40 \
+		--done CMD_STRESS_OK \
+		--fail-regex 'CMD_STRESS_FAIL|KERNEL PANIC' -- \
+		$(QEMU) -cdrom kernel-x64-userspace.iso \
+		-drive file=$$DISK,format=raw,if=ide,index=0 \
+		-serial stdio -display none -m 256M -no-reboot -net none; \
+	rm -f $$DISK;
+	@grep -q CMD_STRESS_OK $(CMD_STRESS_LOG) || \
+		{ echo "✗ smoke-cmd-stress FAILED"; \
+		  grep -E 'CMD_STRESS_|Segmentation|Oops|PANIC' $(CMD_STRESS_LOG) | tail -40; exit 1; }
+	@echo "✓ smoke-cmd-stress passed"
+
 # Minimal PID 1: fork/execve/wait4 (musl); needs /bin/sh on disk for oleada 2 smoke.
 build-init-minimal:
 	@if [ -z "$(MUSL_CC)" ]; then \

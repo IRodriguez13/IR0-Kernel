@@ -477,35 +477,6 @@ static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
 		arch_syscall_frame_set_arg(&p->syscall_frame, n, v);
 }
 
-static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
-{
-	if (!p)
-		return;
-	switch (n)
-	{
-	case 0:
-		p->syscall_frame.rdi = v;
-		break;
-	case 1:
-		p->syscall_frame.rsi = v;
-		break;
-	case 2:
-		p->syscall_frame.rdx = v;
-		break;
-	case 3:
-		p->syscall_frame.r10 = v;
-		break;
-	case 4:
-		p->syscall_frame.r8 = v;
-		break;
-	case 5:
-		p->syscall_frame.r9 = v;
-		break;
-	default:
-		break;
-	}
-}
-
 void process_capture_syscall_frame(process_t *p);
 void process_capture_syscall_frame_at_entry(uint64_t *frame_base, uint64_t rip_hw);
 void process_apply_syscall_frame_to_task(task_t *task, const syscall_user_frame_t *sf,

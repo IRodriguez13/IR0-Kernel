@@ -28,9 +28,15 @@ int process_signal_is_default_fatal(process_t *p, int sig)
 	 * - SEGV/FPE/ILL/BUS/ABRT — so wait status is WIFSIGNALED (ash
 	 *   prints "Segmentation fault", etc.)
 	 */
+	/*
+	 * SIGPIPE: write(2) to a closed pipe/FIFO (ash pipelines like
+	 * hexdump | head). Without Terminate, BusyBox keeps writing and
+	 * often ends in a userspace SIGSEGV that looks like a session crash.
+	 */
 	if (sig != SIGTERM && sig != SIGHUP && sig != SIGINT && sig != SIGQUIT &&
 	    sig != SIGUSR1 && sig != SIGUSR2 && sig != SIGSEGV && sig != SIGFPE &&
-	    sig != SIGILL && sig != SIGBUS && sig != SIGABRT && sig != SIGALRM)
+	    sig != SIGILL && sig != SIGBUS && sig != SIGABRT && sig != SIGALRM &&
+	    sig != SIGPIPE)
 		return 0;
 	if (p->signal_ignored & SIGNAL_MASK(sig))
 		return 0;

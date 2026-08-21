@@ -504,13 +504,14 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 		entry = *pte;
 		old_phys = (uintptr_t)(entry & PAGE_PTE_PFN_MASK);
 
-		if (pmm_frame_refcount(old_phys) <= 1)
-		{
-			*pte = (entry | PAGE_RW) & ~PAGE_COW;
-			tlb_invalidate_page((uintptr_t)vaddr_aligned);
-			return;
-		}
-
+		/*
+		 * Always copy on PAGE_COW — never promote the shared frame in
+		 * place. A undercounted pmm_frame_get after fork (or a raced
+		 * sibling) would otherwise leave the parent mapped RO+COW to
+		 * the same phys while the child writes through a RW PTE,
+		 * corrupting the parent's .data/.bss (seen as RIP/addr=0 SEGV
+		 * in multi-fork ash/pipeline smokes).
+		 */
 		new_phys = pmm_alloc_frame();
 		if (!new_phys)
 		{

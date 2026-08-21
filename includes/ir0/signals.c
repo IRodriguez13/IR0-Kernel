@@ -544,6 +544,26 @@ void handle_signals(void)
         return;
     }
 
+    /*
+     * SIGPIPE: write(2) to a pipe/FIFO with no readers (Linux signal(7)).
+     * Queued from sys_write; delivered here before returning to ring 3.
+     */
+    if (current->signal_pending & SIGNAL_MASK(SIGPIPE))
+    {
+        if (current->signal_ignored & SIGNAL_MASK(SIGPIPE))
+        {
+            current->signal_pending &= ~SIGNAL_MASK(SIGPIPE);
+        }
+        else if (!signals_has_user_handler(current, SIGPIPE))
+        {
+            current->signal_pending &= ~SIGNAL_MASK(SIGPIPE);
+            current->exit_signal = SIGPIPE;
+            process_exit(0);
+            return;
+        }
+        /* else: fall through to userspace handler delivery below */
+    }
+
     /* SIGCONT - continue if stopped */
     if (current->signal_pending & SIGNAL_MASK(SIGCONT))
     {

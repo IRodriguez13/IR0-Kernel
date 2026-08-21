@@ -1007,7 +1007,13 @@ int copy_process_memory(struct process *parent, struct process *child)
                     flags = page_entry & 0xFFF;
                     flags &= ~PAGE_GLOBAL;
                     flags |= PAGE_USER;
-                    if (was_writable)
+                    /*
+                     * Parent may already be RO+PAGE_COW from an earlier fork
+                     * (ash pipelines: forkshell per pipe stage). Those pages
+                     * must stay COW in the new child — copying them as plain
+                     * RO makes the next write a SIGSEGV (echo | cat).
+                     */
+                    if (was_writable || (page_entry & PAGE_COW))
                     {
                         flags &= ~PAGE_RW;
                         flags |= PAGE_COW;

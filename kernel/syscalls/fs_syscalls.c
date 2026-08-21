@@ -613,13 +613,32 @@ int64_t sys_write(int fd, const void *buf, size_t count)
         return ret;
       }
       if (ret == -EPIPE)
+      {
+	/*
+	 * Linux pipe_write: queue SIGPIPE then return -EPIPE. Deliver via
+	 * handle_signals() here so default Terminate runs before ring-3
+	 * resume (ash pipelines: hexdump | head). Do not call send_signal's
+	 * immediate default-kill from deep in write — that raced Class B /
+	 * wait4 teardown and showed up as userspace SIGSEGV (exit 139).
+	 */
+	if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)) &&
+	    !signals_has_user_handler(current_process, SIGPIPE))
+		current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
+	handle_signals();
         return -EPIPE;
+      }
       if (ret != -EAGAIN)
         return ret;
       if (fd_table[fd].flags & O_NONBLOCK)
         return -EAGAIN;
       if (pipe->readers <= 0)
+      {
+	if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)) &&
+	    !signals_has_user_handler(current_process, SIGPIPE))
+		current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
+	handle_signals();
         return -EPIPE;
+      }
       if (pipe_wait(current_process, pipe, 0) != 0)
         return -EAGAIN;
     }

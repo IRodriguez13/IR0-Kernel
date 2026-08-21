@@ -49,6 +49,7 @@ typedef struct process process_t;
 #define SIGALRM  14   /* Timer signal (from alarm()) */
 #define SIGUSR1  10   /* User-defined signal 1 */
 #define SIGUSR2  12   /* User-defined signal 2 */
+#define SIGPIPE  13   /* Write on a pipe with no readers (Linux signal(7)) */
 #define SIGWINCH 28   /* Window size change (TTY) */
 
 /* Signal bitmask helpers */

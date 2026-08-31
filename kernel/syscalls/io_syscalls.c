@@ -649,16 +649,26 @@ int64_t sys_pause(void)
 
   for (;;)
   {
+    /*
+     * prepare_to_wait: BLOCKED before the pending-signal test, so a
+     * signal racing the sleep cannot be clobbered back to BLOCKED.
+     */
+    process_set_sched_state(current_process, PROCESS_BLOCKED);
     if (signals_pause_should_interrupt(current_process))
     {
+      process_set_sched_state(current_process, PROCESS_READY);
       handle_signals();
       return -EINTR;
     }
 
-    process_set_sched_state(current_process, PROCESS_BLOCKED);
     process_arm_kernel_syscall_sleep(current_process);
     while (current_process->state == PROCESS_BLOCKED)
     {
+      /* Same wait_event ordering as rt_sigsuspend: the condition, not just
+       * the sleep state, ends the wait. Otherwise a signal landing between
+       * the test above and the arm is republished as BLOCKED and lost. */
+      if (signals_pause_should_interrupt(current_process))
+        break;
       ir0_clock_wait_service_runqueue();
       if (current_process->state != PROCESS_BLOCKED)
         break;
@@ -839,23 +849,44 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 	 * process_arm_kernel_syscall_sleep only. Do NOT arm
 	 * process_arm_blocked_syscall_resume(..., 0) — that is wait4/user-iret
 	 * and triggers x86-only arch_switch rax==0 special-casing.
+	 *
+	 * Lost-wakeup (Linux wait_event / prepare_to_wait): set BLOCKED
+	 * (TASK_INTERRUPTIBLE) *before* re-checking the pipe condition, then
+	 * schedule. A wake that races after the first emptiness check but
+	 * before sleep either (a) satisfies the re-check and we clear BLOCKED,
+	 * or (b) sets READY so schedule returns without sleeping forever.
+	 * Refs: LWN prepare_to_wait; Linux pipe_wait_readable + wait_event;
+	 * commit 472e5b0 (pipe: remove pipe_wait and fix wakeup race).
+	 *
+	 * Do NOT busy-retry on PROCESS_READY without scheduling — that starves
+	 * the peer that must close / write.
 	 */
 	for (;;)
 	{
+		/* prepare_to_wait: TASK_INTERRUPTIBLE before condition check */
+		process_set_sched_state(proc, PROCESS_BLOCKED);
+
 		if (waiting_read)
 		{
 			if (pipe->count > 0 || pipe->writers <= 0)
+			{
+				process_set_sched_state(proc, PROCESS_READY);
 				break;
+			}
 		}
 		else
 		{
 			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
+			{
+				process_set_sched_state(proc, PROCESS_READY);
 				break;
+			}
 		}
 
+		/* Arm only when we will schedule (finish_wait clears via restore). */
 		if (proc->mode == USER_MODE)
 			process_arm_kernel_syscall_sleep(proc);
-		process_set_sched_state(proc, PROCESS_BLOCKED);
+
 		enable_interrupts();
 		sched_schedule_next();
 
@@ -900,6 +931,9 @@ void pipe_wake_all(pipe_t *pipe)
 				/*
 				 * In-syscall resume only (matches tty wake). Do not
 				 * stage a user read here — conflicts with kernel sleep.
+				 * Clear the waiter slot here; pipe_wait rechecks the
+				 * pipe condition after setting BLOCKED so a close that
+				 * raced the emptiness check still completes (EOF).
 				 */
 				proc = w->proc;
 				if (proc->mode == USER_MODE)
@@ -1677,18 +1711,13 @@ static int64_t sys_pipe_install(int pipefd[2], int flags)
     return -ENOMEM;
 
   fd_table = get_process_fd_table();
-  for (int i = 3; i < MAX_FDS_PER_PROCESS; i++)
+  read_fd = fd_alloc_lowest(fd_table, 3);
+  if (read_fd >= 0)
   {
-    if (!fd_table[i].in_use)
-    {
-      if (read_fd == -1)
-        read_fd = i;
-      else if (write_fd == -1)
-      {
-        write_fd = i;
-        break;
-      }
-    }
+    /* Reserve the read end before scanning so both ends differ. */
+    fd_table[read_fd].in_use = 1;
+    write_fd = fd_alloc_lowest(fd_table, read_fd + 1);
+    fd_table[read_fd].in_use = 0;
   }
 
   if (read_fd == -1 || write_fd == -1)

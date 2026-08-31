@@ -7,7 +7,7 @@
  * See the LICENSE file in the project root for full license information.
  *
  * File: ktm_ctx_snapshot.c
- * Description: IR0 kernel source — ktm ctx snapshot
+ * Description: Process context dump for fault classification
  */
 
 /* SPDX-License-Identifier: GPL-3.0-only */
@@ -25,23 +25,24 @@ void ktm_ctx_snapshot(const process_t *p, const char *reason)
 		return;
 	}
 
+	/*
+	 * Split in two records on purpose: klog_*_fmt silently drops arguments
+	 * past the eighth, and the single 12-argument call this replaced
+	 * printed the tail fields as garbage.
+	 */
 	klog_debug_fmt("KTM",
-		       "[KTM][CTX] reason=%s pid=%x comm=%s state=%llx irq_saved=%llx poll_waiter=%llx poll_resume_arch=%llx wait_status_ptr=%llx rip=%llx rsp=%llx cs=%llx cr3=%llx",
+		       "[KTM][CTX] reason=%s pid=%x comm=%s state=%llx irq_saved=%llx",
 		       reason ? reason : "(null)",
 		       (unsigned)(uint32_t)p->task.pid,
 		       p->comm[0] ? p->comm : "(none)",
 		       (unsigned long long)(uint64_t)p->state,
-		       (unsigned long long)(uint64_t)p->irq_frame_saved,
-		       (unsigned long long)(uint64_t)(uintptr_t)p->poll_waiter,
-		       (unsigned long long)(uint64_t)p->poll_resume_via_arch,
-		       (unsigned long long)(uint64_t)(uintptr_t)p->wait_status_ptr,
+		       (unsigned long long)(uint64_t)p->irq_frame_saved);
+	klog_debug_fmt("KTM",
+		       "[KTM][CTX] pid=%x rip=%llx rsp=%llx cs=%llx cr3=%llx poll=%llx",
+		       (unsigned)(uint32_t)p->task.pid,
 		       (unsigned long long)p->task.arch.rip,
 		       (unsigned long long)p->task.arch.rsp,
 		       (unsigned long long)(uint64_t)p->task.arch.cs,
-		       (unsigned long long)process_mm_root(p));
-}
-
-void ktm_panic_class_emit(const char *klass)
-{
-	klog_debug_fmt("KTM", "[KTM][PANIC_CLASS] %s", klass ? klass : "UNKNOWN");
+		       (unsigned long long)process_mm_root(p),
+		       (unsigned long long)(uint64_t)(uintptr_t)p->poll_waiter);
 }

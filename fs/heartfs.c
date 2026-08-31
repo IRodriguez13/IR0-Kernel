@@ -92,6 +92,7 @@ static int heart_static_stat(void *ctx, stat_t *st)
     st->st_mode = S_IFREG | 0444;
     st->st_nlink = 1;
     st->st_size = text ? (off_t)strlen(text) : 0;
+    pseudo_fs_stat_now(st);
     return 0;
 }
 
@@ -136,6 +137,7 @@ static int heart_src_stat(void *ctx, stat_t *st)
     st->st_mode = S_IFREG | 0444;
     st->st_nlink = 1;
     st->st_size = file ? (off_t)file->size : 0;
+    pseudo_fs_stat_now(st);
     return 0;
 }
 

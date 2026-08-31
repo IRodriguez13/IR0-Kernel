@@ -29,7 +29,21 @@ typedef struct virtio_9p_dirent
 	uint8_t type; /* DT_DIR=4, DT_REG=8 */
 } virtio_9p_dirent_t;
 
+/* Subset of Rstatfs that df needs; fsid is skipped. */
+struct virtio_9p_statfs
+{
+	uint32_t type;
+	uint32_t bsize;
+	uint64_t blocks;
+	uint64_t bfree;
+	uint64_t bavail;
+	uint64_t files;
+	uint64_t ffree;
+	uint32_t namelen;
+};
+
 int virtio_9p_init(void);
+int virtio_9p_statfs(struct virtio_9p_statfs *out);
 int virtio_9p_ready(void);
 int virtio_9p_stat_file(const char *relpath, uint64_t *size_out, uint32_t *mode_out);
 int virtio_9p_write_file(const char *relpath, const void *buf, size_t len);

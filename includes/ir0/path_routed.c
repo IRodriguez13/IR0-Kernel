@@ -8,6 +8,7 @@
 #include <ir0/devfs.h>
 #include <ir0/errno.h>
 #include <ir0/named_fifo.h>
+#include <ir0/named_devnode.h>
 #include <ir0/named_symlink.h>
 #include <ir0/permissions.h>
 #include <ir0/procfs.h>
@@ -68,6 +69,13 @@ int ir0_stat_path_routed(const char *path, stat_t *st)
 
     /* In-memory runsv FIFOs (mknod S_IFIFO) are not VFS nodes. */
     rc = named_fifo_stat(path, st);
+    if (rc == 0)
+        return 0;
+    if (rc != -ENOENT)
+        return rc;
+
+    /* Likewise for mknod device nodes created outside /dev. */
+    rc = named_devnode_stat(path, st);
     if (rc == 0)
         return 0;
     if (rc != -ENOENT)

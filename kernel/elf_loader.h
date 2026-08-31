@@ -58,6 +58,11 @@ int kexecve(const char *path, char *const argv[], char *const envp[]);
 /**
  * exec_replace_current - Reload ELF into current user process (same PID).
  * Does not return on success.
+ *
+ * Ownership: on the success path the callee releases @argv and @envp with
+ * kfree() before entering the new image, because the caller never regains
+ * control to do it. They must therefore be kmalloc'd, NULL-terminated
+ * vectors. On failure the vectors are untouched and the caller frees them.
  */
 int exec_replace_current(const char *path, char *const argv[], char *const envp[]);
 

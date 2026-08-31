@@ -17,6 +17,7 @@
 #include <ir0/vga.h>
 #include <ir0/signals.h>
 #include <ir0/oops.h>
+#include <ir0/ktm/stack_watch.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/debug_trap.h>
 #include <kernel/process.h>
@@ -185,9 +186,28 @@ static int is_user_exception_frame(uint64_t *stack)
     return ((stack[3] & 0x3U) == 0x3U);
 }
 
-/* Handler de interrupciones para 64-bit */
+static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack);
+
+/*
+ * Handler de interrupciones para 64-bit.
+ *
+ * Interrupts run on the kernel stack of whatever task they preempt, and IR0
+ * has no separate IRQ stack. Nesting therefore costs stack that the
+ * interrupted chain already spent, which is how a #DF landed with RSP inside
+ * the guard page during heavy 9p traffic. The wrapper measures both: how
+ * deep the interrupted code was, and how many interrupts are stacked on top.
+ */
 void isr_handler64(uint64_t interrupt_number, uint64_t *stack)
 {
+    ktm_stack_watch((uint64_t)(uintptr_t)&interrupt_number);
+    ktm_irq_nest_enter();
+    isr_handler64_dispatch(interrupt_number, stack);
+    ktm_irq_nest_exit();
+}
+
+static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
+{
+
 #if defined(__x86_64__) || defined(__amd64__)
     if (interrupt_number == 1 && stack)
     {

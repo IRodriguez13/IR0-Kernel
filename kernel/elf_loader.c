@@ -30,12 +30,14 @@
 #include <ir0/oops.h>
 #include <ir0/arch_port.h>
 #include <ir0/signals.h>
+#include <ir0/ktm/user_canary.h>
 #include <ir0/console.h>
 #include <ir0/arch_cpu.h>
 #include <ir0/chmod.h>
 #include <ir0/credentials.h>
 #include <ir0/permissions.h>
 #include <config.h>
+#include <ir0/ktm/fault.h>
 #include <errno.h>
 
 /* Compiler optimization hints */
@@ -273,6 +275,14 @@ static uint64_t elf_compute_initial_brk(const elf64_header_t *header, const uint
 		if (end > brk)
 			brk = end;
 	}
+	/*
+	 * Initial break is the first page after the last PT_LOAD (Linux).
+	 * Do not jump to USER_HEAP_BASE: that leaves a multi‑hundred‑MiB hole
+	 * between &_end and the break which musl/BusyBox may touch as heap
+	 * without a brk/mmap (present=1 SEGV on supervisor identity, e.g.
+	 * addr=0x1020000 in hexdump|head). Growth through the identity window
+	 * is handled by map_page split_huge + COW (see page_fault).
+	 */
 	return brk;
 }
 
@@ -456,6 +466,7 @@ static void elf_dummy_entry(void)
 /* Create a new process for the ELF program */
 static process_t *elf_create_process(elf64_header_t *header, const char *path)
 {
+    const char *full_path = path;
 
     klog_debug_fmt("ELF", "SERIAL: ELF: Creating process for %s with entry point 0x%x", path, (unsigned)((uint32_t)header->e_entry));
 
@@ -480,6 +491,12 @@ static process_t *elf_create_process(elf64_header_t *header, const char *path)
 
     /* Find the created process */
     process_t *process = process_find_by_pid(pid);
+    if (process)
+    {
+        /* spawn_user only carries the basename; /proc/<pid>/exe needs the path. */
+        strncpy(process->exe_path, full_path, sizeof(process->exe_path) - 1);
+        process->exe_path[sizeof(process->exe_path) - 1] = '\0';
+    }
     if (!process)
     {
         klog_debug("ELF", "SERIAL: ELF: Failed to find created process\n");
@@ -779,6 +796,14 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
         }
     }
 
+    /*
+     * The image is laid out below stack_top with 16 bytes of slack left over
+     * (the +16 in stack_size, plus whatever the 16-byte align-down of
+     * stack_base adds). Stamp it so an overwrite is caught where it happens
+     * instead of surfacing later as a bad length or a stale pointer.
+     */
+    ktm_user_canary_install(pml4, stack_top, (uint32_t)process->task.pid);
+
     task_set_sp(&process->task, argc_slot);
     arch_task_set_frame_pointer(&process->task, argc_slot);
 
@@ -838,8 +863,12 @@ int kexecve(const char *path, char *const argv[], char *const envp[])
     /* Step 1: Read the ELF file from filesystem */
     void *file_data = NULL;
     size_t file_size = 0;
-
-    int result = vfs_read_file(path, &file_data, &file_size);
+    int result;
+    process_t *process;
+    elf64_header_t *header;
+    uint64_t at_phdr;
+    uint64_t at_base;
+    result = vfs_read_file(path, &file_data, &file_size);
     if (result != 0 || !file_data)
     {
         klog_debug("ELF", "SERIAL: ELF: ERROR - Failed to read file from filesystem\n");
@@ -856,13 +885,11 @@ int kexecve(const char *path, char *const argv[], char *const envp[])
         return -1;
     }
 
-    elf64_header_t *header = (elf64_header_t *)file_data;
-    uint64_t at_phdr;
-    uint64_t at_base;
+    header = (elf64_header_t *)file_data;
     klog_debug("ELF", "SERIAL: ELF: Header validation passed\n");
 
     /* Step 3: Create process first */
-    process_t *process = elf_create_process(header, path);
+    process = elf_create_process(header, path);
     if (!process)
     {
         klog_debug("ELF", "SERIAL: ELF: ERROR - Failed to create process\n");
@@ -1062,7 +1089,20 @@ struct exec_setid
  */
 static int exec_permission_denied(const process_t *proc, const char *path)
 {
+	stat_t st;
+
 	if (!proc || proc->euid == ROOT_UID)
+		return 0;
+
+	/*
+	 * Linux resolves the path before judging permission (do_open_execat):
+	 * a missing file is -ENOENT, and -EACCES is reserved for one that
+	 * exists without the exec bit. Answering "denied" for both turned every
+	 * miss of a shell PATH walk into a permission refusal — a plain
+	 * `mount` typed by a non-root user logged EACCES for
+	 * /home/labuser/mount before reaching the real binary.
+	 */
+	if (vfs_stat(path, &st) != 0)
 		return 0;
 
 	return ir0_check_file_access(path, ACCESS_EXEC) ? 0 : 1;
@@ -1143,6 +1183,23 @@ static void exec_fail_kill(process_t *proc, int code, const char *point)
 	process_exit(code);
 }
 
+/*
+ * Release the caller's kernel copies of an argv/envp vector.
+ *
+ * Only valid for vectors built by sys_exec (kmalloc'd strings, NULL
+ * terminated): kfree() panics on a pointer outside the heap.
+ */
+static void exec_release_string_vector(char *const vec[])
+{
+	int i;
+
+	if (!vec)
+		return;
+
+	for (i = 0; i < 256 && vec[i]; i++)
+		kfree((void *)(uintptr_t)vec[i]);
+}
+
 int exec_replace_current(const char *path, char *const argv[], char *const envp[])
 {
     process_t *proc = current_process;
@@ -1202,6 +1259,20 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
         return -EACCES;
     }
 
+    /*
+     * Image read is the largest single kernel allocation in the system (the
+     * whole binary; ~1.8 MiB for busybox-full), so it is the first thing to
+     * fail when the heap fragments. That failure mode shipped undetected
+     * once already — exec started returning -ENOMEM after a few hundred
+     * spawns — because nothing exercised this branch.
+     */
+    if (KTM_FAULT_HIT("exec.read_file"))
+    {
+        exec_commit_emit("return-read-fault", -ENOMEM, proc,
+                         "EXEC_ABORT_BEFORE_COMMIT");
+        return -ENOMEM;
+    }
+
     vfs_exec_audit_begin(path);
     {
         int vfs_ret = vfs_read_file(path, &file_data, &file_size);
@@ -1259,12 +1330,19 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
         exec_commit_ctx.unmapped = 1;
     }
 
-    while (process_mmap_list(proc))
     {
-        struct mmap_region *next = process_mmap_list(proc)->next;
+        unsigned freed = 0;
 
-        kfree(process_mmap_list(proc));
-        process_mm_set_mmap_list(proc, next);
+        while (process_mmap_list(proc))
+        {
+            struct mmap_region *next = process_mmap_list(proc)->next;
+
+            kfree(process_mmap_list(proc));
+            process_mm_set_mmap_list(proc, next);
+            freed++;
+        }
+        klog_debug_fmt("EXEC", "vma teardown pid=%x freed=%x\n",
+                       (unsigned)((uint32_t)proc->task.pid), freed);
     }
 
     process_set_heap_start(proc, 0);
@@ -1325,13 +1403,22 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     basename = last_slash;
     strncpy(proc->comm, basename, sizeof(proc->comm) - 1);
     proc->comm[sizeof(proc->comm) - 1] = '\0';
+    /* @path is already absolute here (sys_exec resolved it). */
+    strncpy(proc->exe_path, path, sizeof(proc->exe_path) - 1);
+    proc->exe_path[sizeof(proc->exe_path) - 1] = '\0';
 
     task_set_ip(&proc->task, header->e_entry);
     exec_commit_ctx.entry_rip = header->e_entry;
     arch_task_set_user_segments(&proc->task);
     task_set_flags(&proc->task, ir0_rflags_sanitize_user(RFLAGS_IF));
 
-    if (elf_setup_stack(proc, argv, envp, header, at_phdr, at_base,
+    /*
+     * Past the point of no return: the old image is already gone, so this
+     * exercises the kill path rather than a rollback. What must hold is that
+     * the dead process leaves no frames, no VMAs and no fd behind.
+     */
+    if (KTM_FAULT_HIT("exec.setup_stack") ||
+        elf_setup_stack(proc, argv, envp, header, at_phdr, at_base,
                         "exec_replace_current", path) != 0)
     {
         kfree(file_data);
@@ -1365,6 +1452,19 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     ir0_console_reset_cooked_echo();
     elf_trace_argv_contract(proc, path, "before-iret");
     elf_trace_entry_stack_layout(proc, header, at_phdr, at_base, "before-userswitch");
+
+    /*
+     * Point of no return. switch_to_user() never comes back, so the caller's
+     * own cleanup after exec_replace_current() only runs when exec fails: on
+     * success every argv/envp copy leaked. Each was a few hundred bytes, five
+     * or so per execve, scattered across the heap — after ~277 execs the
+     * 24 MiB heap was 90% free but its largest hole was under 2 MiB and exec
+     * itself started failing with -ENOMEM. The strings have already been
+     * written to the new user stack here. Linux frees the bprm the same way
+     * before entering the image (fs/exec.c).
+     */
+    exec_release_string_vector(argv);
+    exec_release_string_vector(envp);
 
     exec_commit_emit("before-userswitch", 0, proc, "EXEC_COMMIT_OK");
     switch_to_user((arch_addr_t)task_get_ip(&proc->task), (arch_addr_t)task_get_sp(&proc->task));

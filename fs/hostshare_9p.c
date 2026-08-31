@@ -7,6 +7,7 @@
  * Description: VFS fstype "9p" backed by virtio-9p (QEMU -virtfs host share).
  */
 
+#include <ir0/kmem.h>
 #include "vfs.h"
 #include <ir0/errno.h>
 #include <ir0/virtio_9p.h>
@@ -183,16 +184,28 @@ static int hs_truncate(const char *path, size_t length)
 static int hs_readdir(const char *path, struct vfs_dirent *entries, int max)
 {
 	const char *rel = rel_of(path);
-	virtio_9p_dirent_t buf[64];
+	/*
+	 * On the stack this array made the frame 4 KiB, on a getdents chain
+	 * that already spent most of the kernel stack before reaching 9p.
+	 */
+	virtio_9p_dirent_t *buf;
 	int n;
 	int i;
 	int out = 0;
 
 	if (!rel || !entries || max <= 0)
 		return -EINVAL;
+
+	buf = kmalloc_try(sizeof(*buf) * 64);
+	if (!buf)
+		return -ENOMEM;
+
 	n = virtio_9p_readdir(rel, buf, 64);
 	if (n < 0)
+	{
+		kfree(buf);
 		return n;
+	}
 	for (i = 0; i < n && out < max; i++)
 	{
 		strncpy(entries[out].name, buf[i].name, sizeof(entries[out].name) - 1);
@@ -200,6 +213,7 @@ static int hs_readdir(const char *path, struct vfs_dirent *entries, int max)
 		entries[out].type = buf[i].type;
 		out++;
 	}
+	kfree(buf);
 	return out;
 }
 

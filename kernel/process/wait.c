@@ -436,6 +436,23 @@ void process_reap_zombie_on_wait_resume(process_t *parent, pid_t child_pid)
 	paging_ir0_mm_checkpoint("wait-resume-after", (int32_t)parent->task.pid);
 }
 
+/* First zombie child of @parent matching the wait4 @pid selector, or NULL. */
+static process_t *wait_find_matching_zombie(process_t *parent, pid_t pid)
+{
+	process_t *p;
+
+	for (p = process_list; p; p = p->next)
+	{
+		if (p->ppid != parent->task.pid)
+			continue;
+		if (!process_wait_pid_matches_child(pid, parent, p))
+			continue;
+		if (p->state == PROCESS_ZOMBIE)
+			return p;
+	}
+	return NULL;
+}
+
 int process_wait(pid_t pid, int *status, int options)
 {
 	process_t *p;
@@ -612,21 +629,40 @@ int process_wait(pid_t pid, int *status, int options)
 				break;
 			}
 		}
+		/*
+		 * prepare_to_wait (Linux kernel/sched/wait.c): publish BLOCKED
+		 * under the same irq-save that process_wait_wake_blocked_parent
+		 * takes, before releasing it. Marking BLOCKED after the restore
+		 * left a window where a child exit set READY and this store
+		 * clobbered it back to BLOCKED — wait4 then slept with a zombie
+		 * already reaped (pipeline completes, shell never returns).
+		 */
+		if (!zombie)
+			process_set_sched_state(current_process, PROCESS_BLOCKED);
 		process_irq_restore(irq_flags);
 		if (zombie)
 			continue;
 
-		/*
-		 * Child exit may have woken us after irq_restore; do not clobber
-		 * READY with BLOCKED (missed wake → stuck with a zombie).
-		 */
-		if (current_process->state == PROCESS_READY)
-			continue;
-
-
-		process_set_sched_state(current_process, PROCESS_BLOCKED);
 		while (current_process->state == PROCESS_BLOCKED)
 		{
+			/*
+			 * wait_event ordering: a child exiting between the
+			 * scan above and process_arm_kernel_syscall_sleep()
+			 * sets READY, which the arm then republishes as
+			 * BLOCKED. Watching only the state left the shell
+			 * asleep with its pipeline stages already zombies.
+			 */
+			if (wait_find_matching_zombie(current_process, pid))
+			{
+				/*
+				 * Unlike the sigsuspend/pause loops, the reap
+				 * path here does not republish READY, so the
+				 * caller would return still marked BLOCKED.
+				 */
+				process_set_sched_state(current_process,
+							PROCESS_READY);
+				break;
+			}
 			ir0_clock_wait_service_runqueue();
 			if (current_process->state != PROCESS_BLOCKED)
 				break;

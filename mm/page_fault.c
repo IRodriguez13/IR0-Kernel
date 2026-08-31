@@ -25,6 +25,9 @@
 #include <ir0/signals.h>
 #include <ir0/copy_user.h>
 #include <ir0/ktm/klog.h>
+#include <ir0/ktm/event.h>
+#include <ir0/ktm/deferred.h>
+#include <ir0/ktm/user_canary.h>
 #include <ir0/arch_page_fault.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ktm.h>
@@ -33,19 +36,30 @@
 
 #define PF_USER_SPACE_START 0x00400000UL
 #define PF_USER_SPACE_END   0x00007FFFFFFFFFFFUL
+/* Supervisor 2MiB identity under process CR3 (create_process_page_directory). */
+#define PF_IDENTITY_USER_FLOOR 0x00600000UL
 
 static int pf_addr_in_heap(process_t *p, uint64_t fa)
 {
 	uint64_t heap_lo;
+	uint64_t heap_hi;
 
 	if (!p)
 		return 0;
 
 	heap_lo = (uint64_t)process_heap_start(p);
+	heap_hi = (uint64_t)process_heap_end(p);
+	if (heap_hi <= heap_lo)
+		return 0;
+	/*
+	 * heap_start==0 with a live brk end: do NOT snap to USER_HEAP_BASE
+	 * (0x20000000) — that excluded the low brk image and skipped identity
+	 * promote (write-fault no-COW pte=…063 !USER at ~0x9fb000).
+	 */
 	if (heap_lo == 0)
-		heap_lo = USER_HEAP_BASE;
+		heap_lo = PF_USER_SPACE_START;
 
-	return (fa >= heap_lo && fa < (uint64_t)process_heap_end(p));
+	return (fa >= heap_lo && fa < heap_hi);
 }
 
 static int pf_addr_in_stack(process_t *p, uint64_t fa)
@@ -72,12 +86,37 @@ static struct mmap_region *pf_mmap_region_for(process_t *p, uint64_t fa)
 	return NULL;
 }
 
+/*
+ * Linux do_anonymous_page only inside a VMA. IR0 also sees present+!USER
+ * identity leaves after a 2MiB PDE split (sibling slots stay PA==VA).
+ */
+static int pf_addr_may_promote_identity(process_t *p, uint64_t fa)
+{
+	uint64_t heap_hi;
+
+	if (!p)
+		return 0;
+	if (pf_addr_in_heap(p, fa) || pf_addr_in_stack(p, fa) ||
+	    pf_mmap_region_for(p, fa) != NULL)
+		return 1;
+	/*
+	 * Brk cursor may lag heap_start bookkeeping; identity below heap_end
+	 * in the supervisor window is still a heap hole (Linux pte_none).
+	 */
+	heap_hi = (uint64_t)process_heap_end(p);
+	if (heap_hi > PF_IDENTITY_USER_FLOOR &&
+	    fa >= PF_IDENTITY_USER_FLOOR && fa < heap_hi &&
+	    fa < (uint64_t)USER_MMAP_START)
+		return 1;
+	return 0;
+}
+
 static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
 			 const struct arch_page_fault_info *info);
 
 /*
- * Linux do_anonymous_page: demand-zero a 4 KiB user leaf.
- * Heap, stack, and anonymous mmap VMAs share this path.
+ * Linux do_anonymous_page (mm/memory.c): install a private zeroed USER leaf.
+ * Heap, stack, and anonymous mmap VMAs share this path for !present faults.
  */
 static void pf_demand_zero_page(process_t *current, uint64_t fault_addr,
 				uint64_t map_flags, uint64_t *stack,
@@ -102,7 +141,34 @@ static void pf_demand_zero_page(process_t *current, uint64_t fault_addr,
 		return;
 	}
 
-	memset((void *)(uintptr_t)phys_addr, 0, 0x1000);
+	paging_zero_phys_page(phys_addr);
+}
+
+/*
+ * IR0 artifact: process CR3 keeps supervisor 2MiB identity for PMM access.
+ * After fork, heap/stack holes remain present+!USER (Linux would be pte_none).
+ * Treat as do_anonymous_page — never memcpy identity (PMM garbage → musl abort).
+ * Refs: Linux do_anonymous_page; Gorman ch.4 demand paging.
+ *
+ * Returns 0 on success, -1 on OOM / map failure (caller delivers SEGV).
+ */
+static int pf_identity_to_anon_zero(process_t *current, uint64_t vaddr_aligned,
+				    uint64_t map_flags)
+{
+	uintptr_t new_phys;
+
+	new_phys = pmm_alloc_frame();
+	if (!new_phys)
+		return -1;
+	paging_zero_phys_page(new_phys);
+	if (map_page_in_directory(process_pgd(current), vaddr_aligned, new_phys,
+				  map_flags) != 0)
+	{
+		pmm_free_frame(new_phys);
+		return -1;
+	}
+	tlb_invalidate_page((uintptr_t)vaddr_aligned);
+	return 0;
 }
 
 #if DEBUG_D1_DIAG
@@ -353,18 +419,101 @@ static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
 		panic("[PF] userspace fault without process");
 
 	/*
+	 * Unhandled segv: the process is already dead, so the ring is worth
+	 * more on serial than in memory. Dumping here means every smoke gets
+	 * the history leading to a crash without wiring the ioctl itself —
+	 * the host-side harness only reads serial and cannot ask for it.
+	 * Reached only when no SIGSEGV handler took the fault above.
+	 *
+	 * MM belongs in the mask: the deferred page-fault rows are the fault
+	 * history for this crash, and filtering to IPC|SCHED dropped exactly
+	 * them, leaving scheduler churn and no faults.
+	 */
+	/*
+	 * Name the failure when the address sits in the page just above the
+	 * stack: "segv at 7ffff000" reads as a wild pointer, but it is the
+	 * first address past USER_STACK_TOP and means something walked off the
+	 * top of the initial argv/envp image.
+	 */
+	if (fault_addr >= (uint64_t)USER_STACK_TOP &&
+	    fault_addr < (uint64_t)USER_STACK_TOP + PAGE_SIZE_4KB)
+		klog_notice_fmt("PF",
+				"[PF] STACK_TOP_OVERRUN pid=%x addr=%llx rip=%llx write=%llx off=%llx\n",
+				(unsigned)((uint32_t)p->task.pid),
+				(unsigned long long)fault_addr,
+				(unsigned long long)(info ? (unsigned long long)info->ip : 0ULL),
+				(unsigned long long)(info && info->write ? 1 : 0),
+				(unsigned long long)(fault_addr - (uint64_t)USER_STACK_TOP));
+
+	ktm_user_canary_check(process_pgd(p), (uint64_t)USER_STACK_TOP,
+			      (uint32_t)p->task.pid, "segv");
+
+	ktm_event_ring_dump(48, (1u << KTM_SUBSYS_IPC) | (1u << KTM_SUBSYS_SCHED) |
+				(1u << KTM_SUBSYS_MM));
+
+	/*
 	 * NOTICE (not DEBUG): smoke-mm-cow-lazy greps this on serial; default
 	 * klog level drops DEBUG.
 	 */
 	klog_notice_fmt("PF",
-			"[PF] userspace segv pid=%x addr=%llx write=%llx user=%llx handler=%llx proc_mask=%x ignored=%x (no handler)\n",
+			"[PF] userspace segv pid=%x addr=%llx write=%llx present=%llx rip=%llx user=%llx handler=%llx proc_mask=%x ignored=%x (no handler)\n",
 			(unsigned)((uint32_t)p->task.pid),
 			(unsigned long long)fault_addr,
 			(unsigned long long)(info && info->write ? 1 : 0),
+			(unsigned long long)(info && info->present ? 1 : 0),
+			(unsigned long long)(info ? (unsigned long long)info->ip : 0ULL),
 			(unsigned long long)(info && info->user ? 1 : 0),
 			(unsigned long long)((uint64_t)(uintptr_t)p->signal_handlers[SIGSEGV]),
 			(unsigned)(p->signal_mask),
 			(unsigned)(p->signal_ignored));
+
+	/*
+	 * A user fault with P=1 is a permission violation, not a missing page,
+	 * so the PTE flags say which bit denied it (U/S clear => a supervisor
+	 * mapping is covering user VA). Without this the log could not tell a
+	 * leftover kernel mapping from an honest unmapped access.
+	 */
+	{
+		uint64_t pte_flags = 0;
+		int mapped = is_page_mapped_in_directory(process_pgd(p),
+							 (uint64_t)fault_addr,
+							 &pte_flags);
+
+		klog_notice_fmt("PF",
+				"[PF] segv pte pid=%x addr=%llx mapped=%llx flags=%llx user=%llx rw=%llx\n",
+				(unsigned)((uint32_t)p->task.pid),
+				(unsigned long long)fault_addr,
+				(unsigned long long)(uint64_t)mapped,
+				(unsigned long long)pte_flags,
+				(unsigned long long)((pte_flags & PAGE_USER) ? 1ULL : 0ULL),
+				(unsigned long long)((pte_flags & PAGE_RW) ? 1ULL : 0ULL));
+	}
+
+	/* Locate the fault against the address space: heap vs mmap vs neither. */
+	{
+		struct mmap_region *mr = pf_mmap_region_for(p, fault_addr);
+
+		/*
+		 * Split across two records: klog_notice_fmt drops arguments
+		 * past the eighth, which silently corrupted the tail fields.
+		 */
+		klog_notice_fmt("PF",
+				"[PF] segv vma pid=%x addr=%llx heap=[%llx,%llx) stack=%llx\n",
+				(unsigned)((uint32_t)p->task.pid),
+				(unsigned long long)fault_addr,
+				(unsigned long long)(uint64_t)process_heap_start(p),
+				(unsigned long long)(uint64_t)process_heap_end(p),
+				(unsigned long long)(pf_addr_in_stack(p, fault_addr) ? 1ULL : 0ULL));
+		if (mr)
+			klog_notice_fmt("PF",
+					"[PF] segv vma rgn pid=%x vma=%llx len=%llx prot=%llx flags=%llx hint=%llx\n",
+					(unsigned)((uint32_t)p->task.pid),
+					(unsigned long long)(uint64_t)(uintptr_t)mr->addr,
+					(unsigned long long)(uint64_t)mr->length,
+					(unsigned long long)(uint64_t)mr->prot,
+					(unsigned long long)(uint64_t)mr->flags,
+					(unsigned long long)(uint64_t)(uintptr_t)mr->hint_addr);
+	}
 
 	/*
 	 * Linux wait status must be WIFSIGNALED(SIGSEGV), not exited(139).
@@ -407,6 +556,26 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 	write = info->write;
 	user = info->user;
 	insn_fetch = info->exec;
+
+	/*
+	 * Recorded, not emitted: this runs on every demand-paging fault, so
+	 * formatting or event emission here would dominate the path it
+	 * measures. The rows only reach the ring on a dump, which is what
+	 * turns a later crash into a fault history instead of a single
+	 * address.
+	 */
+	{
+		process_t *pf_cur = process_get_current();
+
+		ktm_deferred_record(KTM_DEFERRED_PAGE_FAULT,
+				    pf_cur ? (uint32_t)pf_cur->task.pid : 0,
+				    fault_addr,
+				    (uint64_t)(unsigned)((not_present ? 1u : 0u) |
+							 (write ? 2u : 0u) |
+							 (user ? 4u : 0u) |
+							 (insn_fetch ? 8u : 0u)),
+				    (uint64_t)info->ip);
+	}
 
 	if (user && not_present)
 	{
@@ -487,22 +656,98 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 		uintptr_t new_phys;
 		uint64_t vaddr_aligned;
 		uint64_t map_flags;
+		unsigned long irq_flags;
+		unsigned pinned = 0;
 
 		current = process_get_current();
 		if (!current || !process_pgd(current))
 			return;
 
 		vaddr_aligned = fault_addr & ~0xFFFUL;
+		/*
+		 * IRQ-off + optional PMM pin: sibling pipe-stage COW must not
+		 * free the shared frame under memcpy (ash pipelines).
+		 */
+		irq_flags = irq_save();
+		/*
+		 * Write into an unsplit 2MiB PDE: paging_get_pte returns NULL
+		 * (logged as pte=0). Split first; COW still requires USER|COW.
+		 */
+		if (paging_ensure_4k_leaf(process_pgd(current),
+					  vaddr_aligned) != 0)
+		{
+			irq_restore(irq_flags);
+			klog_notice_fmt("PF",
+					"[PF] write-fault no-COW pid=%x addr=%llx pte=0\n",
+					(unsigned)((uint32_t)current->task.pid),
+					(unsigned long long)fault_addr);
+			pf_user_segv(current, stack, fault_addr, info);
+			return;
+		}
 		pte = paging_get_pte(process_pgd(current), vaddr_aligned);
+		/*
+		 * After huge-PDE break, slots are pte_none (Linux). Demand-zero
+		 * inside heap/stack/mmap — same as !present path above.
+		 */
+		if (!pte || !(*pte & PAGE_PRESENT))
+		{
+			irq_restore(irq_flags);
+			if (pf_addr_may_promote_identity(current, fault_addr))
+			{
+				uint64_t map_flags = PAGE_USER | PAGE_RW;
+
+				if (insn_fetch)
+					map_flags |= PAGE_EXEC;
+				pf_demand_zero_page(current, fault_addr, map_flags,
+						    stack, info);
+				return;
+			}
+			klog_notice_fmt("PF",
+					"[PF] write-fault no-COW pid=%x addr=%llx pte=0\n",
+					(unsigned)((uint32_t)current->task.pid),
+					(unsigned long long)fault_addr);
+			pf_user_segv(current, stack, fault_addr, info);
+			return;
+		}
+		/*
+		 * present+!USER identity leftover: install anon zero
+		 * (do_anonymous_page), never memcpy PMM.
+		 */
+		if (pte && (*pte & PAGE_PRESENT) && !(*pte & PAGE_USER) &&
+		    pf_addr_may_promote_identity(current, fault_addr))
+		{
+			if (pf_identity_to_anon_zero(current, vaddr_aligned,
+						     PAGE_USER | PAGE_RW) != 0)
+			{
+				irq_restore(irq_flags);
+				pf_user_segv(current, stack, fault_addr, info);
+				return;
+			}
+			irq_restore(irq_flags);
+			return;
+		}
 		if (!pte || !(*pte & PAGE_PRESENT) || !(*pte & PAGE_USER) ||
 		    !(*pte & PAGE_COW) || (*pte & PAGE_RW))
 		{
+			uint64_t pte_val = pte ? *pte : 0;
+
+			irq_restore(irq_flags);
+			klog_notice_fmt("PF",
+					"[PF] write-fault no-COW pid=%x addr=%llx pte=%llx\n",
+					(unsigned)((uint32_t)current->task.pid),
+					(unsigned long long)fault_addr,
+					(unsigned long long)pte_val);
 			pf_user_segv(current, stack, fault_addr, info);
 			return;
 		}
 
 		entry = *pte;
 		old_phys = (uintptr_t)(entry & PAGE_PTE_PFN_MASK);
+		if (pmm_frame_refcount(old_phys) > 0)
+		{
+			pmm_frame_get(old_phys);
+			pinned = 1;
+		}
 
 		/*
 		 * Always copy on PAGE_COW — never promote the shared frame in
@@ -519,6 +764,9 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 			size_t used = 0;
 			size_t free_fr = 0;
 
+			if (pinned)
+				pmm_frame_put(old_phys);
+			irq_restore(irq_flags);
 			pmm_stats(&tot, &used, &free_fr);
 			klog_notice_fmt("PF",
 					"[PF] COW OOM pid=%x addr=%llx refs=%u used=%u free=%u\n",
@@ -531,7 +779,7 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 			return;
 		}
 
-		memcpy((void *)new_phys, (void *)old_phys, 0x1000);
+		paging_copy_phys_page(new_phys, old_phys);
 
 		map_flags = (entry & 0xFFF) | PAGE_USER | PAGE_RW;
 		map_flags &= ~(PAGE_COW | PAGE_GLOBAL);
@@ -542,13 +790,72 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 					  new_phys, map_flags) != 0)
 		{
 			pmm_free_frame(new_phys);
+			if (pinned)
+				pmm_frame_put(old_phys);
+			irq_restore(irq_flags);
 			pf_user_segv(current, stack, fault_addr, info);
 			return;
 		}
 
+		if (pinned)
+			pmm_frame_put(old_phys);
 		pmm_frame_put(old_phys);
 		tlb_invalidate_page((uintptr_t)vaddr_aligned);
+		irq_restore(irq_flags);
 		return;
+	}
+
+	/*
+	 * Read fault on present supervisor leaf in a user VMA — same as write:
+	 * Linux do_anonymous_page (zero), not memcpy of identity PMM.
+	 */
+	if (user && !not_present && !write)
+	{
+		uint64_t *pte;
+		uint64_t vaddr_aligned;
+		unsigned long irq_flags;
+
+		current = process_get_current();
+		if (!current || !process_pgd(current))
+			return;
+
+		vaddr_aligned = fault_addr & ~0xFFFUL;
+		irq_flags = irq_save();
+		if (paging_ensure_4k_leaf(process_pgd(current),
+					  vaddr_aligned) != 0)
+		{
+			irq_restore(irq_flags);
+			pf_user_segv(current, stack, fault_addr, info);
+			return;
+		}
+		pte = paging_get_pte(process_pgd(current), vaddr_aligned);
+		if (!pte || !(*pte & PAGE_PRESENT))
+		{
+			irq_restore(irq_flags);
+			if (pf_addr_may_promote_identity(current, fault_addr))
+			{
+				pf_demand_zero_page(current, fault_addr,
+						    PAGE_USER | PAGE_RW, stack,
+						    info);
+				return;
+			}
+			pf_user_segv(current, stack, fault_addr, info);
+			return;
+		}
+		if (pte && (*pte & PAGE_PRESENT) && !(*pte & PAGE_USER) &&
+		    pf_addr_may_promote_identity(current, fault_addr))
+		{
+			if (pf_identity_to_anon_zero(current, vaddr_aligned,
+						     PAGE_USER | PAGE_RW) != 0)
+			{
+				irq_restore(irq_flags);
+				pf_user_segv(current, stack, fault_addr, info);
+				return;
+			}
+			irq_restore(irq_flags);
+			return;
+		}
+		irq_restore(irq_flags);
 	}
 
 	if (user)

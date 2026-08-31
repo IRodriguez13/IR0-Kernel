@@ -243,8 +243,18 @@ uint64_t create_process_page_directory(void)
 	}
 
 	memset(pml4, 0, 4096);
-	kernel_cr3 = get_current_page_directory();
-	kernel_pml4 = (uint64_t *)kernel_cr3;
+	/*
+	 * Kernel half must come from the pinned boot PML4, not current CR3.
+	 * Fork under a user mm must still share kstack / high kernel PTEs
+	 * (switch loads next CR3 while RSP is still on the previous kstack).
+	 */
+	kernel_cr3 = paging_get_kernel_cr3();
+	if (!kernel_cr3)
+	{
+		kernel_cr3 = get_current_page_directory();
+		paging_pin_kernel_cr3(kernel_cr3);
+	}
+	kernel_pml4 = (uint64_t *)(uintptr_t)kernel_cr3;
 
 	/*
 	 * Copy kernel half of the root table only (user half stays empty).
@@ -261,13 +271,14 @@ uint64_t create_process_page_directory(void)
 	 */
 	{
 		/*
-		 * 4 KiB supervisor map: low kernel image and keyboard ring only.
-		 * Stop before 0x600000 so 2 MiB slots never cover user ELF at 0x400000.
-		 * Heap [8,32) MiB and PMM [32,512) MiB use 2 MiB identity (COW
-		 * memcpy uses PA as VA under process CR3). Cap at USER_MMAP_START.
+		 * Supervisor identity under process CR3:
+		 *  - [0, 4MiB) + kbd…6MiB: kernel image / IRQ
+		 *  - [6MiB, 32MiB): kmalloc heap (still low identity)
+		 * Kstacks are at IR0_KSTACK_VA_BASE (high). Do NOT map PMM
+		 * [32MiB, 512MiB) — user brk/mmap + frames use demand-zero /
+		 * boot-CR3 phys access (Linux direct-map split).
 		 */
 		const uint64_t supervisor_kbd_end = 0x00600000UL;
-		const uint64_t pmm_end = PMM_PHYS_BASE + PMM_PHYS_SIZE;
 
 		if (map_supervisor_identity_low(pml4, 0, 0x00400000UL) != 0)
 		{
@@ -282,11 +293,6 @@ uint64_t create_process_page_directory(void)
 		}
 		if (map_supervisor_identity_2mb(pml4, supervisor_kbd_end,
 						PMM_PHYS_BASE) != 0)
-		{
-			kfree_aligned(pml4);
-			return 0;
-		}
-		if (map_supervisor_identity_2mb(pml4, PMM_PHYS_BASE, pmm_end) != 0)
 		{
 			kfree_aligned(pml4);
 			return 0;

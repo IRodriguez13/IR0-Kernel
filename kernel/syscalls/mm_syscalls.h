@@ -27,3 +27,6 @@ int64_t sys_brk(void *addr);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
 int sys_mprotect(void *addr, size_t len, int prot);
+
+/* sysinfo(2): memory, load averages, uptime and process count. */
+int64_t sys_sysinfo(void *user_info);

@@ -70,18 +70,7 @@ static process_t *fork_process_create(process_t *parent, pid_t *child_pid_out)
 	child->kstack_top = 0;
 	child->saved_user_rsp = 0;
 
-	if (process_kernel_stack_alloc(child) != 0)
-	{
-		kfree(child);
-		return NULL;
-	}
-
-	if (KTM_FAULT_HIT("process.fork_kstack"))
-	{
-		process_kernel_stack_free(child);
-		kfree(child);
-		return NULL;
-	}
+	/* Kstack mapped after fork_child_mm_create (needs child PML4). */
 
 	*child_pid_out = child_pid;
 	return child;
@@ -219,6 +208,13 @@ pid_t fork(void)
 		return -ENOMEM;
 	}
 
+	if (process_kernel_stack_alloc(child) != 0 ||
+	    KTM_FAULT_HIT("process.fork_kstack"))
+	{
+		fork_rollback(child, child_pid, 0);
+		return -ENOMEM;
+	}
+
 	if (KTM_FAULT_HIT("process.fork_cow") || copy_process_memory(parent, child) != 0)
 	{
 		fork_rollback(child, child_pid, 0);
@@ -241,6 +237,16 @@ pid_t fork(void)
 			return -ENOMEM;
 		}
 		process_mm_set_mmap_list(child, mmap_list);
+		{
+			const struct mmap_region *r;
+			unsigned n = 0;
+
+			for (r = mmap_list; r; r = r->next)
+				n++;
+			klog_debug_fmt("FORK", "vma clone child=%x parent=%x n=%x\n",
+				       (unsigned)((uint32_t)child_pid),
+				       (unsigned)((uint32_t)parent->task.pid), n);
+		}
 	}
 
 	if (KTM_FAULT_HIT("process.fork_files") ||
@@ -324,6 +330,12 @@ pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 	process_set_mm_root(child, process_mm_root(parent));
 	child->tgid = parent->tgid;
 	child->ppid = parent->task.pid;
+
+	if (process_kernel_stack_alloc(child) != 0)
+	{
+		fork_rollback(child, child_pid, 0);
+		return -ENOMEM;
+	}
 
 	if (flags & CLONE_SETTLS)
 	{

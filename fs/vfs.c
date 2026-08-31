@@ -45,6 +45,7 @@
 #include <ir0/klog.h>
 #include <ir0/console_backend.h>
 #include <ir0/statfs.h>
+#include <ir0/virtio_9p.h>
 #include <ir0/arch_cpu.h>
 #include <ir0/cpu.h>
 #include <ir0/sched.h>
@@ -1125,6 +1126,43 @@ int vfs_statfs(const char *path, struct ir0_statfs *buf)
 	if (ret != 0)
 		return ret;
 
+	/*
+	 * Pseudo-filesystems are not VFS mounts, so find_mount() below would
+	 * attribute them to the root mount and make df report /proc with the
+	 * size of the disk. They hold no blocks; report the Linux magic and
+	 * zeros, which is also what df needs to skip them without -a.
+	 */
+	{
+		static const struct
+		{
+			const char *prefix;
+			uint32_t magic;
+		} pseudo[] = {
+			{ "/proc", IR0_PROC_SUPER_MAGIC },
+			{ "/sys", IR0_SYSFS_MAGIC },
+			{ "/dev", IR0_TMPFS_MAGIC },
+			{ "/heart", IR0_HEARTFS_MAGIC },
+		};
+		size_t i;
+
+		for (i = 0; i < sizeof(pseudo) / sizeof(pseudo[0]); i++)
+		{
+			size_t plen = strlen(pseudo[i].prefix);
+
+			if (strncmp(path, pseudo[i].prefix, plen) != 0)
+				continue;
+			if (path[plen] != '\0' && path[plen] != '/')
+				continue;
+
+			memset(buf, 0, sizeof(*buf));
+			buf->f_type = pseudo[i].magic;
+			buf->f_bsize = 4096;
+			buf->f_frsize = 4096;
+			buf->f_namelen = 255;
+			return 0;
+		}
+	}
+
 	m = find_mount(path);
 	if (!m || !m->fs || !m->fs->name)
 		return -ENODEV;
@@ -1157,6 +1195,8 @@ int vfs_statfs(const char *path, struct ir0_statfs *buf)
 	}
 	if (strcmp(fst, "9p") == 0)
 	{
+		struct virtio_9p_statfs h;
+
 		buf->f_type = IR0_9P_MAGIC;
 		buf->f_bsize = 4096;
 		buf->f_frsize = 4096;
@@ -1164,6 +1204,24 @@ int vfs_statfs(const char *path, struct ir0_statfs *buf)
 		buf->f_bfree = 0;
 		buf->f_bavail = 0;
 		buf->f_namelen = 255;
+
+		/*
+		 * Ask the host. Falling back to the zeros above keeps df
+		 * working against a server without Tstatfs instead of failing
+		 * the whole call.
+		 */
+		if (virtio_9p_statfs(&h) == 0 && h.bsize != 0)
+		{
+			buf->f_bsize = h.bsize;
+			buf->f_frsize = h.bsize;
+			buf->f_blocks = h.blocks;
+			buf->f_bfree = h.bfree;
+			buf->f_bavail = h.bavail;
+			buf->f_files = h.files;
+			buf->f_ffree = h.ffree;
+			if (h.namelen)
+				buf->f_namelen = h.namelen;
+		}
 		return 0;
 	}
 #endif
@@ -1427,59 +1485,84 @@ static int rmdir_recursive_impl(const char *path, int depth)
     if (!S_ISDIR(st.st_mode))
         return vfs_unlink(norm);
 
-    struct vfs_dirent entries[32];
-    int n = vfs_readdir(norm, entries, 32);
+    /*
+     * The directory entries and the two path buffers live on the heap, not
+     * on the stack. This function recurses once per directory level, and on
+     * the stack the same locals made each frame 4 KiB: the depth limit of 32
+     * above would then need 128 KiB, four times the 32 KiB kernel stack. A
+     * deep tree walked into the guard page and the fault escalated to a
+     * double fault. Off the stack the frame is a few hundred bytes, so the
+     * limit that the code already declares is one the stack can honour.
+     */
+    struct rmdir_scratch {
+        struct vfs_dirent entries[32];
+        char full[MAX_PATH];
+        char resolved[MAX_PATH];
+    } *scr = kmalloc_try(sizeof(*scr));
+    struct vfs_ops *ops;
+    size_t nlen;
+    int n;
+    int i;
+    int ret_code;
+
+    if (!scr)
+        return -ENOMEM;
+
+    n = vfs_readdir(norm, scr->entries, 32);
     if (n < 0) {
-        struct vfs_ops *ops = ops_for_path(norm);
-        if (ops && ops->rmdir)
-            return vfs_ops_rmdir(ops, norm);
-        return n;
+        ops = ops_for_path(norm);
+        ret_code = (ops && ops->rmdir) ? vfs_ops_rmdir(ops, norm) : n;
+        goto out;
     }
 
-    size_t nlen = strlen(norm);
-    for (int i = 0; i < n; i++) {
-        if (entries[i].name[0] == '\0')
+    nlen = strlen(norm);
+    for (i = 0; i < n; i++) {
+        stat_t est;
+        size_t rlen;
+
+        if (scr->entries[i].name[0] == '\0')
             continue;
-        if (entries[i].name[0] == '.' &&
-            (entries[i].name[1] == '\0' ||
-             (entries[i].name[1] == '.' && entries[i].name[2] == '\0')))
+        if (scr->entries[i].name[0] == '.' &&
+            (scr->entries[i].name[1] == '\0' ||
+             (scr->entries[i].name[1] == '.' && scr->entries[i].name[2] == '\0')))
             continue;
 
-        char full[MAX_PATH];
-        if (build_path(full, sizeof(full), norm, entries[i].name) != 0)
+        if (build_path(scr->full, sizeof(scr->full), norm, scr->entries[i].name) != 0)
             continue;
-        char resolved[MAX_PATH];
-        if (normalize_path(full, resolved, sizeof(resolved)) != 0)
+        if (normalize_path(scr->full, scr->resolved, sizeof(scr->resolved)) != 0)
             continue;
-        if (resolved[0] == '/' && resolved[1] == '\0')
+        if (scr->resolved[0] == '/' && scr->resolved[1] == '\0')
             continue;
-        if (strcmp(resolved, norm) == 0)
+        if (strcmp(scr->resolved, norm) == 0)
             continue;
 
-        size_t rlen = strlen(resolved);
+        rlen = strlen(scr->resolved);
         if (rlen < nlen)
             continue;
-        if (rlen <= nlen || strncmp(resolved, norm, nlen) != 0 || resolved[nlen] != '/')
+        if (rlen <= nlen || strncmp(scr->resolved, norm, nlen) != 0 ||
+            scr->resolved[nlen] != '/')
             continue;
 
-        stat_t est;
-        if (vfs_stat(resolved, &est) == 0) {
-            if (S_ISDIR(est.st_mode)) {
-                int rc = rmdir_recursive_impl(resolved, depth + 1);
-                if (rc != 0)
-                    return rc;
-            } else {
-                int rc = vfs_unlink(resolved);
-                if (rc != 0)
-                    return rc;
+        if (vfs_stat(scr->resolved, &est) == 0) {
+            int rc;
+
+            if (S_ISDIR(est.st_mode))
+                rc = rmdir_recursive_impl(scr->resolved, depth + 1);
+            else
+                rc = vfs_unlink(scr->resolved);
+            if (rc != 0) {
+                ret_code = rc;
+                goto out;
             }
         }
     }
 
-    struct vfs_ops *ops = ops_for_path(norm);
-    if (ops && ops->rmdir)
-        return vfs_ops_rmdir(ops, norm);
-    return -ENOSYS;
+    ops = ops_for_path(norm);
+    ret_code = (ops && ops->rmdir) ? vfs_ops_rmdir(ops, norm) : -ENOSYS;
+
+out:
+    kfree(scr);
+    return ret_code;
 }
 
 int vfs_rmdir_recursive(const char *path)
@@ -1709,6 +1792,10 @@ int vfs_read_file(const char *path, void **data, size_t *size)
     buf = kmalloc_try(fsize);
     if (!buf)
     {
+        /* Audit is usually off; this path decides whether an -ENOMEM from
+         * exec is the image buffer or something further down. */
+        klog_notice_fmt("VFS", "read_file no mem size=%x\n",
+                        (unsigned)fsize);
         vfs_exec_audit_log("kmalloc_fail", path, -ENOMEM, 0, fsize, 0,
                            (uint64_t)st.st_ino, st.st_size);
         vfs_fs_op_release();

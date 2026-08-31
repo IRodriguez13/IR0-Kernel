@@ -41,5 +41,10 @@ struct ir0_statfs
 #define IR0_MINIX_SUPER_MAGIC 0x137F
 #define IR0_TMPFS_MAGIC       0x01021994
 #define IR0_9P_MAGIC          0x01021997
+/* Linux PROC_SUPER_MAGIC / SYSFS_MAGIC; devfs reports as tmpfs like devtmpfs. */
+#define IR0_PROC_SUPER_MAGIC  0x9fa0
+#define IR0_SYSFS_MAGIC       0x62656572
+/* IR0-specific: "IR0H". /heart has no Linux counterpart. */
+#define IR0_HEARTFS_MAGIC     0x49523048
 
 int vfs_statfs(const char *path, struct ir0_statfs *buf);

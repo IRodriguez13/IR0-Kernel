@@ -14,6 +14,7 @@
 
 #include <ir0/ktm/klog.h>
 #include <stdarg.h>
+#include <time.h>
 
 void klog_boot_hold(int on)
 {
@@ -163,4 +164,13 @@ void klog_fatal_fmt(const char *component, const char *format, ...)
 {
 	(void)component;
 	(void)format;
+}
+
+/*
+ * Pseudo-FS stat stamps entries with the wall clock. Host tests only assert
+ * the registry's routing, so a fixed epoch keeps them deterministic.
+ */
+time_t clock_get_current_time(void)
+{
+	return (time_t)1735689600; /* 2025-01-01T00:00:00Z */
 }

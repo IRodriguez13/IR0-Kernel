@@ -21,6 +21,7 @@
 #include <ir0/copy_user.h>
 #include <ir0/console_backend.h>
 #include <ir0/devfs.h>
+#include <ir0/named_devnode.h>
 #include <ir0/errno.h>
 #include <ir0/fcntl.h>
 #include <ir0/flock.h>
@@ -342,14 +343,7 @@ static int open_named_fifo_fd(const char *path, int ir0_flags)
   if (!fd_table)
     return -ESRCH;
 
-  for (i = 3; i < MAX_FDS_PER_PROCESS; i++)
-  {
-    if (!fd_table[i].in_use)
-    {
-      fd = i;
-      break;
-    }
-  }
+  fd = fd_alloc_lowest(fd_table, 0);
   if (fd < 0)
     return -EMFILE;
 
@@ -903,8 +897,15 @@ int64_t sys_read(int fd, void *buf, size_t count)
         return ret;
       if (fd_table[fd].flags & O_NONBLOCK)
         return -EAGAIN;
-      if (pipe->writers <= 0)
-        return 0;
+      /*
+       * No "writers are gone, report EOF" shortcut here. This runs after
+       * pipe_read() already released the pipe, so the task can be preempted
+       * in between: the writer then fills the buffer and exits, and the
+       * shortcut sees writers==0 and returns EOF while the bytes it just
+       * wrote are still queued. Looping back into pipe_read() decides both
+       * cases together, as Linux pipe_read does under the pipe mutex —
+       * buffered data first, EOF only on an empty pipe with no writers.
+       */
       if (pipe_wait(current_process, pipe, 1) != 0)
         return -EAGAIN;
     }
@@ -1094,6 +1095,34 @@ static int64_t sys_open_vfs_resolved(char *path_to_use, int ir0_flags,
     return open_ret;
   }
 
+  /*
+   * A device node created by mknod outside /dev: hand the open to the devfs
+   * node owning that (major,minor), so the fd behaves exactly like the one
+   * from /dev — same ops, same refcount, no second I/O path to maintain.
+   */
+  {
+    mode_t dn_mode = 0;
+    dev_t dn_rdev = 0;
+
+    if (named_devnode_lookup(path_to_use, &dn_mode, &dn_rdev) == 0)
+    {
+      devfs_node_t *dn = devfs_find_node_by_rdev((uint32_t)dn_rdev);
+
+      int64_t drc;
+
+      if (!dn)
+        return -ENXIO;
+      ensure_devfs_init();
+      drc = devfs_open_node(dn, ir0_flags);
+      if (drc < 0)
+        return drc;
+      open_ret = devfs_bind_fd_slot(path_to_use, dn, ir0_flags);
+      if (open_ret < 0)
+        devfs_close_node(dn);
+      return open_ret;
+    }
+  }
+
   if (flags & O_DIRECTORY)
   {
     if (!check_file_access(path_to_use, ACCESS_EXEC, current_process))
@@ -1169,14 +1198,7 @@ static int64_t sys_open_vfs_resolved(char *path_to_use, int ir0_flags,
 
   fd_table = get_process_fd_table();
   fd = -1;
-  for (int i = 3; i < MAX_FDS_PER_PROCESS; i++)
-  {
-    if (!fd_table[i].in_use)
-    {
-      fd = i;
-      break;
-    }
-  }
+  fd = fd_alloc_lowest(fd_table, 0);
 
   if (fd == -1)
   {
@@ -1306,14 +1328,7 @@ static int64_t pseudo_bind_file_fd(const char *path, int ir0_flags)
 
   fd_table = get_process_fd_table();
   fd = -1;
-  for (int i = 3; i < MAX_FDS_PER_PROCESS; i++)
-  {
-    if (!fd_table[i].in_use)
-    {
-      fd = i;
-      break;
-    }
-  }
+  fd = fd_alloc_lowest(fd_table, 0);
   if (fd < 0)
   {
     (void)pseudo_fs_release_ops(ops, ctx, dynamic);
@@ -1644,6 +1659,12 @@ int64_t sys_unlinkat(int dirfd, const char *pathname, int flags)
   if (rc != -ENOENT)
     return rc;
 
+  rc = named_devnode_unlink(resolved);
+  if (rc == 0)
+    return 0;
+  if (rc != -ENOENT)
+    return rc;
+
   if (posix_shm_path_is(resolved))
     return posix_shm_try_unlink(resolved);
 
@@ -1746,6 +1767,27 @@ int64_t sys_fchownat(int dirfd, const char *pathname, uid_t owner, gid_t group,
   return -ENOSYS;
 }
 
+/*
+ * mknod for character/block nodes. Linux gates these behind CAP_MKNOD; IR0
+ * has no capabilities yet, so root is the equivalent gate. The node records
+ * only the (major,minor): the behaviour comes from the devfs node claiming
+ * that number, so an unclaimed one is -ENXIO rather than a file that opens
+ * into nothing.
+ */
+static int64_t mknod_create_device(const char *resolved, unsigned int mode,
+                                   unsigned int dev)
+{
+  if (current_process->euid != ROOT_UID)
+    return -EPERM;
+
+  if (!devfs_find_node_by_rdev((uint32_t)dev))
+    return -ENXIO;
+
+  return named_devnode_create(resolved,
+                              (mode_t)((mode & S_IFMT) | (mode & 07777)),
+                              (dev_t)dev);
+}
+
 int64_t sys_mknod(const char *pathname, unsigned int mode, unsigned int dev)
 {
   char resolved[256];
@@ -1757,16 +1799,21 @@ int64_t sys_mknod(const char *pathname, unsigned int mode, unsigned int dev)
   if (validate_userspace_string(pathname, 256) != 0)
     return -EFAULT;
 
-  if ((mode & S_IFMT) != S_IFIFO)
+  if ((mode & S_IFMT) != S_IFIFO &&
+      (mode & S_IFMT) != S_IFCHR &&
+      (mode & S_IFMT) != S_IFBLK)
     return -ENOSYS;
 
-  if (dev != 0)
+  if ((mode & S_IFMT) == S_IFIFO && dev != 0)
     return -EINVAL;
 
   rc = ir0_resolve_user_path(pathname, resolved, sizeof(resolved),
                              current_process->cwd, current_process->root);
   if (rc != 0)
     return rc;
+
+  if ((mode & S_IFMT) != S_IFIFO)
+    return mknod_create_device(resolved, mode, dev);
 
   rc = mknod_prepare_fifo_path(resolved, sizeof(resolved));
   if (rc != 0)
@@ -1787,15 +1834,20 @@ int64_t sys_mknodat(int dirfd, const char *pathname, unsigned int mode,
   if (validate_userspace_string(pathname, 256) != 0)
     return -EFAULT;
 
-  if ((mode & S_IFMT) != S_IFIFO)
+  if ((mode & S_IFMT) != S_IFIFO &&
+      (mode & S_IFMT) != S_IFCHR &&
+      (mode & S_IFMT) != S_IFBLK)
     return -ENOSYS;
 
-  if (dev != 0)
+  if ((mode & S_IFMT) == S_IFIFO && dev != 0)
     return -EINVAL;
 
   rc = ir0_resolve_path_at(dirfd, pathname, resolved, sizeof(resolved));
   if (rc != 0)
     return rc;
+
+  if ((mode & S_IFMT) != S_IFIFO)
+    return mknod_create_device(resolved, mode, dev);
 
   rc = mknod_prepare_fifo_path(resolved, sizeof(resolved));
   if (rc != 0)
@@ -2053,20 +2105,60 @@ static const char *fs_fd_resolved_dir_path(int fd, char *buf, size_t bufsz)
   return buf;
 }
 
+#define GETDENTS_RESOLVED_MAX 512
+#define GETDENTS_KBUF_MAX 4096
+
+/*
+ * Directory listing scratch, on the heap rather than on the stack.
+ *
+ * These three buffers made sys_getdents_common's frame 11 KiB. A getdents
+ * over virtio-9p reaches hs_readdir and virtio_9p_readdir, each with a 4 KiB
+ * frame of its own, so a single `ls` on a 9p directory spent 20 KiB of a
+ * 32 KiB kernel stack. An interrupt landing on top of that chain ran into
+ * the guard page, and the resulting fault escalated to a double fault: that
+ * is what a `find` over the host share hit. Off the stack the chain costs a
+ * few hundred bytes and leaves the interrupt room to run.
+ */
+struct getdents_scratch
+{
+  char resolved_dir[GETDENTS_RESOLVED_MAX];
+  struct vfs_dirent entries[GETDENTS_BATCH_MAX];
+  char kernel_buf[GETDENTS_KBUF_MAX];
+};
+
+static int64_t sys_getdents_scratch(int fd, void *dirent, size_t count,
+                                    int legacy_layout,
+                                    struct getdents_scratch *scr);
+
 static int64_t sys_getdents_common(int fd, void *dirent, size_t count, int legacy_layout)
 {
+  struct getdents_scratch *scr = kmalloc_try(sizeof(*scr));
+  int64_t rc;
+
+  if (!scr)
+    return -ENOMEM;
+
+  rc = sys_getdents_scratch(fd, dirent, count, legacy_layout, scr);
+  kfree(scr);
+  return rc;
+}
+
+static int64_t sys_getdents_scratch(int fd, void *dirent, size_t count,
+                                    int legacy_layout,
+                                    struct getdents_scratch *scr)
+{
   fd_entry_t *fd_table;
-  char resolved_dir[512];
+  char *const resolved_dir = scr->resolved_dir;
   const char *dir_path;
   stat_t st;
-  struct vfs_dirent entries[GETDENTS_BATCH_MAX];
+  struct vfs_dirent *const entries = scr->entries;
   int entry_count;
   int visible_count;
   size_t start_cookie;
   size_t returned;
   size_t user_budget;
   size_t user_off;
-  char kernel_buf[4096];
+  char *const kernel_buf = scr->kernel_buf;
   size_t buf_offset;
   int64_t copy_size;
 
@@ -2083,7 +2175,7 @@ static int64_t sys_getdents_common(int fd, void *dirent, size_t count, int legac
       !fd_table[fd].in_use)
     return -EBADF;
 
-  dir_path = fs_fd_resolved_dir_path(fd, resolved_dir, sizeof(resolved_dir));
+  dir_path = fs_fd_resolved_dir_path(fd, resolved_dir, GETDENTS_RESOLVED_MAX);
   if (!dir_path)
     return -EBADF;
 
@@ -2133,7 +2225,7 @@ static int64_t sys_getdents_common(int fd, void *dirent, size_t count, int legac
       else
         reclen = linux_dirent64_reclen(name_len);
 
-      if (buf_offset + reclen > sizeof(kernel_buf))
+      if (buf_offset + reclen > GETDENTS_KBUF_MAX)
         break;
 
       if (legacy_layout)

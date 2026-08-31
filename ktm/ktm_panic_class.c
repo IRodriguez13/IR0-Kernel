@@ -150,3 +150,8 @@ void ktm_classify_kernel_panic(const char *message)
 {
 	ktm_classify_kernel_panic_ex(message, KTM_PL_KERNEL_BUG, NULL, 0, NULL);
 }
+
+void ktm_panic_class_emit(const char *klass)
+{
+	klog_debug_fmt("KTM", "[KTM][PANIC_CLASS] %s", klass ? klass : "UNKNOWN");
+}

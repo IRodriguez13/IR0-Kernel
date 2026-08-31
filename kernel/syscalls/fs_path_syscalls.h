@@ -22,6 +22,8 @@ int64_t sys_mount(const char *dev, const char *mountpoint, const char *fstype,
 		  unsigned long flags, const void *data);
 int64_t sys_umount(const char *target, int flags);
 int64_t sys_sync(void);
+int64_t sys_fsync(int fd);
+int64_t sys_fdatasync(int fd);
 int64_t sys_mkdir(const char *pathname, mode_t mode);
 int64_t sys_chmod(const char *path, mode_t mode);
 int64_t sys_chown(const char *path, uid_t owner, gid_t group);

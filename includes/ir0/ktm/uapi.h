@@ -20,6 +20,17 @@
 #define KTM_IOC_RESET          0x4B05u
 #define KTM_IOC_GET_CAPS       0x4B06u
 #define KTM_IOC_USER_EVENT     0x4B07u
+/*
+ * Dump the tail of the typed event ring to the serial log. @arg packs the
+ * subsystem bitmask in the high 32 bits and the event count in the low 32
+ * (0 count = no limit, 0 mask = every subsystem); see KTM_DUMP_ARG.
+ * Non-destructive: the consumer cursor used by ktm_event_copy_out is
+ * untouched, so a failing test can dump without disturbing a scenario that
+ * is still draining events.
+ */
+#define KTM_IOC_DUMP_EVENTS    0x4B08u
+#define KTM_DUMP_ARG(mask, count) \
+	((unsigned long)(count) | ((unsigned long)(mask) << 32))
 
 #define KTM_UAPI_VERSION       1u
 

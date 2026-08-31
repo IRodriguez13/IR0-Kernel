@@ -102,6 +102,14 @@ __attribute__((noreturn)) void process_exit(int code)
 	process_reap_zombies(dying);
 	process_reparent_children(dying);
 
+	/*
+	 * Release the TTY read-waiter slot now, not at process_destroy(): a
+	 * task killed while blocked in tty_read_kernel would otherwise hold
+	 * the slot for the whole zombie window, with the wake path walking a
+	 * process that is on its way out.
+	 */
+	ir0_console_purge_waiters_for_process(dying);
+
 	process_release_fds(dying, "EXIT_CLOSE");
 
 #if IR0_DEBUG_PROC
@@ -268,14 +276,16 @@ void process_destroy(process_t *p)
 	}
 
 	/*
-	 * Address space teardown via mm refcount. Capture kernel-mode
-	 * kmalloc stack cursor before mm_put frees the mm_struct.
+	 * Address space teardown via mm refcount. Unmap the private kstack
+	 * while the process PML4 is still alive (high VA pages live there).
 	 */
 	{
 		uint64_t kstack = 0;
 
 		if (p->mode == KERNEL_MODE)
 			kstack = process_stack_start(p);
+
+		process_kernel_stack_free(p);
 
 		if (p->mm)
 		{
@@ -294,9 +304,6 @@ void process_destroy(process_t *p)
 		kfree(p->saved_context);
 		p->saved_context = NULL;
 	}
-
-	/* Release the private kernel stack (zombie is off-CPU; not in use). */
-	process_kernel_stack_free(p);
 
 	pmm_owner_audit(&orphan_frames, &double_free, &alive_owner_missing);
 #if IR0_DEBUG_PMM

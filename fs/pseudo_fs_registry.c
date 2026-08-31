@@ -13,6 +13,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/pseudo_fs.h>
+#include <ir0/clock.h>
 #include <ir0/errno.h>
 #include <ir0/kmem.h>
 #include <ir0/sysfs.h>
@@ -451,6 +452,19 @@ int64_t pseudo_fs_write_fd(int fd, const char *buf, size_t count)
         return -EBADF;
 
     return entry->ops->write(entry->ctx, buf, count);
+}
+
+void pseudo_fs_stat_now(stat_t *st)
+{
+    time_t now;
+
+    if (!st)
+        return;
+
+    now = clock_get_current_time();
+    st->st_atime = now;
+    st->st_mtime = now;
+    st->st_ctime = now;
 }
 
 int pseudo_fs_stat_fd(int fd, stat_t *st)

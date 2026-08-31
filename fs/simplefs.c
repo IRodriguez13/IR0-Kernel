@@ -842,6 +842,21 @@ static int simplefs_readdir_common(const char *fs_name, const char *path, struct
     mnt = simplefs_context_mount(fs_name, path, name, &is_root, &rc);
     if (!mnt)
         return rc;
+    /*
+     * The store is flat: an entry's name is its whole path relative to the
+     * mount point, so nesting is expressed by '/' inside that name. A
+     * directory listing is therefore the set of entries under "<dir>/" whose
+     * remainder holds no further separator.
+     *
+     * Subdirectories used to return 0 here, reporting every one of them as
+     * empty: ls showed nothing below the mount root and a recursive rmdir
+     * saw no children, so it failed with ENOTEMPTY on a tree it had just
+     * been asked to delete. The mount root had the mirror problem, listing
+     * nested entries under their full relative name.
+     */
+    size_t plen = 0;
+    char prefix[SIMPLEFS_MAX_NAME_LEN + 2];
+
     if (!is_root)
     {
         e = simplefs_find_entry(mnt->store, name);
@@ -849,14 +864,42 @@ static int simplefs_readdir_common(const char *fs_name, const char *path, struct
             return -ENOENT;
         if (!e->is_dir)
             return -ENOTDIR;
-        return 0;
+
+        plen = strlen(name);
+        if (plen + 2 > sizeof(prefix))
+            return -ENAMETOOLONG;
+        memcpy(prefix, name, plen);
+        prefix[plen++] = '/';
+        prefix[plen] = '\0';
     }
 
     for (int i = 0; i < SIMPLEFS_MAX_ENTRIES && out < max_entries; i++)
     {
+        const char *ename;
+        const char *child;
+
         if (!mnt->store->entries[i].in_use)
             continue;
-        strncpy(entries[out].name, mnt->store->entries[i].name, sizeof(entries[out].name) - 1);
+
+        ename = mnt->store->entries[i].name;
+        if (plen != 0)
+        {
+            if (strncmp(ename, prefix, plen) != 0)
+                continue;
+            child = ename + plen;
+        }
+        else
+        {
+            child = ename;
+        }
+
+        if (child[0] == '\0')
+            continue;
+        /* Deeper descendant, not an immediate child. */
+        if (strchr(child, '/') != NULL)
+            continue;
+
+        strncpy(entries[out].name, child, sizeof(entries[out].name) - 1);
         entries[out].name[sizeof(entries[out].name) - 1] = '\0';
         entries[out].type = mnt->store->entries[i].is_dir ? DT_DIR : DT_REG;
         out++;

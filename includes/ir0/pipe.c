@@ -9,6 +9,7 @@
 
 #include "pipe.h"
 #include <ir0/kmem.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/errno.h>
 #include <ir0/ktm/event.h>
 #include <ir0/ktm/fault.h>
@@ -91,6 +92,10 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 	}
 
 	fase49_pipe_line(pipe, "ACQUIRE");
+	ktm_event_emit4(KTM_EVENT_PIPE_END_ACQUIRE, KTM_SUBSYS_IPC,
+			pipe->pipe_id, (uint64_t)(uint32_t)end,
+			(uint64_t)(uint32_t)pipe->readers,
+			(uint64_t)(uint32_t)pipe->writers);
 }
 
 void pipe_acquire(pipe_t *pipe)
@@ -107,21 +112,49 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 	if (!pipe || !buf)
 		return -EINVAL;
 
+	/*
+	 * Sampling count, draining the ring and updating count must be one
+	 * critical section. `pipe->count -= n` is a read-modify-write: preempted
+	 * between the load and the store it silently drops a concurrent writer's
+	 * increment, count ends up larger than the bytes actually queued, and the
+	 * next reader hands userspace that much stale ring content — NUL runs on a
+	 * fresh pipe, old bytes on a reused one. Linux serialises the same window
+	 * with the pipe mutex; IR0 IPC uses the irq-save pattern (kernel/ipc.c).
+	 * Bounded by PIPE_SIZE (4 KiB), so the hold time stays comparable.
+	 */
+	unsigned long irq_flags = irq_save();
+	size_t to_read;
+	char *dest = (char *)buf;
+	size_t bytes_read = 0;
+	uint32_t writers_snapshot;
+	uint32_t readers_snapshot;
+	size_t count_snapshot;
+
 	if (pipe->count == 0)
 	{
-		if (pipe->writers <= 0)
+		writers_snapshot = (uint32_t)pipe->writers;
+		readers_snapshot = (uint32_t)pipe->readers;
+		count_snapshot = pipe->count;
+		irq_restore(irq_flags);
+
+		if ((int)writers_snapshot <= 0)
 		{
 			fase49_pipe_line(pipe, "EOF");
-			ktm_event_emit4(KTM_EVENT_PIPE_EOF, KTM_SUBSYS_IPC, pipe->pipe_id, 0,
-					0, 0);
+			ktm_event_emit4(KTM_EVENT_PIPE_EOF, KTM_SUBSYS_IPC,
+					pipe->pipe_id,
+					(uint64_t)readers_snapshot,
+					(uint64_t)writers_snapshot,
+					(uint64_t)count_snapshot);
 			return 0;
 		}
+		ktm_event_emit4(KTM_EVENT_PIPE_READ, KTM_SUBSYS_IPC,
+				pipe->pipe_id, (uint64_t)(int64_t)-EAGAIN,
+				(uint64_t)writers_snapshot,
+				(uint64_t)count_snapshot);
 		return -EAGAIN;
 	}
 
-	size_t to_read = (count < pipe->count) ? count : pipe->count;
-	char *dest = (char *)buf;
-	size_t bytes_read = 0;
+	to_read = (count < pipe->count) ? count : pipe->count;
 
 	while (bytes_read < to_read)
 	{
@@ -131,6 +164,14 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 	}
 
 	pipe->count -= bytes_read;
+	writers_snapshot = (uint32_t)pipe->writers;
+	count_snapshot = pipe->count;
+	irq_restore(irq_flags);
+
+	ktm_event_emit4(KTM_EVENT_PIPE_READ, KTM_SUBSYS_IPC, pipe->pipe_id,
+			(uint64_t)bytes_read,
+			(uint64_t)writers_snapshot,
+			(uint64_t)count_snapshot);
 	return (int)bytes_read;
 }
 
@@ -139,20 +180,38 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 	if (!pipe || !buf)
 		return -EINVAL;
 
+	/* Same critical section as pipe_read: see the comment there. */
+	unsigned long irq_flags = irq_save();
+	size_t space;
+	size_t to_write;
+	const char *src = (const char *)buf;
+	size_t bytes_written = 0;
+	uint32_t readers_snapshot;
+	uint32_t writers_snapshot;
+	size_t count_snapshot;
+
 	if (pipe->readers <= 0)
 	{
-		ktm_event_emit4(KTM_EVENT_PIPE_EPIPE, KTM_SUBSYS_IPC, pipe->pipe_id, 0, 0,
-				0);
+		readers_snapshot = (uint32_t)pipe->readers;
+		writers_snapshot = (uint32_t)pipe->writers;
+		count_snapshot = pipe->count;
+		irq_restore(irq_flags);
+
+		ktm_event_emit4(KTM_EVENT_PIPE_EPIPE, KTM_SUBSYS_IPC, pipe->pipe_id,
+				(uint64_t)readers_snapshot,
+				(uint64_t)writers_snapshot,
+				(uint64_t)count_snapshot);
 		return -EPIPE;
 	}
 
 	if (pipe->count >= PIPE_SIZE)
+	{
+		irq_restore(irq_flags);
 		return -EAGAIN;
+	}
 
-	size_t space = PIPE_SIZE - pipe->count;
-	size_t to_write = (count < space) ? count : space;
-	const char *src = (const char *)buf;
-	size_t bytes_written = 0;
+	space = PIPE_SIZE - pipe->count;
+	to_write = (count < space) ? count : space;
 
 	while (bytes_written < to_write)
 	{
@@ -162,10 +221,14 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 	}
 
 	pipe->count += bytes_written;
+	readers_snapshot = (uint32_t)pipe->readers;
+	count_snapshot = pipe->count;
+	irq_restore(irq_flags);
 
-	if (bytes_written > 0)
-	{
-	}
+	ktm_event_emit4(KTM_EVENT_PIPE_WRITE, KTM_SUBSYS_IPC, pipe->pipe_id,
+			(uint64_t)bytes_written,
+			(uint64_t)readers_snapshot,
+			(uint64_t)count_snapshot);
 
 	return (int)bytes_written;
 }
@@ -207,6 +270,10 @@ void pipe_close_end(pipe_t *pipe, int end)
 	}
 
 	fase49_pipe_line(pipe, "CLOSE");
+	ktm_event_emit4(KTM_EVENT_PIPE_END_CLOSE, KTM_SUBSYS_IPC, pipe->pipe_id,
+			(uint64_t)(uint32_t)end,
+			(uint64_t)(uint32_t)pipe->readers,
+			(uint64_t)(uint32_t)pipe->writers);
 
 	/*
 	 * Wake waiters while pipe_t is still alive. Callers must not
@@ -235,16 +302,18 @@ void pipe_fase49_note_read_wake(pipe_t *pipe)
 {
 	fase49_pipe_line(pipe, "READ_WAKE");
 	if (pipe)
-		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 0, 0,
-				0);
+		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 0,
+				(uint64_t)(uint32_t)pipe->writers,
+				(uint64_t)pipe->count);
 }
 
 void pipe_fase49_note_write_wake(pipe_t *pipe)
 {
 	fase49_pipe_line(pipe, "WRITE_WAKE");
 	if (pipe)
-		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 1, 0,
-				0);
+		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 1,
+				(uint64_t)(uint32_t)pipe->readers,
+				(uint64_t)pipe->count);
 }
 
 void pipe_abort_unopened(pipe_t *pipe)

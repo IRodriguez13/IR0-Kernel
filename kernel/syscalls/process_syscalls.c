@@ -51,6 +51,7 @@
 #include <ir0/futex.h>
 #include <ir0/kexec.h>
 #include <ir0/acpi_pm.h>
+#include <ir0/mm_port.h>
 
 #define ARCH_SET_FS 0x1002
 #define ARCH_GET_FS 0x1003
@@ -490,35 +491,80 @@ int64_t sys_rt_sigsuspend(const sigset_t *mask, size_t sigsetsize)
 {
 	sigset_t kset;
 	uint32_t saved_mask;
+	size_t copy_bytes;
 
 	if (!current_process)
 		return -ESRCH;
-	if (!mask || sigsetsize != sizeof(sigset_t))
+	/*
+	 * sigsetsize=8 (uapi compact) or sizeof(sigset_t), same contract as
+	 * rt_sigaction above. musl passes _NSIG/8 = 8, the kernel sigset width
+	 * on x86-64, while the userspace type is 128 bytes: demanding the
+	 * latter rejected every call with -EINVAL, so ash's wait-for-SIGCHLD
+	 * never blocked and it re-issued the syscall forever (observed 320k
+	 * back-to-back calls, pipeline children left unreaped).
+	 */
+	if (!mask ||
+	    (sigsetsize != sizeof(sigset_t) && sigsetsize != sizeof(uint64_t)))
 		return -EINVAL;
-	if (validate_userspace_buffer((void *)mask, sizeof(sigset_t)) != 0)
+
+	memset(&kset, 0, sizeof(kset));
+	copy_bytes = (sigsetsize == sizeof(uint64_t)) ? sizeof(uint64_t)
+						      : sizeof(sigset_t);
+	if (validate_userspace_buffer((void *)mask, copy_bytes) != 0)
 		return -EFAULT;
-	if (copy_from_user(&kset, mask, sizeof(kset)) != 0)
+	if (copy_from_user(&kset, mask, copy_bytes) != 0)
 		return -EFAULT;
 
 	saved_mask = current_process->signal_mask;
-	current_process->signal_mask = ir0_sigset_low32(&kset);
+	current_process->signal_mask =
+		rt_sigaction_mask_from_sigset(&kset, sigsetsize);
 
 	for (;;)
 	{
+		/*
+		 * prepare_to_wait: mark BLOCKED before testing signal_pending,
+		 * so a signal delivered between the test and the sleep sets
+		 * READY instead of being clobbered (Linux wait_event order).
+		 */
+		process_set_sched_state(current_process, PROCESS_BLOCKED);
 		if (current_process->signal_pending &
 		    ~current_process->signal_mask)
+		{
+			process_set_sched_state(current_process, PROCESS_READY);
 			break;
+		}
 
-		process_set_sched_state(current_process, PROCESS_BLOCKED);
 		process_arm_kernel_syscall_sleep(current_process);
 		while (current_process->state == PROCESS_BLOCKED)
 		{
+			/*
+			 * Re-test the condition inside the sleep loop, as
+			 * wait_event() does. A signal delivered between the
+			 * test above and process_arm_kernel_syscall_sleep()
+			 * sets pending and READY, and the arm then republishes
+			 * BLOCKED: watching only the state left the task
+			 * asleep with its wakeup already spent. Seen as ash
+			 * blocked (state S) holding zombie pipeline stages.
+			 */
+			if (current_process->signal_pending &
+			    ~current_process->signal_mask)
+				break;
 			ir0_clock_wait_service_runqueue();
 			if (current_process->state != PROCESS_BLOCKED)
 				break;
 		}
 	}
 
+	/*
+	 * Deliver before returning, while the temporary mask is still
+	 * installed: Linux runs the handler from the signal-delivery path and
+	 * only then restores the saved mask (kernel/signal.c, sigsuspend +
+	 * restore_saved_sigmask). Returning -EINTR with the signal still
+	 * pending — unlike sys_pause(), which already delivers here — made ash
+	 * spin: every following sigsuspend saw the same pending bit and
+	 * returned at once. Observed as 400k+ back-to-back rt_sigsuspend calls
+	 * with the pipeline's children left unreaped (state R, children Z).
+	 */
 	current_process->signal_mask = saved_mask;
 	return -EINTR;
 }
@@ -663,6 +709,125 @@ int64_t sys_getsid(pid_t pid)
 		return -ESRCH;
 
 	return (int64_t)target->sid;
+}
+
+/*
+ * personality(2) execution domains (Linux uapi/linux/personality.h). Only the
+ * two domains that change observable behavior here are accepted: PER_LINUX32
+ * is what linux32(1) sets so uname(2) reports a 32-bit machine.
+ */
+#define PER_LINUX 0x0000
+#define PER_LINUX32 0x0008
+#define PERSONALITY_QUERY 0xffffffffu
+
+int64_t sys_personality(unsigned long persona)
+{
+	uint32_t old;
+
+	if (!current_process)
+		return -ESRCH;
+
+	old = current_process->personality;
+	if ((uint32_t)persona == PERSONALITY_QUERY)
+		return (int64_t)old;
+
+	if (persona != PER_LINUX && persona != PER_LINUX32)
+		return -EINVAL;
+
+	current_process->personality = (uint32_t)persona;
+	return (int64_t)old;
+}
+
+/* which values for setpriority(2)/getpriority(2) (Linux uapi/linux/resource.h). */
+#define PRIO_PROCESS 0
+#define PRIO_PGRP 1
+#define PRIO_USER 2
+
+/*
+ * Project a Linux nice value (-20..19) onto IR0's 8 priority bands, keeping
+ * nice 0 on the default band and lower nice on higher bands. Backends other
+ * than CONFIG_SCHEDULER_POLICY=2 ignore sched_prio, so there the nice value
+ * is recorded and reported but does not change scheduling.
+ */
+static int prio_band_from_nice(int nice_val)
+{
+	int band = IR0_SCHED_PRIO_DEFAULT - (nice_val / 5);
+
+	if (band < 0)
+		return 0;
+	if (band > IR0_SCHED_PRIO_MAX)
+		return IR0_SCHED_PRIO_MAX;
+	return band;
+}
+
+/*
+ * setpriority(2). Only PRIO_PROCESS is implemented; PRIO_PGRP/PRIO_USER
+ * report -EOPNOTSUPP rather than pretending to have applied the change.
+ */
+int64_t sys_setpriority(int which, int who, int prio)
+{
+	process_t *target;
+	int band;
+
+	if (!current_process)
+		return -ESRCH;
+	if (which != PRIO_PROCESS)
+	{
+		if (which == PRIO_PGRP || which == PRIO_USER)
+			return -EOPNOTSUPP;
+		return -EINVAL;
+	}
+
+	target = (who == 0) ? current_process
+			    : process_find_by_pid((pid_t)who);
+	if (!target)
+		return -ESRCH;
+
+	if (prio < -20)
+		prio = -20;
+	if (prio > 19)
+		prio = 19;
+
+	/* Raising priority (lowering nice) is privileged, as in Linux. */
+	if (prio < target->sched_nice && current_process->euid != ROOT_UID)
+		return -EACCES;
+
+	target->sched_nice = (int8_t)prio;
+	band = prio_band_from_nice(prio);
+	if (band != target->sched_prio)
+	{
+		/* Re-queue so the band change takes effect on the next pick. */
+		sched_remove_process(target);
+		target->sched_prio = band;
+		sched_add_process(target);
+	}
+	return 0;
+}
+
+/*
+ * getpriority(2). The raw syscall returns the nice value biased by 20 so a
+ * legitimate negative nice is not mistaken for an error code; musl and glibc
+ * undo the bias (Linux kernel/sys.c).
+ */
+int64_t sys_getpriority(int which, int who)
+{
+	process_t *target;
+
+	if (!current_process)
+		return -ESRCH;
+	if (which != PRIO_PROCESS)
+	{
+		if (which == PRIO_PGRP || which == PRIO_USER)
+			return -EOPNOTSUPP;
+		return -EINVAL;
+	}
+
+	target = (who == 0) ? current_process
+			    : process_find_by_pid((pid_t)who);
+	if (!target)
+		return -ESRCH;
+
+	return (int64_t)(20 - (int)target->sched_nice);
 }
 
 int64_t sys_getpgid(pid_t pid)
@@ -936,6 +1101,35 @@ int64_t sys_umask(mode_t mask)
   return (int64_t)old;
 }
 
+/*
+ * True for /proc/self/exe and for /proc/<pid>/exe naming the caller. Other
+ * PIDs are deliberately not accepted: execing another process's image by
+ * path is not what the standalone-shell re-exec needs, and honouring it here
+ * would bypass the permission check that ran against the literal path.
+ */
+static int exec_path_is_proc_self_exe(const char *path)
+{
+	const char *p;
+	pid_t pid = 0;
+
+	if (!path || strncmp(path, "/proc/", 6) != 0)
+		return 0;
+
+	p = path + 6;
+	if (strncmp(p, "self/exe", 8) == 0 && p[8] == '\0')
+		return 1;
+
+	if (*p < '0' || *p > '9')
+		return 0;
+	while (*p >= '0' && *p <= '9')
+		pid = pid * 10 + (*p++ - '0');
+
+	if (strncmp(p, "/exe", 4) != 0 || p[4] != '\0')
+		return 0;
+
+	return current_process && pid == current_process->task.pid;
+}
+
 int64_t sys_exec(const char *pathname,
                  char *const argv[],
                  char *const envp[])
@@ -964,6 +1158,20 @@ int64_t sys_exec(const char *pathname,
   if (path_rc != 0)
     return path_rc;
   path_to_use = resolved_path;
+
+  /*
+   * /proc/<pid>/exe is a symlink in Linux, resolved by the path walk before
+   * the binary is ever opened. IR0's /proc is not a VFS mount and the ELF
+   * loader only reads through vfs_read_file, so the substitution happens
+   * here instead — the one place that still knows it is handling a path.
+   * BusyBox with FEATURE_SH_STANDALONE re-executes itself this way.
+   */
+  if (exec_path_is_proc_self_exe(resolved_path))
+  {
+    if (!current_process->exe_path[0])
+      return -ENOENT;
+    path_to_use = current_process->exe_path;
+  }
 
   /* argv/envp are NULL-terminated vectors; only validate the first slot here.
    * Per-entry mapped checks happen inside the iteration below.
@@ -1125,6 +1333,36 @@ int64_t sys_exec(const char *pathname,
   for (int i = 0; i < 256 && kernel_envp[i]; i++)
     kfree(kernel_envp[i]);
 
+  /*
+   * A refused exec used to return to ring 3 with nothing in the log, so a
+   * child that failed here was indistinguishable from one whose program
+   * exited 127 on its own. Record the errno.
+   */
+  if (result < 0)
+  {
+    size_t heap_total = 0, heap_used = 0, heap_allocs = 0;
+
+    /*
+     * Heap census on refusal: exec loads the whole image with
+     * kmalloc_try(), so -ENOMEM means either the heap is genuinely full
+     * (a leak) or no contiguous block that size is left (fragmentation).
+     * The used figure separates the two.
+     */
+    ir0_mm_alloc_stats(&heap_total, &heap_used, &heap_allocs);
+
+    /* -ENOENT is the shell walking PATH; only real refusals are notable. */
+    if (result == -ENOENT)
+      klog_debug_fmt("EXEC", "exec enoent pid=%x\n",
+                     (unsigned)((uint32_t)current_process->task.pid));
+    else
+      klog_notice_fmt("EXEC", "exec refused pid=%x err=%x path=%s heap_used=%x heap_total=%x\n",
+                    (unsigned)((uint32_t)current_process->task.pid),
+                    (unsigned)(-result),
+                    path_to_use ? path_to_use : "(null)",
+                    (unsigned)heap_used,
+                    (unsigned)heap_total);
+  }
+
   fase50_trace_syscall_proc("sys_exec-return", current_process);
   return result;
 }
@@ -1136,6 +1374,22 @@ int64_t sys_fork(void)
 
   r = fork();
   return r;
+}
+
+/*
+ * vfork(2) as a plain fork.
+ *
+ * POSIX allows vfork() to be implemented as fork(), and 4.4BSD did exactly
+ * that; what callers lose is the guarantee that the parent stays suspended
+ * and that the child's writes are visible to it. BusyBox is written for this
+ * case (libbb/vfork_daemon_rexec.c: "vfork() can be equivalent to fork()"),
+ * so the honest cost is that a failed exec in the child is not reported back
+ * through shared memory. Sharing the address space needs the parent to block
+ * until execve or _exit, which IR0's exec path cannot yet unwind.
+ */
+int64_t sys_vfork(void)
+{
+  return sys_fork();
 }
 
 /*

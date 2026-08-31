@@ -134,6 +134,7 @@ static int pseudo_default_stat(void *ctx, stat_t *st)
     st->st_mode = S_IFREG | 0444;
     st->st_nlink = 1;
     st->st_size = 0;
+    pseudo_fs_stat_now(st);
     return 0;
 }
 
@@ -146,6 +147,7 @@ static int pseudo_writable_stat(void *ctx, stat_t *st)
     st->st_mode = S_IFREG | 0664;
     st->st_nlink = 1;
     st->st_size = 4096;
+    pseudo_fs_stat_now(st);
     return 0;
 }
 
@@ -275,6 +277,7 @@ static int sys_net_iface_stat(void *ctx, stat_t *st)
 		st->st_nlink = 1;
 		st->st_size = 4096;
 	}
+    pseudo_fs_stat_now(st);
 	return 0;
 }
 
@@ -466,6 +469,7 @@ static int proc_pid_file_stat(void *ctx, stat_t *st)
     st->st_gid = 0;
     /* Linux reports 0 for /proc/pid files; readers must not trust st_size. */
     st->st_size = 0;
+    pseudo_fs_stat_now(st);
     return 0;
 }
 

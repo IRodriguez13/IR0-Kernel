@@ -83,6 +83,8 @@ setup/pid1/sbin/irinit
 setup/pid1/fase52_staging/bin/
 setup/pid1/fase52_staging/lib/
 setup/pid1/fase52_staging/usr/lib/*.a
+setup/pid1/devtools_staging/bin/
+setup/pid1/session_walk_smoke
 
 # Test artifacts (make tests / make health)
 tests/host/ir0_test_suite
@@ -97,6 +99,15 @@ toolchain/
 
 # Product rootfs rebuild stamps (IR0-userspace drives the real build).
 *.runit.stamp
+disk.img.*.stamp
+
+# Staged product tree copied from ISD; rebuilt, never authored here.
+/out/
+
+# Local backups (config snapshots, pre-refactor copies)
+*.bak
+*.bak_*
+.config.pre-*
 
 # Local kernel-maintainer index pointer (install.sh); never commit machine paths
 .kernel-maintainer-index.yaml

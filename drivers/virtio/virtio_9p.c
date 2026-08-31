@@ -54,6 +54,8 @@
 
 /* 9P2000.L message ids (Linux include/net/9p/9p.h) */
 #define P9_RLERROR  7
+#define P9_TSTATFS  8
+#define P9_RSTATFS  9
 #define P9_TLOPEN   12
 #define P9_RLOPEN   13
 #define P9_TLCREATE 14
@@ -549,20 +551,33 @@ static int v9p_lcreate(uint32_t fid, const char *name, uint32_t flags, uint32_t 
 static int v9p_write(uint32_t fid, uint64_t offset, const void *data, uint32_t count,
 		     uint32_t *written)
 {
-	uint8_t body[V9P_BUF_SIZE];
-	uint8_t *p = body;
+	/*
+	 * The message body carries a full msize payload. On the stack it made
+	 * this frame 8 KiB, and a write to the host share reaches it under
+	 * sys_write, which is another 4 KiB: measured peak stack for an
+	 * ordinary session write was 14 KiB of 32 KiB before this moved off.
+	 */
+	uint8_t *body;
+	uint8_t *p;
 	uint8_t *rb;
 	uint32_t rblen;
 	int rc;
 
-	if (count + 16 > sizeof(body))
+	if (count + 16 > (uint32_t)V9P_BUF_SIZE)
 		return -EFBIG;
+
+	body = kmalloc_try(V9P_BUF_SIZE);
+	if (!body)
+		return -ENOMEM;
+
+	p = body;
 	p9_put32(&p, fid);
 	p9_put64(&p, offset);
 	p9_put32(&p, count);
 	memcpy(p, data, count);
 	p += count;
 	rc = v9p_rpc(P9_TWRITE, body, (uint32_t)(p - body), P9_RWRITE, &rb, &rblen);
+	kfree(body);
 	if (rc < 0)
 		return rc;
 	if (rblen < 4)
@@ -632,6 +647,52 @@ static int v9p_getattr(uint32_t fid, uint64_t request_mask, uint32_t *mode_out,
 	if (size_out)
 		*size_out = size;
 	return 0;
+}
+
+/*
+ * Tstatfs: fid[4]
+ * Rstatfs: type[4] bsize[4] blocks[8] bfree[8] bavail[8] files[8] ffree[8]
+ *          fsid[8] namelen[4]
+ *
+ * Without it statfs(2) on a 9p mount reported f_blocks = 0 and df printed the
+ * share with zero size.
+ */
+static int v9p_statfs(uint32_t fid, struct virtio_9p_statfs *out)
+{
+	uint8_t body[8];
+	uint8_t *p = body;
+	uint8_t *rb;
+	uint32_t rblen;
+	int rc;
+
+	if (!out)
+		return -EINVAL;
+
+	p9_put32(&p, fid);
+	rc = v9p_rpc(P9_TSTATFS, body, (uint32_t)(p - body), P9_RSTATFS, &rb,
+		     &rblen);
+	if (rc < 0)
+		return rc;
+	if (rblen < 4 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 4)
+		return -EIO;
+
+	out->type = p9_get32(&rb);
+	out->bsize = p9_get32(&rb);
+	out->blocks = p9_get64(&rb);
+	out->bfree = p9_get64(&rb);
+	out->bavail = p9_get64(&rb);
+	out->files = p9_get64(&rb);
+	out->ffree = p9_get64(&rb);
+	rb += 8; /* fsid */
+	out->namelen = p9_get32(&rb);
+	return 0;
+}
+
+int virtio_9p_statfs(struct virtio_9p_statfs *out)
+{
+	if (!virtio_9p_ready())
+		return -ENODEV;
+	return v9p_statfs(g_root_fid, out);
 }
 
 static int v9p_mkdir(uint32_t dfid, const char *name, uint32_t mode, uint32_t gid)
@@ -1097,16 +1158,25 @@ int virtio_9p_readdir(const char *relpath, virtio_9p_dirent_t *entries, int max)
 {
 	uint32_t fid = 9;
 	uint64_t off = 0;
-	uint8_t buf[V9P_READ_CHUNK];
+	/* 4 KiB of directory data; on the stack it left a getdents chain with
+	 * no room for an interrupt frame (see sys_getdents_common). */
+	uint8_t *buf;
 	int n = 0;
 	int rc;
 
 	if (!g_ready || !entries || max <= 0)
 		return -EINVAL;
 
+	buf = kmalloc_try(V9P_READ_CHUNK);
+	if (!buf)
+		return -ENOMEM;
+
 	rc = v9p_walk_path(fid, relpath ? relpath : "");
 	if (rc < 0)
+	{
+		kfree(buf);
 		return rc;
+	}
 	rc = v9p_lopen(fid, P9_DOTL_RDONLY | P9_DOTL_DIRECTORY);
 	if (rc < 0)
 	{
@@ -1115,6 +1185,7 @@ int virtio_9p_readdir(const char *relpath, virtio_9p_dirent_t *entries, int max)
 		if (rc < 0)
 		{
 			(void)v9p_clunk(fid);
+			kfree(buf);
 			return rc;
 		}
 	}
@@ -1125,10 +1196,11 @@ int virtio_9p_readdir(const char *relpath, virtio_9p_dirent_t *entries, int max)
 		uint8_t *p;
 		uint8_t *end;
 
-		rc = v9p_readdir(fid, off, buf, sizeof(buf), &got);
+		rc = v9p_readdir(fid, off, buf, V9P_READ_CHUNK, &got);
 		if (rc < 0)
 		{
 			(void)v9p_clunk(fid);
+			kfree(buf);
 			return rc;
 		}
 		if (got == 0)
@@ -1170,11 +1242,12 @@ int virtio_9p_readdir(const char *relpath, virtio_9p_dirent_t *entries, int max)
 			p += namelen;
 			off = next_off;
 		}
-		if (got < sizeof(buf))
+		if (got < V9P_READ_CHUNK)
 			break;
 	}
 
 	(void)v9p_clunk(fid);
+	kfree(buf);
 	return n;
 }
 

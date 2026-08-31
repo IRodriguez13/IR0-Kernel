@@ -236,6 +236,17 @@ static int64_t ktm_dev_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
 		return ktm_ioc_get_caps(arg);
 	case KTM_IOC_USER_EVENT:
 		return ktm_ioc_user_event(arg);
+	case KTM_IOC_DUMP_EVENTS:
+	{
+		/* @arg is a packed scalar, not a user pointer: a failing test
+		 * asks for the dump from its own error path, where copying a
+		 * struct in is extra surface for no gain. */
+		uint64_t packed = (uint64_t)(uintptr_t)arg;
+
+		ktm_event_ring_dump((size_t)(uint32_t)packed,
+				    (uint32_t)(packed >> 32));
+		return 0;
+	}
 	default:
 		return -ENOTTY;
 	}

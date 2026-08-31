@@ -81,6 +81,19 @@ void load_page_directory(uint64_t pml4_addr);
  */
 uint64_t get_current_page_directory(void);
 
+/** Pin boot/kernel CR3 once (before any process mm). Never overwrite. */
+void paging_pin_kernel_cr3(uint64_t cr3);
+
+/** Boot/kernel CR3 with PMM identity (0 if not pinned yet). */
+uint64_t paging_get_kernel_cr3(void);
+
+/** Copy one 4KiB frame via pinned boot CR3 (COW / phys access). */
+void paging_copy_phys_page(uintptr_t dst_phys, uintptr_t src_phys);
+
+/** Zero one 4KiB frame via pinned boot CR3 (clear_highpage). */
+void paging_zero_phys_page(uintptr_t phys);
+void paging_poison_phys_page(uintptr_t phys, uint8_t pattern);
+
 /**
  * Check if paging is enabled
  */
@@ -117,6 +130,12 @@ int is_page_mapped_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t *fl
  * The returned pointer is valid even when the leaf PTE is not present.
  */
 uint64_t *paging_get_pte(uint64_t *pml4, uintptr_t vaddr);
+
+/*
+ * Split a PD-level 2MiB leaf covering @vaddr into 512×4KiB supervisor leaves
+ * so paging_get_pte / COW can see a PTE. No-op if already 4KiB.
+ */
+int paging_ensure_4k_leaf(uint64_t *pml4, uintptr_t vaddr);
 
 /**
  * Unmap a 4KB page in an explicit page directory (PML4 root).

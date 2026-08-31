@@ -28,6 +28,13 @@ typedef struct {
     const char *name;
     uint32_t mode;        // File permissions
     uint32_t device_id;   // Device identifier
+    /*
+     * Linux (major,minor) for nodes that have a canonical upstream number,
+     * encoded with IR0_MKDEV; 0 when the node is IR0-specific. Distinct from
+     * device_id, which is an internal handle with no upstream meaning: this
+     * is what lets `mknod path c 1 3` resolve to /dev/null.
+     */
+    uint32_t rdev;
     void *driver_data;    // Driver-specific data
 } devfs_entry_t;
 
@@ -85,6 +92,8 @@ int64_t devfs_text_snap_read(const devfs_text_snap_t *snap, void *buf,
 int devfs_init(void);
 devfs_node_t *devfs_find_node(const char *path);
 devfs_node_t *devfs_find_node_by_id(uint32_t device_id);
+/* Node carrying a given Linux (major,minor); NULL when none claims it. */
+devfs_node_t *devfs_find_node_by_rdev(uint32_t rdev);
 int devfs_register_node(devfs_node_t *node);
 int devfs_register_device(const char *name, const devfs_ops_t *ops, uint32_t mode);
 int devfs_unregister_device(const char *name);

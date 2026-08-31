@@ -18,6 +18,7 @@
 #include <ir0/process.h>
 #include <ir0/process_ctx_invariant.h>
 #include <ir0/arch_port.h>
+#include <ir0/ktm/deferred.h>
 #include <ir0/arch_cpu.h>
 #include <ir0/klog.h>
 #include <ir0/debug_runtime.h>
@@ -34,6 +35,29 @@ extern uint64_t kernel_syscall_stack_top;
 extern uint64_t user_rsp_save;
 extern void tss_set_rsp0(uint64_t rsp0);
 
+
+static int arch_va_in_kstack_window(uint64_t v)
+{
+	return v >= IR0_KSTACK_VA_BASE &&
+	       v < IR0_KSTACK_VA_BASE +
+		   (uint64_t)IR0_KSTACK_MAX_SLOTS * IR0_KSTACK_SLOT_SIZE;
+}
+
+/*
+ * Ring-3 resume invariant: no GPR handed to user may point into the kernel
+ * stack window. A task saved mid-syscall keeps kernel callee-saved values;
+ * any path that flips CS back to user without reapplying the entry frame
+ * would leak them (user RBP in the kstack → write fault on a supervisor PTE).
+ */
+static int arch_task_user_gprs_leak_kstack(const task_t *t)
+{
+	return arch_va_in_kstack_window(t->arch.rbp) ||
+	       arch_va_in_kstack_window(t->arch.rbx) ||
+	       arch_va_in_kstack_window(t->arch.r12) ||
+	       arch_va_in_kstack_window(t->arch.r13) ||
+	       arch_va_in_kstack_window(t->arch.r14) ||
+	       arch_va_in_kstack_window(t->arch.r15);
+}
 
 void arch_set_current_kernel_stack(struct process *p)
 {
@@ -260,7 +284,8 @@ void arch_switch_to(task_t *prev, task_t *next)
             if (nrip < 0x00400000ULL || nrip > 0x00007FFFFFFFFFFFULL)
                 process_arm_kernel_syscall_sleep(next_proc);
         }
-        else if (next_proc->syscall_resume_rax == 0 &&
+        else if ((next_proc->kernel_syscall_sleep ||
+                  next_proc->syscall_resume_rax == 0) &&
                  !(next_proc->wait_blocked &&
                    next_proc->wait_resume_child_pid > 0))
         {
@@ -270,9 +295,13 @@ void arch_switch_to(task_t *prev, task_t *next)
              * iretq with rax=0.
              *
              * Pipe/TTY/poll must NOT arm blocked_resume(rax=0); they use
-             * process_arm_kernel_syscall_sleep only (portable kernel_ret).
-             * This branch is x86 wait/coop legacy — do not extend to new
-             * in-syscall sleepers.
+             * process_arm_kernel_syscall_sleep only (portable kernel_ret),
+             * which is what kernel_syscall_sleep records. Keying solely on
+             * syscall_resume_rax == 0 read leftover state from the previous
+             * blocking syscall: a non-zero residue routed a woken pipe
+             * reader through the user-iret branch below, so it left the read
+             * without retrying and reported a short read with bytes still
+             * buffered (KTM ring: PIPE_WRITE then no further PIPE_READ).
              */
             next_proc->irq_frame_saved = 0;
             next_proc->coop_resched_resume = 0;
@@ -280,6 +309,19 @@ void arch_switch_to(task_t *prev, task_t *next)
         else
         {
         syscall_user_frame_t *frame = &next_proc->syscall_frame;
+
+        /*
+         * Why this task went back to ring 3 instead of continuing its
+         * syscall in the kernel. Recorded, not emitted: an inline
+         * ktm_event_emit4 here perturbs the switch badly enough to create
+         * its own failures (see ir0/ktm/deferred.h).
+         */
+        ktm_deferred_record(KTM_DEFERRED_RESUME_GATE,
+                            (uint32_t)next_proc->task.pid,
+                            (uint64_t)next_proc->kernel_syscall_sleep,
+                            (uint64_t)next_proc->wait_blocked |
+                                ((uint64_t)(uint32_t)next_proc->wait_resume_child_pid << 8),
+                            next_proc->syscall_resume_rax);
 
         wait_exit_audit_ctx_resume(prev_proc, next_proc, next);
 #if IR0_DEBUG_WAIT
@@ -503,6 +545,15 @@ void arch_switch_to(task_t *prev, task_t *next)
             klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_UNREPAIRED");
     }
 #endif
+
+    if (next && next_proc && next_proc->mode == USER_MODE &&
+        task_cs_is_user(next) && arch_task_user_gprs_leak_kstack(next))
+    {
+        klog_info("CTX", "CLASSIFY USER_RESUME_KSTACK_GPR_LEAK");
+        process_apply_syscall_frame_to_task(&next_proc->task,
+                                            &next_proc->syscall_frame,
+                                            task_get_retval(next));
+    }
 
     switch_context_x64(prev, next);
 }

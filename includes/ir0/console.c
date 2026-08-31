@@ -12,6 +12,7 @@
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
+#include <ir0/ktm/klog.h>
 #include <ir0/copy_user.h>
 #include <ir0/console.h>
 #include <ir0/paging.h>
@@ -394,7 +395,24 @@ static int tty_sleep_for_input(void)
 		return 0;
 
 	if (!tty_waiter_register(proc))
+	{
+		/*
+		 * Table full. Returning here without draining left
+		 * tty_read_kernel spinning: it never polled the keyboard and
+		 * never yielded, so getty printed its prompt and then ignored
+		 * every keystroke. Make progress instead of busy-looping.
+		 */
+		static unsigned int full_hits;
+
+		if (++full_hits <= 8)
+			klog_notice_fmt("TTY",
+					"[TTY] read-waiter table full (n=%u pid=%u)\n",
+					full_hits, (unsigned int)proc->task.pid);
+		enable_interrupts();
+		kernel_idle_poll();
+		sched_schedule_next();
 		return 0;
+	}
 
 	d1_16_tty_read_block(proc, tty_waiter_count(), "tty_input");
 	tty_sleep_depth++;

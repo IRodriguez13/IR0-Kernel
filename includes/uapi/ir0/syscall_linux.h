@@ -80,6 +80,7 @@
 #define __NR_clone         56
 #define __NR_fork          57
 #define __NR_vfork         58
+#define __NR_vfork         58
 #define __NR_execve        59
 #define __NR_exit          60
 #define __NR_wait4         61
@@ -91,6 +92,7 @@
 #define __NR_fcntl         72
 #define __NR_flock         73
 #define __NR_fsync         74
+#define __NR_fdatasync     75
 #define __NR_truncate      76
 #define __NR_ftruncate     77
 #define __NR_getdents      78
@@ -113,6 +115,9 @@
 #define __NR_lchown        94
 #define __NR_umask         95
 #define __NR_gettimeofday  96
+#define __NR_personality   135
+#define __NR_getpriority   140
+#define __NR_setpriority   141
 #define __NR_getrlimit     97
 #define __NR_getrusage     98
 #define __NR_sysinfo       99

@@ -75,6 +75,13 @@ int64_t pseudo_fs_close_fd(int fd);
 int pseudo_fs_stat_path(const char *full_path, stat_t *st);
 
 /*
+ * Stamp a pseudo-FS stat with the wall clock. These nodes are generated on
+ * read, so they have no stored mtime; zeroing the struct left every entry
+ * dated 1970 in ls -l. Linux reports current time for the same nodes.
+ */
+void pseudo_fs_stat_now(stat_t *st);
+
+/*
  * Acquire ops/ctx for a path without assigning a global virtual fd.
  * Caller owns the handle until pseudo_fs_release_ops (or process fd close).
  */

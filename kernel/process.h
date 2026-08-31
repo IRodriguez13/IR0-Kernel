@@ -164,6 +164,13 @@ typedef struct process
 	
 	/* Process command name (for ps) */
 	char comm[16]; /* Process command name (max 15 chars + null) */
+	/*
+	 * Absolute path of the running image, as resolved by execve. Linux
+	 * exposes it as the /proc/<pid>/exe symlink; BusyBox built with
+	 * FEATURE_SH_STANDALONE re-executes itself through that path, and
+	 * comm[] cannot serve because it is only the basename.
+	 */
+	char exe_path[256];
 
 	/* Resource limits (Linux rlimit indices 0..15). */
 #define IR0_RLIM_NLIMITS 16
@@ -263,12 +270,21 @@ typedef struct process
 	uint8_t want_kernel_ret;
 
 	/*
-	 * Per-process kernel stack (see IR0_PROC_KSTACK_SIZE). kstack_base is the
-	 * kmalloc_aligned allocation (freed in process_destroy); kstack_top is the
-	 * 16-byte aligned top loaded into kernel_syscall_stack_top and TSS.rsp0 when
-	 * this task is scheduled. saved_user_rsp shadows the global user_rsp_save
-	 * across context switches so a task resuming an in-kernel block loop restores
-	 * its own user RSP at sysret instead of a peer's clobbered value.
+	 * Sleeping inside a syscall that must resume in the kernel and retry
+	 * its operation (pipe, tty, poll). The resume gate used to infer this
+	 * from syscall_resume_rax == 0, but that field is leftover state from
+	 * whatever blocking syscall ran last: a non-zero residue sent a woken
+	 * pipe reader back to ring 3 through its stale entry frame, so the
+	 * read was never retried and userspace saw a short read while bytes
+	 * sat in the pipe. Cleared when the task returns to user segments.
+	 */
+	uint8_t kernel_syscall_sleep;
+
+	/*
+	 * Per-process kernel stack (IR0_PROC_KSTACK_SIZE). Mapped supervisor-only
+	 * at IR0_KSTACK_VA_BASE+slot (not kmalloc identity). kstack_top feeds
+	 * kernel_syscall_stack_top and TSS.rsp0. saved_user_rsp shadows the
+	 * global user_rsp_save across context switches.
 	 */
 	void *kstack_base;
 	uint64_t kstack_top;
@@ -280,6 +296,17 @@ typedef struct process
 	 * Placed after ASM-critical fields so PROC_FS_BASE_OFFSET stays stable.
 	 */
 	int sched_prio;
+
+	/*
+	 * setpriority(2)/getpriority(2) nice value (-20..19). Kept alongside
+	 * sched_prio because the band is a lossy 8-step projection of it and
+	 * getpriority must return what the caller set.
+	 */
+	int8_t sched_nice;
+
+	/* personality(2) execution domain; only PER_LINUX/PER_LINUX32 exist. */
+	uint32_t personality;
+
 } process_t;
 
 #ifndef IR0_SCHED_PRIO_BANDS
@@ -511,10 +538,27 @@ int process_wait(pid_t pid, int *status, int options);
  * Single writers for sched vs lifecycle (§4A). Prefer these over raw
  * p->state / p->task.state assignments so the two views cannot diverge.
  */
+/*
+ * Trace hook for sleep/wake transitions (KTM_EVENT_BLOCK / KTM_EVENT_WAKE).
+ * Out of line so this header stays free of KTM includes, and called only for
+ * the two transitions that can carry a lost wakeup — RUNNING/READY churn on
+ * every tick would overrun the 256-entry ring before anyone reads it.
+ */
+void process_sched_state_trace(const process_t *p, process_state_t prev,
+			       process_state_t next, void *caller);
+
 static inline void process_set_sched_state(process_t *p, process_state_t st)
 {
+	process_state_t prev;
+
 	if (!p || st == PROCESS_ZOMBIE)
 		return;
+
+	prev = p->state;
+	if (st == PROCESS_BLOCKED ||
+	    (prev == PROCESS_BLOCKED && st == PROCESS_READY))
+		process_sched_state_trace(p, prev, st,
+					  __builtin_return_address(0));
 
 	p->state = st;
 	switch (st)

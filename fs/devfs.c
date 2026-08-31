@@ -2792,25 +2792,25 @@ static const devfs_ops_t bluetooth_hci_ops = {
 #endif
 
 devfs_node_t dev_null = {
-    .entry = { .name = "null", .mode = 0666, .device_id = 1 },
+    .entry = { .name = "null", .mode = 0666, .device_id = 1, .rdev = IR0_MKDEV(1, 3) },
     .ops = &null_ops,
     .ref_count = 0
 };
 
 devfs_node_t dev_zero = {
-    .entry = { .name = "zero", .mode = 0666, .device_id = 2 },
+    .entry = { .name = "zero", .mode = 0666, .device_id = 2, .rdev = IR0_MKDEV(1, 5) },
     .ops = &zero_ops,
     .ref_count = 0
 };
 
 devfs_node_t dev_console = {
-    .entry = { .name = "console", .mode = 0620, .device_id = 3 },
+    .entry = { .name = "console", .mode = 0620, .device_id = 3, .rdev = IR0_MKDEV(5, 1) },
     .ops = &console_ops,
     .ref_count = 0
 };
 
 devfs_node_t dev_tty = {
-    .entry = { .name = "tty", .mode = 0620, .device_id = 4 },
+    .entry = { .name = "tty", .mode = 0620, .device_id = 4, .rdev = IR0_MKDEV(5, 0) },
     .ops = &console_ops,
     .ref_count = 0
 };
@@ -2961,19 +2961,19 @@ static void devfs_register_disk_topology(void)
 }
 
 devfs_node_t dev_random = {
-    .entry = { .name = "random", .mode = 0644, .device_id = 10 },
+    .entry = { .name = "random", .mode = 0644, .device_id = 10, .rdev = IR0_MKDEV(1, 8) },
     .ops = &random_ops,
     .ref_count = 0
 };
 
 devfs_node_t dev_urandom = {
-    .entry = { .name = "urandom", .mode = 0644, .device_id = 11 },
+    .entry = { .name = "urandom", .mode = 0644, .device_id = 11, .rdev = IR0_MKDEV(1, 9) },
     .ops = &urandom_ops,
     .ref_count = 0
 };
 
 devfs_node_t dev_full = {
-    .entry = { .name = "full", .mode = 0666, .device_id = 12 },
+    .entry = { .name = "full", .mode = 0666, .device_id = 12, .rdev = IR0_MKDEV(1, 7) },
     .ops = &full_ops,
     .ref_count = 0
 };
@@ -3300,6 +3300,19 @@ devfs_node_t *devfs_find_node_by_id(uint32_t device_id)
         {
             return dev_nodes[i];
         }
+    }
+    return NULL;
+}
+
+devfs_node_t *devfs_find_node_by_rdev(uint32_t rdev)
+{
+    if (rdev == 0)
+        return NULL;
+
+    for (int i = 0; i < num_dev_nodes; i++)
+    {
+        if (dev_nodes[i] && dev_nodes[i]->entry.rdev == rdev)
+            return dev_nodes[i];
     }
     return NULL;
 }

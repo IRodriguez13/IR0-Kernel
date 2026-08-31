@@ -13,11 +13,25 @@
 #include <config.h>
 #include <ir0/process.h>
 #include <ir0/ktm/klog.h>
+#include <ir0/ktm/deferred.h>
 #include <string.h>
 
-#define KTM_EVENT_RING_CAP 256
+/*
+ * 64 KiB of static ring (64 B/event). Sized against the observed worst case:
+ * an idle shell ping-pongs BLOCK/WAKE once per tick, which flushed a
+ * 256-entry ring in well under a second and left a failure dump showing only
+ * scheduler churn — the pipe history that explains the failure was already
+ * overwritten.
+ */
+#define KTM_EVENT_RING_CAP 1024
+
+/* Widest event type + slack; the last slot absorbs anything beyond it. */
+#define KTM_DUMP_TYPE_MAX 64
 
 static ktm_event_t g_ring[KTM_EVENT_RING_CAP];
+/* Static, not on the stack: dumps run from crash paths with little headroom. */
+static uint8_t g_dump_selected[KTM_EVENT_RING_CAP / 8];
+static uint16_t g_dump_type_count[KTM_DUMP_TYPE_MAX];
 static uint32_t g_head; /* next write index (monotonic) */
 static uint32_t g_tail; /* next read index for consumers */
 static uint64_t g_seq;
@@ -99,6 +113,117 @@ int ktm_event_pending(void)
 void ktm_event_ring_reset_cursor(void)
 {
 	g_tail = g_head;
+}
+
+void ktm_event_ring_dump(size_t max_events, uint32_t subsys_mask)
+{
+#if !(defined(CONFIG_KTM_EVENTS) && CONFIG_KTM_EVENTS)
+	(void)max_events;
+	(void)subsys_mask;
+#else
+	uint32_t stored;
+	uint32_t first;
+	uint32_t i;
+	uint32_t matched = 0;
+	uint32_t selected = 0;
+	uint32_t quota;
+
+	/*
+	 * Turn rows recorded from paths too hot to emit into real events
+	 * before walking the ring, so a dump shows both in one timeline.
+	 */
+	ktm_deferred_flush();
+
+	/*
+	 * Walks backwards from the write head instead of the consumer cursor:
+	 * the point of a dump is the history leading up to a failure, which is
+	 * usually already consumed (or never was, on a path with no consumer).
+	 * Ordering bugs across two tasks — a wake published before the sleeper
+	 * blocks, a pipe end released while a reader waits — are invisible in
+	 * interleaved printf logs but obvious in sequence order here.
+	 */
+	stored = (g_head < KTM_EVENT_RING_CAP) ? g_head : KTM_EVENT_RING_CAP;
+	first = g_head - stored;
+
+	for (i = 0; i < stored; i++)
+	{
+		const ktm_event_t *e = &g_ring[(first + i) % KTM_EVENT_RING_CAP];
+
+		if (!subsys_mask || (subsys_mask & (1u << e->subsystem)))
+			matched++;
+	}
+
+	/*
+	 * Select newest-first under a per-type quota.
+	 *
+	 * Taking the newest N outright makes the dump useless whenever one
+	 * type dominates: the resume gate fires on every return to ring 3, and
+	 * ktm_deferred_flush() above replays its backlog at the head, so a
+	 * segfault dump came out as 48 identical CTX_USER_IRET rows with the
+	 * page faults and pipe transitions that explain the crash pushed out.
+	 * Capping each type keeps room for the rare events, which are the
+	 * informative ones. A second pass backfills from whatever is left so a
+	 * quiet ring still fills the budget.
+	 */
+	if (max_events == 0 || max_events > KTM_EVENT_RING_CAP)
+		max_events = KTM_EVENT_RING_CAP;
+	quota = (uint32_t)max_events / 4;
+	if (quota < 2)
+		quota = 2;
+
+	memset(g_dump_selected, 0, sizeof(g_dump_selected));
+	memset(g_dump_type_count, 0, sizeof(g_dump_type_count));
+
+	for (i = stored; i-- > 0 && selected < max_events;)
+	{
+		const ktm_event_t *e = &g_ring[(first + i) % KTM_EVENT_RING_CAP];
+		uint16_t t = e->type;
+
+		if (subsys_mask && !(subsys_mask & (1u << e->subsystem)))
+			continue;
+		if (t >= KTM_DUMP_TYPE_MAX)
+			t = KTM_DUMP_TYPE_MAX - 1;
+		if (g_dump_type_count[t] >= quota)
+			continue;
+		g_dump_type_count[t]++;
+		g_dump_selected[i >> 3] |= (uint8_t)(1u << (i & 7));
+		selected++;
+	}
+
+	for (i = stored; i-- > 0 && selected < max_events;)
+	{
+		const ktm_event_t *e = &g_ring[(first + i) % KTM_EVENT_RING_CAP];
+
+		if (subsys_mask && !(subsys_mask & (1u << e->subsystem)))
+			continue;
+		if (g_dump_selected[i >> 3] & (1u << (i & 7)))
+			continue;
+		g_dump_selected[i >> 3] |= (uint8_t)(1u << (i & 7));
+		selected++;
+	}
+
+	klog_notice_fmt("KTM",
+			"KTM_RING_BEGIN stored=%x match=%x shown=%x mask=%x\n",
+			(unsigned)stored, (unsigned)matched,
+			(unsigned)selected, (unsigned)subsys_mask);
+	for (i = 0; i < stored; i++)
+	{
+		const ktm_event_t *e = &g_ring[(first + i) % KTM_EVENT_RING_CAP];
+
+		if (!(g_dump_selected[i >> 3] & (1u << (i & 7))))
+			continue;
+
+		klog_notice_fmt("KTM",
+			       "KTM_EV seq=%x pid=%x t=%x sub=%x a0=%llx a1=%llx a2=%llx a3=%llx\n",
+			       (unsigned)e->sequence, (unsigned)e->pid,
+			       (unsigned)e->type, (unsigned)e->subsystem,
+			       (unsigned long long)e->arg0,
+			       (unsigned long long)e->arg1,
+			       (unsigned long long)e->arg2,
+			       (unsigned long long)e->arg3);
+	}
+	klog_notice_fmt("KTM", "KTM_RING_END\n");
+#endif
 }
 
 int ktm_event_copy_out(ktm_event_t *dst, size_t max_events)

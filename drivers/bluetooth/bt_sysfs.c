@@ -20,6 +20,7 @@
  * Design: Bluetooth as observable network (adapters, neighbors, sessions as files).
  */
 
+#include <ir0/kmem.h>
 #include "bt_device.h"
 #include "hci_core.h"
 #include <string.h>
@@ -90,14 +91,33 @@ int bt_sysfs_hci0_state_read(char *buf, size_t count)
  *
  * Returns: Bytes written on success, negative error on failure
  */
+static int bt_sysfs_neighbors_fill(char *buf, size_t count,
+                                   struct bluetooth_device *devices);
+
+/* 8 KiB of devices; see bt_proc_devices_read for why this is not on the
+ * stack. A walk of /sys reaches this reader the same way. */
 int bt_sysfs_topology_neighbors_read(char *buf, size_t count)
 {
+    struct bluetooth_device *devices;
+    int rc;
+
     if (!buf || count == 0)
         return -EINVAL;
 
+    devices = kmalloc_try(sizeof(*devices) * 32);
+    if (!devices)
+        return -ENOMEM;
+
+    rc = bt_sysfs_neighbors_fill(buf, count, devices);
+    kfree(devices);
+    return rc;
+}
+
+static int bt_sysfs_neighbors_fill(char *buf, size_t count,
+                                   struct bluetooth_device *devices)
+{
     hci_process_events();
 
-    struct bluetooth_device devices[32];
     int num = hci_get_discovered_devices(devices, 32);
     if (num < 0)
         num = 0;

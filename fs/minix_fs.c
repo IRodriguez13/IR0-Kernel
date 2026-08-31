@@ -66,9 +66,39 @@ static uint32_t minix_zmap_search_start;
  * MINIX i_time is a POSIX time_t (seconds); the kernel clock counts
  * milliseconds since boot.
  */
+/*
+ * MINIX i_time is a Unix epoch, not an uptime. Seeding it from milliseconds
+ * since boot dated every file on the root volume to a few seconds after
+ * 1970-01-01, which is what ls -l showed. The wall clock comes from the RTC
+ * at boot and ticks once a second.
+ */
+/*
+ * Copy an on-disk directory name into a NUL-terminated buffer.
+ *
+ * MINIX stores names in a fixed 14-byte field with no terminator when the
+ * name uses the whole field. Treating that field as a C string reads into
+ * the next directory entry: `du` reported
+ * "/usr/share/ash-completion<garbage>: Invalid argument" because
+ * "ash-completion" is exactly 14 characters, and a lookup of any such name
+ * compared past the field and never matched.
+ */
+static void minix_dirent_name(const minix_dir_entry_t *e,
+			      char out[MINIX_NAME_LEN + 1])
+{
+	int k;
+
+	for (k = 0; k < MINIX_NAME_LEN; k++)
+	{
+		out[k] = e->name[k];
+		if (out[k] == '\0')
+			return;
+	}
+	out[MINIX_NAME_LEN] = '\0';
+}
+
 static uint32_t minix_now_seconds(void)
 {
-	return (uint32_t)(get_system_time() / 1000ULL);
+	return (uint32_t)clock_get_current_time();
 }
 
 static size_t minix_zmap_bytes(void)
@@ -532,7 +562,10 @@ uint16_t minix_fs_find_dir_entry(const minix_inode_t *dir_inode,
         continue; // Entrada vacía
       }
 
-      if (kstrcmp(entries[j].name, name) == 0)
+      char ename[MINIX_NAME_LEN + 1];
+
+      minix_dirent_name(&entries[j], ename);
+      if (kstrcmp(ename, name) == 0)
       {
         return entries[j].inode;
       }
@@ -658,6 +691,8 @@ int minix_fs_split_path(const char *pathname, char *parent_path,
     for (i = 0; i < MINIX_NAME_LEN && pathname[i]; i++)
       filename[i] = pathname[i];
     filename[i] = '\0';
+    if (pathname[i] != '\0')
+      return -ENAMETOOLONG;
     return 0;
   }
 
@@ -674,7 +709,15 @@ int minix_fs_split_path(const char *pathname, char *parent_path,
     parent_path[parent_len] = '\0';
   }
 
-  /* Up to 14 chars + NUL (classic MINIX name field width). */
+  /*
+   * Up to 14 chars + NUL (classic MINIX name field width).
+   *
+   * A longer component used to be truncated here, so creating
+   * "abcdefghijklmno" wrote an entry called "abcdefghijklmn" and the caller
+   * then failed to find the name it asked for, reporting ENOENT while
+   * leaving a differently named file on disk. Reject instead, the way the
+   * Linux minix driver does.
+   */
   {
     const char *base = last_slash + 1;
     size_t i;
@@ -682,6 +725,8 @@ int minix_fs_split_path(const char *pathname, char *parent_path,
     for (i = 0; i < MINIX_NAME_LEN && base[i]; i++)
       filename[i] = base[i];
     filename[i] = '\0';
+    if (base[i] != '\0')
+      return -ENAMETOOLONG;
   }
 
   return 0;
@@ -1274,9 +1319,10 @@ int minix_fs_mkdir(const char *path, mode_t mode)
   char parent_path[VFS_PATH_MAX];
   char dirname[64];
 
-  if (minix_fs_split_path(path, parent_path, dirname) != 0)
+  int rc_split = minix_fs_split_path(path, parent_path, dirname);
+  if (rc_split != 0)
   {
-    return -EINVAL;
+    return rc_split;
   }
 
   {
@@ -2535,8 +2581,9 @@ int minix_fs_touch(const char *path, mode_t mode)
     return 0;
   }
 
-  if (minix_fs_split_path(path, parent_path, filename) != 0)
-    return -EINVAL;
+  int rc_split = minix_fs_split_path(path, parent_path, filename);
+  if (rc_split != 0)
+    return rc_split;
 
   parent_inode_ptr = minix_fs_find_inode(parent_path);
   if (!parent_inode_ptr)
@@ -2651,10 +2698,11 @@ int minix_fs_rm(const char *path)
   char parent_path[VFS_PATH_MAX];
   char filename[64];
 
-  if (minix_fs_split_path(path, parent_path, filename) != 0)
+  int rc_split = minix_fs_split_path(path, parent_path, filename);
+  if (rc_split != 0)
   {
     typewriter_vga_print("Error: Invalid path\n", 0x0C);
-    return -EINVAL;
+    return rc_split;
   }
 
   minix_inode_t *parent_inode_ptr = minix_fs_find_inode(parent_path);
@@ -2768,10 +2816,11 @@ int minix_fs_link(const char *oldpath, const char *newpath)
   // Split new path into parent directory and filename
   char parent_path[VFS_PATH_MAX];
   char filename[64];
-  if (minix_fs_split_path(newpath, parent_path, filename) != 0)
+  int rc_split = minix_fs_split_path(newpath, parent_path, filename);
+  if (rc_split != 0)
   {
     typewriter_vga_print("Error: Invalid new path\n", 0x0C);
-    return -EINVAL;
+    return rc_split;
   }
 
   // Get parent directory inode (snapshot before any further lookups)
@@ -2926,8 +2975,9 @@ int minix_fs_rmdir(const char *path)
   char parent_path[VFS_PATH_MAX] = {0};
   char dirname[64] = {0};
 
-  if (minix_fs_split_path(path, parent_path, dirname) != 0)
-    return -EINVAL;
+  int rc_split = minix_fs_split_path(path, parent_path, dirname);
+  if (rc_split != 0)
+    return rc_split;
 
   minix_inode_t *parent_inode_ptr = minix_fs_find_inode(parent_path);
   if (!parent_inode_ptr)
@@ -3024,10 +3074,11 @@ int minix_fs_rmdir_force(const char *path)
   char parent_path[VFS_PATH_MAX] = {0};
   char dirname[64] = {0};
 
-  if (minix_fs_split_path(path, parent_path, dirname) != 0)
+  int rc_split = minix_fs_split_path(path, parent_path, dirname);
+  if (rc_split != 0)
   {
     typewriter_vga_print("Error: Invalid path\n", 0x0C);
-    return -1;
+    return rc_split;
   }
 
   minix_inode_t *parent_inode_ptr = minix_fs_find_inode(parent_path);
@@ -3691,9 +3742,8 @@ static int minix_fs_readdir(const char *path, struct vfs_dirent *entries, int ma
 			if ((unsigned char)minix_entries[j].name[0] <= ' ')
 				continue;
 	
-  		strncpy(entries[entry_count].name, minix_entries[j].name,
-				sizeof(entries[entry_count].name) - 1);
-			entries[entry_count].name[sizeof(entries[entry_count].name) - 1] = '\0';
+			minix_dirent_name(&minix_entries[j],
+					  entries[entry_count].name);
 
 			minix_inode_t target_inode;
 			if (minix_read_inode(minix_entries[j].inode, &target_inode) != 0) {

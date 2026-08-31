@@ -16,8 +16,28 @@
 #include <ir0/process_ctx_invariant.h>
 #include <ir0/arch_task_ops.h>
 #include <ir0/arch_syscall_frame.h>
+#include <ir0/ktm/event.h>
 
 static pid_t next_pid = 2;
+
+void process_sched_state_trace(const process_t *p, process_state_t prev,
+			       process_state_t next, void *caller)
+{
+	if (!p)
+		return;
+
+	/*
+	 * The event's own pid field records who is running (the waker); arg0
+	 * records who is affected (the sleeper). A lost wakeup is exactly the
+	 * case where those differ and the WAKE lands before the BLOCK.
+	 */
+	ktm_event_emit4(next == PROCESS_BLOCKED ? KTM_EVENT_BLOCK
+						: KTM_EVENT_WAKE,
+			KTM_SUBSYS_SCHED,
+			(uint64_t)(uint32_t)p->task.pid,
+			(uint64_t)prev, (uint64_t)next,
+			(uint64_t)(uintptr_t)caller);
+}
 
 static void syscall_frame_to_arch(const syscall_user_frame_t *sf,
 				  arch_task_syscall_frame_t *out)
@@ -336,6 +356,13 @@ void process_arm_kernel_syscall_sleep(process_t *p)
 	if (!p || p->mode != USER_MODE)
 		return;
 
+	/*
+	 * Outlives want_kernel_ret, which process_after_task_save clears once
+	 * the segments are applied. The resume gate runs later still and needs
+	 * to know this task must re-enter its syscall rather than iretq.
+	 */
+	p->kernel_syscall_sleep = 1;
+
 	if (process_rip_in_user_range(task_get_ip(&p->task)))
 	{
 		p->want_kernel_ret = 1;
@@ -377,6 +404,7 @@ void process_restore_user_task_segments(process_t *p)
 		return;
 
 	p->want_kernel_ret = 0;
+	p->kernel_syscall_sleep = 0;
 	arch_task_apply_user_segments(&p->task);
 }
 

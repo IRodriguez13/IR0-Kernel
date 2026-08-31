@@ -317,6 +317,7 @@ QEMU_64_FLAGS = -cdrom
 
 KERNEL_OBJS = \
 	kernel/main.o \
+	kernel/boot_init.o \
     kernel/cmdline.o \
     kernel/rootfs_base.o \
     kernel/process/core.o \
@@ -374,8 +375,10 @@ KERNEL_OBJS = \
 
 ifeq ($(CONFIG_KTM),y)
 KERNEL_OBJS += \
-    ktm/ktm_ctx_snapshot.o \
     ktm/event_ring.o \
+    ktm/deferred.o \
+    ktm/user_canary.o \
+    ktm/stack_watch.o \
     ktm/transport_serial.o \
     ktm/ktm_klog.o \
     ktm/registry.o \
@@ -404,6 +407,7 @@ KERNEL_OBJS += \
     ktm/userdev.o \
     ktm/ktm_flight.o \
     ktm/ktm_panic_class.o \
+    ktm/ktm_ctx_snapshot.o \
     ktm/ktm_probe_diag.o \
     $(KTM_D1_DIAG_OBJS)
 endif
@@ -426,8 +430,8 @@ KERNEL_TEST_OBJS = \
 	kernel/test/test_brk_post_exec.o \
 	kernel/test/test_tty_canon_read.o \
 	ktm/ktm_invariant.o \
-	ktm/ktm_sched_gate.o \
-	ktm/ktm_resched_trace.o
+	ktm/ktm_sched_gate.o
+
 
 # Scheduler backend selection from menuconfig (ops via <ir0/sched.h>).
 # Policy 1 (CFS) is an honest RR alias — same backend object, different policy name.
@@ -461,6 +465,7 @@ LIB_OBJS = \
     includes/ir0/open_flags.o \
     includes/ir0/stat_user.o \
     includes/ir0/named_fifo.o \
+    includes/ir0/named_devnode.o \
     includes/ir0/supervise_path.o \
     includes/ir0/named_symlink.o \
     includes/ir0/path_user.o \
@@ -1116,8 +1121,8 @@ kernel-x64.iso: kernel-x64.bin arch/x86-64/grub.cfg
 # would skip kernel_test_run_all() and make kernel-tests time out.
 kernel-x64-test.bin: CFLAGS += -DIR0_KERNEL_TESTS=1
 kernel-x64-test.bin: $(ALL_OBJS_TEST) arch/x86-64/linker.ld
-	@rm -f kernel/main.o
-	@$(MAKE) --no-print-directory CFLAGS="$(CFLAGS)" kernel/main.o
+	@rm -f kernel/main.o kernel/boot_init.o
+	@$(MAKE) --no-print-directory CFLAGS="$(CFLAGS)" kernel/main.o kernel/boot_init.o
 	@echo "  LD      $@ (with in-kernel tests)"
 	@$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS_TEST)
 	@echo "✓ Kernel (test) linked: $@"
@@ -1849,7 +1854,7 @@ build-pipeline-stress-smoke: $(PIPELINE_STRESS_SRC)
 		exit 1; \
 	fi
 	@echo "  MUSL    Building pipeline stress ($(PIPELINE_STRESS_BIN))"
-	@$(MUSL_CC) -static -Os -o $(PIPELINE_STRESS_BIN) $(PIPELINE_STRESS_SRC)
+	@$(MUSL_CC) -static -Os -idirafter includes -o $(PIPELINE_STRESS_BIN) $(PIPELINE_STRESS_SRC)
 	@file $(PIPELINE_STRESS_BIN) | grep -q ELF
 	@echo "✓ build-pipeline-stress-smoke OK"
 
@@ -1870,6 +1875,39 @@ smoke-pipeline-stress: build-pipeline-stress-smoke load-userspace-runit kernel-x
 		{ echo "✗ smoke-pipeline-stress FAILED"; \
 		  grep -E 'PIPELINE_|Segmentation|Oops|PANIC' $(PIPELINE_STRESS_LOG) | tail -40; exit 1; }
 	@echo "✓ smoke-pipeline-stress passed"
+
+# Recursive walk of the real IR0 tree over virtio-9p — the interactive
+# workload (`find` from /) that no smoke exercised before it double-faulted.
+SESSION_WALK_BIN = setup/pid1/session_walk_smoke
+SESSION_WALK_LOG = /tmp/ir0-session-walk.log
+
+.PHONY: build-session-walk-smoke smoke-session-walk
+build-session-walk-smoke:
+	@if [ -z "$(MUSL_CC)" ]; then echo "â musl cc missing"; exit 1; fi
+	@$(MUSL_CC) -static -Os -o $(SESSION_WALK_BIN) setup/pid1/session_walk_smoke.c
+	@echo "â build-session-walk-smoke OK"
+
+smoke-session-walk: build-session-walk-smoke kernel-x64-userspace.iso
+	@if [ ! -f disk.img ]; then $(MAKE) -s disk.img; fi
+	@echo "  SMOKE   session walk (find over real 9p tree + /proc + /heart)..."
+	@DISK=$$(mktemp /tmp/ir0-session-walk.XXXXXX.img); \
+	cp -f disk.img $$DISK; \
+	python3 scripts/inject_init_minix.py $$DISK $(SESSION_WALK_BIN) sbin/init; \
+	rm -f $(SESSION_WALK_LOG); \
+	$(SMOKE_QEMU_RUN) --log $(SESSION_WALK_LOG) --timeout 300 --stale-sec 60 \
+		--done 'SESSION_WALK_OK' \
+		--fail-regex 'SESSION_WALK_.*FAIL|SESSION_WALK_KSTACK_LOW|SESSION_WALK_KSTACK_PEAK_HIGH|KERNEL PANIC' -- \
+		$(QEMU) -cdrom kernel-x64-userspace.iso \
+		-drive file=$$DISK,format=raw,if=ide,index=0 \
+		-fsdev local,id=ir0fs,path=$(KERNEL_ROOT),security_model=none \
+		-device virtio-9p-pci,fsdev=ir0fs,mount_tag=ir0share,disable-modern=on \
+		-serial stdio -display none -m 256M -no-reboot -net none; \
+	rm -f $$DISK
+	@grep -q SESSION_WALK_OK $(SESSION_WALK_LOG) || \
+		{ echo "â smoke-session-walk FAILED"; \
+		  grep -aE 'SESSION_WALK_|PANIC|ISR64' $(SESSION_WALK_LOG) | tail -30; exit 1; }
+	@grep -a 'SESSION_WALK_STATS\|SESSION_WALK_KSTACK' $(SESSION_WALK_LOG) | tail -2
+	@echo "â smoke-session-walk passed"
 
 CMD_STRESS_SRC = setup/pid1/cmd_stress_smoke.c
 CMD_STRESS_BIN = setup/pid1/cmd_stress_smoke
@@ -1904,7 +1942,11 @@ smoke-cmd-stress: build-cmd-stress-smoke load-userspace-runit kernel-x64-userspa
 		  grep -E 'CMD_STRESS_|Segmentation|Oops|PANIC' $(CMD_STRESS_LOG) | tail -40; exit 1; }
 	@echo "✓ smoke-cmd-stress passed"
 
-.PHONY: smoke-shell-pipe-stress smoke-session-stability
+.PHONY: smoke-shell-pipe-stress smoke-session-soak smoke-session-stability
+
+SOAK_ROUNDS ?= 8
+# Extra flags for the soak harness, e.g. SOAK_EXTRA="--relogin-every 3"
+SOAK_EXTRA ?=
 
 # Interactive getty session: complex ash pipelines via HMP sendkey.
 smoke-shell-pipe-stress: load-userspace-runit kernel-x64-userspace.iso
@@ -1917,6 +1959,18 @@ smoke-shell-pipe-stress: load-userspace-runit kernel-x64-userspace.iso
 		--timeout 180
 	@echo "✓ smoke-shell-pipe-stress passed"
 
+# Long session soak: many rounds + relogins, watched by the kernel-side
+# canary and stack-top classifier rather than by a command happening to die.
+smoke-session-soak: load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   session soak (rounds=$(SOAK_ROUNDS))..."
+	@chmod +x scripts/smoke_session_soak.py
+	@python3 scripts/smoke_session_soak.py \
+		--iso kernel-x64-userspace.iso \
+		--disk disk.img \
+		--log /tmp/ir0-session-soak.log \
+		--rounds $(SOAK_ROUNDS) $(SOAK_EXTRA)
+	@echo "✓ smoke-session-soak passed"
+
 # Session-stability battery for 0.0.1 desk/terminal hardening.
 # ktm-userdev-session-stress-run is best-effort (ash pipe still P1 under load).
 smoke-session-stability: kernel-x64.bin arch-guard
@@ -1926,6 +1980,7 @@ smoke-session-stability: kernel-x64.bin arch-guard
 	@$(MAKE) -s smoke-mm-cow-lazy
 	@$(MAKE) -s smoke-tier1
 	@$(MAKE) -s smoke-shell-pipe-stress
+	@$(MAKE) -s smoke-session-walk
 	@echo "  BATTERY optional ktm session stress..."
 	@$(MAKE) -s ktm-userdev-session-stress-run || \
 		echo "⚠ ktm-userdev-session-stress-run soft-fail (P1 ash/session)"
@@ -2458,6 +2513,8 @@ load-userspace-runit: check-userspace build-runit build-busybox-ir0-auth build-o
 			$(IR0_USERSPACE_ROOT)/rootfs/etc/doas.conf \
 			$(IR0_USERSPACE_ROOT)/rootfs/etc/profile \
 			$(IR0_USERSPACE_ROOT)/scripts/install-to-disk.sh \
+			$(IR0_USERSPACE_ROOT)/scripts/stage-rootfs.sh \
+			$(IR0_USERSPACE_ROOT)/scripts/pack-minix.sh \
 			$(IR0_USERSPACE_ROOT)/packages/busybox/required_applets.txt \
 			$(IR0_BUSYBOX_FULL_BIN) $(IR0_BUSYBOX_AUTH_BIN) \
 			$$GUEST_MAN/.stamp; do \
@@ -4840,7 +4897,7 @@ ktm: ktm-check
 	ktm-userdev-nic-reach-run ktm-userdev-nic-reach-virtfs-run smoke-nic-reach \
 	ktm-userdev-tcp-guest-run ktm-userdev-tcp-guest-virtfs-run smoke-tcp-guest \
 	ktm-userdev-tcp-wire-run ktm-userdev-tcp-wire-virtfs-run smoke-tcp-wire \
-	ktm-userdev-fault-pipe-run smoke-ktm-fault build-ktm-fault-pipe-case \
+	ktm-userdev-fault-pipe-run smoke-ktm-fault build-ktm-fault-pipe-case build-ktm-fault-exec-case \
 	ktm-userdev-fault-class-b-run smoke-class-b-mitigated smoke-class-b-repro \
 	build-ktm-fault-class-b-case \
 	ktm-userdev-epoll-run ktm-userdev-epoll-runit-run build-ktm-epoll-case smoke-epoll-basic \
@@ -4913,6 +4970,8 @@ KTM_TCP_PEER_CC_SRC = $(KTM_USERDEV_DIR)/ktm_tcp_peer_cc_case.c $(KTM_USERDEV_LI
 KTM_TCP_PEER_CC_BIN = $(KTM_USERDEV_DIR)/ktm_tcp_peer_cc_case
 KTM_FAULT_PIPE_SRC = $(KTM_USERDEV_DIR)/ktm_fault_pipe_case.c $(KTM_USERDEV_LIB_SRC)
 KTM_FAULT_PIPE_BIN = $(KTM_USERDEV_DIR)/ktm_fault_pipe_case
+KTM_FAULT_EXEC_SRC = $(KTM_USERDEV_DIR)/ktm_fault_exec_case.c $(KTM_USERDEV_LIB_SRC)
+KTM_FAULT_EXEC_BIN = $(KTM_USERDEV_DIR)/ktm_fault_exec_case
 KTM_FAULT_CLASS_B_SRC = $(KTM_USERDEV_DIR)/ktm_fault_class_b_case.c $(KTM_USERDEV_LIB_SRC)
 KTM_FAULT_CLASS_B_BIN = $(KTM_USERDEV_DIR)/ktm_fault_class_b_case
 KTM_EPOLL_SRC = $(KTM_USERDEV_DIR)/ktm_epoll_case.c $(KTM_USERDEV_LIB_SRC)
@@ -4999,6 +5058,17 @@ build-ktm-fault-pipe-case:
 	@file $(KTM_FAULT_PIPE_BIN) | grep -q ELF
 	@echo "✓ build-ktm-fault-pipe-case OK"
 
+build-ktm-fault-exec-case:
+	@if [ -z "$(MUSL_CC)" ]; then \
+		echo "✗ musl cross compiler not found (install musl-tools or set MUSL_CC=...)"; \
+		exit 1; \
+	fi
+	@echo "  KTM     Building fault_exec pilot ($(KTM_FAULT_EXEC_BIN))"
+	@$(MUSL_CC) $(KTM_USERDEV_MUSL_FLAGS) \
+		-o $(KTM_FAULT_EXEC_BIN) $(KTM_FAULT_EXEC_SRC)
+	@file $(KTM_FAULT_EXEC_BIN) | grep -q ELF
+	@echo "✓ build-ktm-fault-exec-case OK"
+
 build-ktm-epoll-case:
 	@if [ -z "$(MUSL_CC)" ]; then \
 		echo "✗ musl cross compiler not found (install musl-tools or set MUSL_CC=...)"; \
@@ -5060,7 +5130,22 @@ ktm-userdev-fault-pipe-run: build-ktm-fault-pipe-case build-init-hostshare-exec 
 		--require KTM_USERDEV_OK
 	@echo "✓ ktm-userdev-fault-pipe-run (pipe.create fault injection)"
 
-smoke-ktm-fault: ktm-userdev-fault-pipe-run
+.PHONY: ktm-userdev-fault-exec-run
+ktm-userdev-fault-exec-run: build-ktm-fault-exec-case build-fase41-true build-init-hostshare-exec kernel-x64-userspace.iso
+	@if [ ! -f disk.img ]; then $(MAKE) -s disk.img; fi
+	@python3 scripts/ktm_userdev_runner.py \
+		--init $(KTM_FAULT_EXEC_BIN) \
+		--inject $(FASE41_TRUE_BIN):bin/f41true \
+		--log /tmp/ktm-userdev-fault-exec.log --timeout 90 \
+		--done KTM_FAULT_EXEC_OK \
+		--require 'TEST_END|fault_exec|PASS' \
+		--require KTM_FAULT_EXEC_OK \
+		--require KTM_FAULT_EXEC_PRECOMMIT_OK \
+		--require KTM_FAULT_EXEC_POSTCOMMIT_OK \
+		--require KTM_USERDEV_OK
+	@echo "✓ ktm-userdev-fault-exec-run (execve fault injection)"
+
+smoke-ktm-fault: ktm-userdev-fault-pipe-run ktm-userdev-fault-exec-run
 
 ktm-userdev-epoll-run: build-ktm-epoll-case build-init-hostshare-exec kernel-x64-userspace.iso
 	@if [ ! -f disk.img ]; then $(MAKE) -s disk.img; fi

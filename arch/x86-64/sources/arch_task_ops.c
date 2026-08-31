@@ -127,6 +127,26 @@ void arch_task_sync_syscall_soft_mirror(task_t *t,
 	task_set_flags(t, rflags);
 	t->arch.rcx = sf->rip;
 	t->arch.r11 = rflags;
+
+	/*
+	 * Mirror the whole user GPR set, not just RIP/RSP/RFLAGS. A previous
+	 * in-kernel context save leaves callee-saved registers holding kernel
+	 * values (RBP points into the kstack); resuming through
+	 * .user_iretq_resume would hand those to ring 3. RAX is excluded — it
+	 * carries the syscall return value.
+	 */
+	t->arch.rbx = sf->rbx;
+	t->arch.rbp = sf->rbp;
+	t->arch.r12 = sf->r12;
+	t->arch.r13 = sf->r13;
+	t->arch.r14 = sf->r14;
+	t->arch.r15 = sf->r15;
+	t->arch.rdi = sf->rdi;
+	t->arch.rsi = sf->rsi;
+	t->arch.rdx = sf->rdx;
+	t->arch.r10 = sf->r10;
+	t->arch.r8 = sf->r8;
+	t->arch.r9 = sf->r9;
 }
 
 void arch_task_apply_syscall_frame(task_t *t,

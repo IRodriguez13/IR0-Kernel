@@ -13,6 +13,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include "process_internal.h"
+#include <mm/pmm.h>
+#include <ir0/arch_mm.h>
+#include <ir0/arch_cpu.h>
+
+static uint32_t ir0_kstack_slot_next;
 
 /*
  * spawn() creates a new process with an explicit mode (kernel vs user).
@@ -22,30 +27,138 @@
  */
 int process_kernel_stack_alloc(process_t *p)
 {
-	void *base;
+	uint64_t *pml4;
+	uint32_t slot;
+	uintptr_t va;
+	size_t off;
+	size_t mapped;
 
 	if (!p)
 		return -EINVAL;
 	if (p->kstack_base)
 		return 0;
 
-	base = kmalloc_aligned_try(IR0_PROC_KSTACK_SIZE, 16);
-	if (!base)
+#if defined(__x86_64__) || defined(__amd64__)
+	/*
+	 * Linux thread stack model: dedicated supervisor VA outside the low
+	 * identity / user-brk window so huge-PDE breaks can use pte_none
+	 * without #DF on TSS.RSP0.
+	 *
+	 * Map into the pinned boot/kernel PML4 only. arch_mm_copy_kernel_half
+	 * shares those high PML4 slots by reference, so every process CR3 sees
+	 * every kstack. Required: switch_context_x64 loads next CR3 while still
+	 * on prev's RSP (same as Linux — kernel stacks live in shared kernel VA).
+	 */
+	{
+		uint64_t kcr3 = paging_get_kernel_cr3();
+
+		if (!kcr3)
+			kcr3 = get_current_page_directory();
+		pml4 = kcr3 ? (uint64_t *)(uintptr_t)kcr3 : NULL;
+	}
+	if (!pml4)
 		return -ENOMEM;
 
-	memset(base, 0, IR0_PROC_KSTACK_SIZE);
-	p->kstack_base = base;
-	p->kstack_top = (uint64_t)(uintptr_t)base + IR0_PROC_KSTACK_SIZE;
+	slot = __sync_fetch_and_add(&ir0_kstack_slot_next, 1u);
+	if (slot >= IR0_KSTACK_MAX_SLOTS)
+		return -ENOMEM;
+
+	/* Bottom page of the slot is an unmapped guard. */
+	va = (uintptr_t)IR0_KSTACK_VA_BASE +
+	     (uintptr_t)slot * (uintptr_t)IR0_KSTACK_SLOT_SIZE +
+	     (uintptr_t)PAGE_SIZE_4KB;
+
+	mapped = 0;
+	/*
+	 * Map stack + one page above kstack_top (boundary touch at empty RSP).
+	 */
+	for (off = 0; off < (size_t)IR0_PROC_KSTACK_SIZE + PAGE_SIZE_4KB;
+	     off += PAGE_SIZE_4KB)
+	{
+		uintptr_t phys = pmm_alloc_frame();
+
+		if (!phys)
+			goto rollback;
+		/* Poison so ktm_stack_peak_used can measure real usage. */
+		paging_poison_phys_page(phys, IR0_KSTACK_POISON);
+		if (map_page_in_directory(pml4, va + off, phys, PAGE_RW) != 0)
+		{
+			pmm_free_frame(phys);
+			goto rollback;
+		}
+		/* Shared kernel PTEs: flush even if active CR3 is a process mm. */
+		tlb_invalidate_page(va + off);
+		mapped = off + PAGE_SIZE_4KB;
+	}
+
+	/*
+	 * Process mm may have been created before PML4[kstack] existed on the
+	 * boot root. Re-share present kernel-half slots so switch_context_x64
+	 * (CR3 swap while still on prev RSP) and TSS.RSP0 keep working.
+	 */
+	{
+		uint64_t *proc_pml4 = process_pgd(p);
+
+		if (proc_pml4 && proc_pml4 != pml4)
+			arch_mm_copy_kernel_half(proc_pml4, pml4);
+	}
+
+	p->kstack_base = (void *)va;
+	p->kstack_top = va + (uint64_t)IR0_PROC_KSTACK_SIZE;
 	p->saved_user_rsp = 0;
 	return 0;
+
+rollback:
+	for (off = 0; off < mapped; off += PAGE_SIZE_4KB)
+		(void)unmap_page_in_directory(pml4, va + off);
+	return -ENOMEM;
+#else
+	{
+		void *base = kmalloc_aligned_try(IR0_PROC_KSTACK_SIZE, 16);
+
+		if (!base)
+			return -ENOMEM;
+		memset(base, 0, IR0_PROC_KSTACK_SIZE);
+		p->kstack_base = base;
+		p->kstack_top = (uint64_t)(uintptr_t)base + IR0_PROC_KSTACK_SIZE;
+		p->saved_user_rsp = 0;
+		return 0;
+	}
+#endif
 }
 
 void process_kernel_stack_free(process_t *p)
 {
+	uint64_t *pml4;
+	uintptr_t va;
+	size_t off;
+
 	if (!p || !p->kstack_base)
 		return;
 
+#if defined(__x86_64__) || defined(__amd64__)
+	{
+		uint64_t kcr3 = paging_get_kernel_cr3();
+
+		if (!kcr3)
+			kcr3 = get_current_page_directory();
+		pml4 = kcr3 ? (uint64_t *)(uintptr_t)kcr3 : NULL;
+	}
+	va = (uintptr_t)p->kstack_base;
+	if (pml4)
+	{
+		size_t span = (size_t)IR0_PROC_KSTACK_SIZE + PAGE_SIZE_4KB;
+
+		for (off = 0; off < span; off += PAGE_SIZE_4KB)
+		{
+			/* unmap_page_in_directory already returns the PMM frame. */
+			if (unmap_page_in_directory(pml4, va + off) == 0)
+				tlb_invalidate_page(va + off);
+		}
+	}
+#else
 	kfree_aligned(p->kstack_base);
+#endif
 	p->kstack_base = NULL;
 	p->kstack_top = 0;
 	p->saved_user_rsp = 0;
@@ -94,6 +207,8 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	proc->start_ticks = clock_get_tick_count();
 	process_set_sched_state(proc, PROCESS_READY);
 	proc->sched_prio = IR0_SCHED_PRIO_DEFAULT;
+	proc->sched_nice = 0;
+	proc->personality = 0; /* PER_LINUX */
 
 	/* Explicit mode specification - no magic address detection */
 	proc->mode = mode;

@@ -21,6 +21,29 @@
 #include "validate_user.h"
 
 fd_entry_t *get_process_fd_table(void);
+
+/*
+ * Lowest free descriptor at or above @from, or -1 when the table is full.
+ *
+ * open(2) starts at 0 so a descriptor userspace closed is reused, which
+ * BusyBox uniq depends on: close(0) then open(file) must yield fd 0, or it
+ * reads the console and hangs. pipe(2) still starts at 3 — an unredirected
+ * stdio descriptor is served by the console backend with its table slot left
+ * free, so handing 0-2 to a pipe measurably destabilized ash pipelines.
+ */
+static inline int fd_alloc_lowest(fd_entry_t *fd_table, int from)
+{
+	int i;
+
+	if (!fd_table)
+		return -1;
+	for (i = (from < 0) ? 0 : from; i < MAX_FDS_PER_PROCESS; i++)
+	{
+		if (!fd_table[i].in_use)
+			return i;
+	}
+	return -1;
+}
 void ensure_devfs_init(void);
 int stdio_is_redirected(fd_entry_t *fd_table, int fd);
 int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read);

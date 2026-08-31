@@ -28,6 +28,8 @@
 #include <ir0/mm_struct.h>
 #include <ir0/paging.h>
 #include <ir0/pmm.h>
+#include <ir0/mm_port.h>
+#include <ir0/clock.h>
 #include <mm/allocator.h>
 #include <ir0/arch_port.h>
 #include <ir0/ktm/checkpoint.h>
@@ -341,6 +343,25 @@ void *mm_mmap_file_private(process_t *proc, void *addr, size_t length, int prot,
 	return (void *)virt_addr;
 }
 
+/*
+ * Does [lo, hi) overlap any registered mmap region of @proc?
+ * Linux find_vma_intersection equivalent for the brk growth check.
+ */
+static int brk_range_hits_mmap(process_t *proc, uintptr_t lo, uintptr_t hi)
+{
+	struct mmap_region *r;
+
+	for (r = process_mmap_list(proc); r != NULL; r = r->next)
+	{
+		uintptr_t r_lo = (uintptr_t)r->addr;
+		uintptr_t r_hi = r_lo + (r->length ? r->length : 1);
+
+		if (lo < r_hi && r_lo < hi)
+			return 1;
+	}
+	return 0;
+}
+
 int64_t sys_brk(void *addr)
 {
 	uintptr_t heap_lo;
@@ -349,6 +370,12 @@ int64_t sys_brk(void *addr)
 
 	if (!current_process)
 		return -ESRCH;
+
+	klog_debug_fmt("BRK", "req pid=%x addr=%llx hs=%llx he=%llx\n",
+			(unsigned)((uint32_t)current_process->task.pid),
+			(unsigned long long)(uintptr_t)addr,
+			(unsigned long long)(uint64_t)process_heap_start(current_process),
+			(unsigned long long)(uint64_t)process_heap_end(current_process));
 
 	/* brk(NULL) / brk(0): return current program break (Linux ABI). */
 	if (!addr)
@@ -368,7 +395,8 @@ int64_t sys_brk(void *addr)
 
 	/*
 	 * Processes without ELF exec init (legacy smokes): fall back to
-	 * USER_HEAP_BASE. Post-exec images set heap_start/end from PT_LOAD.
+	 * USER_HEAP_BASE. Post-exec images set heap_start/end from PT_LOAD
+	 * (already snapped to USER_HEAP_BASE by elf_compute_initial_brk).
 	 */
 	if (heap_lo == 0 && current_brk == 0)
 	{
@@ -387,11 +415,25 @@ int64_t sys_brk(void *addr)
 	    new_brk > heap_lo + USER_HEAP_MAX_SIZE)
 		return (int64_t)current_brk;
 
-	/* If expanding heap, map only pages past the current break.
-	 * Align start UP: aligning down would remap the partially used
-	 * page that already holds heap/TLS (glibc TCB) with a fresh zero
-	 * frame and wipe thread-local state.
+	/*
+	 * Linux do_brk_flags: the break never grows over an existing mapping.
+	 * musl probes the page above the break with a PROT_NONE MAP_FIXED
+	 * anonymous mmap; extending across it left the kernel treating the page
+	 * as heap while the VMA still said PROT_NONE, so the first heap access
+	 * took a SIGSEGV. Returning the unchanged break is how brk(2) reports
+	 * failure, and musl then falls back to mmap.
 	 */
+	/*
+	 * Linux SYSCALL_DEFINE1(brk) also reserves a guard page past the new
+	 * break (find_vma_intersection(mm, oldbrk, newbrk + PAGE_SIZE)). IR0
+	 * cannot: mallocng parks its PROT_NONE guard exactly one page above
+	 * the break it just set, so the extra page rejects musl's own growth.
+	 */
+	if (new_brk > current_brk &&
+	    brk_range_hits_mmap(current_process, current_brk, new_brk))
+		return (int64_t)current_brk;
+
+	/* If expanding heap, map only pages past the current break. */
 	if (new_brk > current_brk)
 	{
 		uintptr_t start_page =
@@ -964,6 +1006,23 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
       return ret;
     }
 
+    /*
+     * MAP_FIXED landing inside the live brk heap: the VMA then shadows
+     * pages the break already owns, and a later heap access hits the VMA
+     * protection instead of the heap. Narrow condition, logged to show
+     * pid and ordering against the break.
+     */
+    if (hint_addr < (uintptr_t)process_heap_end(current_process) &&
+        hint_addr + length > (uintptr_t)process_heap_start(current_process))
+      klog_debug_fmt("MMAP",
+		      "map-fixed inside brk pid=%x addr=%llx len=%llx prot=%llx heap_end=%llx rip=%llx\n",
+		      (unsigned)((uint32_t)current_process->task.pid),
+		      (unsigned long long)hint_addr,
+		      (unsigned long long)(uint64_t)length,
+		      (unsigned long long)(uint64_t)prot,
+		      (unsigned long long)(uint64_t)process_heap_end(current_process),
+		      (unsigned long long)process_syscall_ip(current_process));
+
     mm_prepare_map_fixed(hint_addr, length);
     virt_addr = hint_addr;
     use_hint = true;
@@ -1013,7 +1072,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
        virt_addr + aligned_len > USER_MMAP_END ||
        virt_addr + aligned_len < virt_addr))
   {
-    klog_notice_fmt("MMAP",
+    klog_debug_fmt("MMAP",
 		    "reject va=%llx len=%llx outside mmap arena\n",
 		    (unsigned long long)virt_addr,
 		    (unsigned long long)aligned_len);
@@ -1264,6 +1323,84 @@ int sys_mprotect(void *addr, size_t len, int prot)
 
   if (matched)
     matched->prot = prot;
+
+  return 0;
+}
+
+/*
+ * sysinfo(2) — memory, load and uptime in one struct.
+ *
+ * BusyBox `free` and `uptime` read this syscall, not /proc. While it was
+ * missing they got -ENOSYS and printed whatever their uninitialised struct
+ * happened to hold: gigabytes of RAM on a machine with megabytes, and an
+ * uptime of weeks. Layout and units follow sysinfo(2) (post Linux 2.3.48):
+ * memory as multiples of mem_unit, loads as fixed point with a 16-bit
+ * fraction.
+ */
+#define SYSINFO_LOAD_SHIFT 16
+
+struct ir0_sysinfo
+{
+  int64_t uptime;
+  uint64_t loads[3];
+  uint64_t totalram;
+  uint64_t freeram;
+  uint64_t sharedram;
+  uint64_t bufferram;
+  uint64_t totalswap;
+  uint64_t freeswap;
+  uint16_t procs;
+  uint16_t pad;
+  uint64_t totalhigh;
+  uint64_t freehigh;
+  uint32_t mem_unit;
+  char _f[20 - 2 * sizeof(uint64_t) - sizeof(uint32_t)];
+};
+
+/* Offsets checked against glibc's struct sysinfo on x86-64. */
+_Static_assert(sizeof(struct ir0_sysinfo) == 112, "sysinfo ABI size");
+_Static_assert(__builtin_offsetof(struct ir0_sysinfo, totalram) == 32,
+               "sysinfo ABI totalram");
+_Static_assert(__builtin_offsetof(struct ir0_sysinfo, procs) == 80,
+               "sysinfo ABI procs");
+_Static_assert(__builtin_offsetof(struct ir0_sysinfo, mem_unit) == 104,
+               "sysinfo ABI mem_unit");
+
+int64_t sys_sysinfo(void *user_info)
+{
+  struct ir0_sysinfo info;
+  size_t total_frames = 0;
+  size_t used_frames = 0;
+  size_t free_frames = 0;
+  uint32_t l1 = 0, l5 = 0, l15 = 0;
+  unsigned runnable = 0, nprocs = 0;
+  int last_pid = 0;
+
+  if (!user_info)
+    return -EFAULT;
+
+  memset(&info, 0, sizeof(info));
+
+  info.uptime = (int64_t)(clock_get_uptime_milliseconds() / 1000ULL);
+
+  clock_get_loadavg(&l1, &l5, &l15, &runnable, &nprocs, &last_pid);
+  /* Hundredths of a load unit into the 1/65536 fixed point Linux uses. */
+  info.loads[0] = ((uint64_t)l1 << SYSINFO_LOAD_SHIFT) / 100ULL;
+  info.loads[1] = ((uint64_t)l5 << SYSINFO_LOAD_SHIFT) / 100ULL;
+  info.loads[2] = ((uint64_t)l15 << SYSINFO_LOAD_SHIFT) / 100ULL;
+  info.procs = (uint16_t)nprocs;
+
+  /* Same PMM figures /proc/meminfo reports, so the two cannot disagree. */
+  ir0_mm_pmm_stats(&total_frames, &used_frames, &free_frames);
+  info.mem_unit = (uint32_t)IR0_MM_PAGE_SIZE;
+  info.totalram = (uint64_t)total_frames;
+  info.freeram = (uint64_t)free_frames;
+
+  /* No swap and no high memory on x86-64: report them as absent, not as
+   * uninitialised. */
+
+  if (copy_to_user(user_info, &info, sizeof(info)) != 0)
+    return -EFAULT;
 
   return 0;
 }

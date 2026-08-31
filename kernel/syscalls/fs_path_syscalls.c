@@ -246,6 +246,44 @@ int64_t sys_sync(void)
   return vfs_sync();
 }
 
+/*
+ * fsync(2)/fdatasync(2).
+ *
+ * IR0 tracks no per-file dirty state, so the flush is the global vfs_sync():
+ * flushing more than the requested file still satisfies the guarantee that
+ * this file's data reached the backing store. Descriptors with no backing
+ * store (pseudo-fs, devfs, memfd) have nothing to write back and return 0;
+ * pipes and sockets return -EINVAL, as Linux does for special files that do
+ * not support synchronization (fsync(2) ERRORS).
+ */
+int64_t sys_fsync(int fd)
+{
+  fd_entry_t *fd_table;
+
+  if (!current_process)
+    return -ESRCH;
+  if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+    return -EBADF;
+
+  fd_table = get_process_fd_table();
+  if (!fd_table[fd].in_use)
+    return -EBADF;
+
+  if (fd_table[fd].is_pipe || fd_table[fd].is_socket)
+    return -EINVAL;
+
+  if (fd_table[fd].is_pseudo || fd_table[fd].is_devfs ||
+      fd_table[fd].is_memfd)
+    return 0;
+
+  return vfs_sync();
+}
+
+int64_t sys_fdatasync(int fd)
+{
+  return sys_fsync(fd);
+}
+
 int64_t sys_mkdir(const char *pathname, mode_t mode)
 {
   char resolved[256];
@@ -407,7 +445,15 @@ int64_t sys_uname(struct utsname *buf)
   strncpy(buf->nodename, nodename, _UTSNAME_LENGTH - 1);
   strncpy(buf->release, IR0_VERSION_STRING, _UTSNAME_LENGTH - 1);
   strncpy(buf->version, version, _UTSNAME_LENGTH - 1);
-  strncpy(buf->machine, get_arch_uname_machine(), _UTSNAME_LENGTH - 1);
+  /*
+   * PER_LINUX32 (set by linux32(1) via personality(2)) makes uname report a
+   * 32-bit machine on the same 64-bit kernel, as Linux does in
+   * arch/x86/kernel/sys_x86_64.c.
+   */
+  if (current_process && current_process->personality == 0x0008)
+    strncpy(buf->machine, "i686", _UTSNAME_LENGTH - 1);
+  else
+    strncpy(buf->machine, get_arch_uname_machine(), _UTSNAME_LENGTH - 1);
   return 0;
 }
 

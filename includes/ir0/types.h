@@ -22,6 +22,16 @@ typedef int64_t time_t;
 typedef int64_t off_t; // Definición centralizada de off_t
 typedef uint32_t mode_t;
 typedef uint32_t dev_t;
+
+/*
+ * Legacy Linux dev_t encoding (16 bits: major<<8 | minor), which is what
+ * mknod(1) passes for the classic nodes IR0 cares about (1:3 null, 5:1
+ * console). The 32-bit split Linux uses for large minors is not needed here
+ * and would make the numbers in /proc and stat harder to read.
+ */
+#define IR0_MKDEV(ma, mi) ((dev_t)((((ma) & 0xFFu) << 8) | ((mi) & 0xFFu)))
+#define IR0_MAJOR(dev)    ((unsigned)(((dev) >> 8) & 0xFFu))
+#define IR0_MINOR(dev)    ((unsigned)((dev) & 0xFFu))
 typedef uint32_t ino_t;
 typedef uint32_t nlink_t;
 typedef uint32_t uid_t;

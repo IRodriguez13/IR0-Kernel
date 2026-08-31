@@ -76,6 +76,8 @@ int process_rel_init_child(process_t *child, const process_t *parent,
 	process_set_sched_state(child, PROCESS_READY);
 	child->mode = parent->mode;
 	child->sched_prio = parent->sched_prio;
+	child->sched_nice = parent->sched_nice;
+	child->personality = parent->personality;
 	return 0;
 }
 
@@ -99,6 +101,8 @@ int process_session_attrs_clone(process_t *dst, const process_t *src)
 	memcpy(dst->cwd, src->cwd, sizeof(dst->cwd));
 	memcpy(dst->root, src->root, sizeof(dst->root));
 	memcpy(dst->comm, src->comm, sizeof(dst->comm));
+	/* A fork runs the parent's image until it execs. */
+	memcpy(dst->exe_path, src->exe_path, sizeof(dst->exe_path));
 	memcpy(dst->rlimits, src->rlimits, sizeof(dst->rlimits));
 	dst->robust_list = src->robust_list;
 	return 0;

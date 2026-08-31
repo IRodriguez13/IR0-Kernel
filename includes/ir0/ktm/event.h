@@ -50,7 +50,25 @@ enum ktm_event_type
 	KTM_EVENT_PIPE_CREATE = 30,
 	KTM_EVENT_PIPE_EOF,
 	KTM_EVENT_PIPE_EPIPE,
-	KTM_EVENT_PIPE_WAKE
+	KTM_EVENT_PIPE_WAKE,
+	/*
+	 * End refcount transitions. EOF and EPIPE only say the count reached
+	 * zero; these say who took it there, which is the question when a
+	 * reader sees EOF while a writer still holds the fd.
+	 */
+	KTM_EVENT_PIPE_END_ACQUIRE,
+	KTM_EVENT_PIPE_END_CLOSE,
+	/*
+	 * Transfer outcome, including the -EAGAIN that sends a reader to
+	 * sleep. Without it the ring shows a reader woken with bytes buffered
+	 * but not what its next read actually returned.
+	 */
+	KTM_EVENT_PIPE_READ,
+	KTM_EVENT_PIPE_WRITE,
+	/* Resume gate returned to ring 3 instead of continuing the syscall. */
+	KTM_EVENT_CTX_USER_IRET,
+	/* Kernel stack headroom record low: a0=bytes left, a1=slot, a2=rsp. */
+	KTM_EVENT_STACK_LOW
 };
 
 enum ktm_subsystem
@@ -102,5 +120,12 @@ void ktm_event_emit_pid(const char *tag, uint32_t pid);
 
 /* Ring consumer for /dev/ktm read + poll. */
 int ktm_event_copy_out(ktm_event_t *dst, size_t max_events);
+/*
+ * Print the last @max_events ring entries (0 = all) without moving the
+ * consumer cursor. @subsys_mask is a bitmask of (1u << ktm_subsystem); 0
+ * means every subsystem. Filtering matters because scheduler events vastly
+ * outnumber the rest. Diagnostic path for failing smokes.
+ */
+void ktm_event_ring_dump(size_t max_events, uint32_t subsys_mask);
 int ktm_event_pending(void);
 void ktm_event_ring_reset_cursor(void);

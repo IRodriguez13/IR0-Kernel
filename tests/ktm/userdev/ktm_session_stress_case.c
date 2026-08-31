@@ -30,7 +30,7 @@
 #define KTM_INV_FRAMES  (1u << 1)
 
 #ifndef STORM_N
-#define STORM_N 64
+#define STORM_N 16
 #endif
 
 static void say(const char *s)

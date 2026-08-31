@@ -16,6 +16,7 @@
 #include "pic.h"
 #include "io.h"
 #include "keyboard.h"
+#include <ir0/arch_cpu.h>
 
 #define PS2_DATA_PORT 0x60
 #include <config.h>
@@ -228,17 +229,39 @@ void keyboard_poll_ps2(void)
 
 	for (;;)
 	{
-		uint8_t status = inb(PS2_STATUS_PORT);
+		uint8_t status;
 		uint8_t data;
-
-		if (!(status & PS2_STATUS_OUTPUT_FULL))
-			break;
+		unsigned long flags;
+		int claimed = 0;
 
 		/*
-		 * Classify BEFORE reading would be ideal; i8042 latches AUXDATA
-		 * with the byte, so read status then data and branch on AUXDATA.
+		 * Claim the byte atomically. kernel_idle_poll() drains the
+		 * controller with interrupts enabled, so IRQ1 can land between
+		 * the status test and the data read; the byte is consumed by
+		 * the handler and this read returns the i8042's last byte
+		 * again, duplicating a keystroke ("uptimee", "/proc//uptime").
+		 * Linux serialises the same pair under i8042_lock.
 		 */
-		data = inb(PS2_DATA_PORT);
+		flags = irq_save();
+		status = inb(PS2_STATUS_PORT);
+		if (status & PS2_STATUS_OUTPUT_FULL)
+		{
+			/*
+			 * Classify BEFORE reading would be ideal; i8042 latches
+			 * AUXDATA with the byte, so read status then data and
+			 * branch on AUXDATA.
+			 */
+			data = inb(PS2_DATA_PORT);
+			claimed = 1;
+		}
+		else
+		{
+			data = 0;
+		}
+		irq_restore(flags);
+
+		if (!claimed)
+			break;
 
 #if DEBUG_PS2
 		kprintf("[PS2] status=0x%02x data=0x%02x source=%s\n", status, data,
@@ -324,7 +347,23 @@ static void keyboard_feed_scancode(uint8_t scancode)
 		 * do not also inject ASCII into the cooked TTY line (qqqls).
 		 */
 		if (!input_events_readers_active())
+		{
 			keyboard_buffer_add_bytes(r.emitted, r.emitted_len);
+		}
+		else
+		{
+			/*
+			 * A leaked /dev/events0 reader silently kills all
+			 * console input, which looks like a dead getty. Say so
+			 * on the serial log instead of dropping in silence.
+			 */
+			static unsigned int suppressed;
+
+			if (++suppressed <= 8)
+				klog_notice_fmt("INPUT",
+						"[INPUT] ascii suppressed: events0 readers active (n=%u)\n",
+						suppressed);
+		}
 	}
 }
 

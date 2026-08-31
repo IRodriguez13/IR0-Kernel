@@ -13,6 +13,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include "syscall_dispatch.h"
+#include <ir0/ktm/user_canary.h>
+#include <config.h>
 #include "process.h"
 #include <kernel/syscalls.h>
 #include "fs_syscalls.h"
@@ -143,6 +145,7 @@ WRAP1(sys_unlink, const char *)
 WRAP3(sys_unlinkat, int, const char *, int)
 WRAP4(sys_renameat, int, const char *, int, const char *)
 WRAP1(sys_uname, struct utsname *)
+WRAP1(sys_sysinfo, void *)
 WRAP2(sys_access, const char *, int)
 WRAP4(sys_faccessat, int, const char *, int, int)
 WRAP1(sys_dup, int)
@@ -216,7 +219,13 @@ WRAP6(sys_epoll_pwait, int, struct epoll_event *, int, int, const void *, size_t
 WRAP6(sys_pselect6, int, fd_set *, fd_set *, fd_set *, const struct timespec *, const void *)
 WRAP2(sys_nanosleep, const struct timespec *, struct timespec *)
 WRAP0(sys_pause)
+WRAP0(sys_vfork)
+WRAP1(sys_personality, unsigned long)
+WRAP2(sys_getpriority, int, int)
+WRAP3(sys_setpriority, int, int, int)
 WRAP0(sys_sync)
+WRAP1(sys_fsync, int)
+WRAP1(sys_fdatasync, int)
 WRAP2(sys_gettimeofday, struct timeval *, void *)
 WRAP2(sys_getitimer, int, struct itimerval *)
 WRAP3(sys_setitimer, int, const struct itimerval *, struct itimerval *)
@@ -348,6 +357,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_prctl]          = wrap_sys_prctl;
   syscall_table_rw[__NR_clone]           = wrap_sys_clone;
   syscall_table_rw[__NR_fork]          = wrap_sys_fork;
+  syscall_table_rw[__NR_vfork]         = wrap_sys_vfork;
   syscall_table_rw[__NR_execve]        = wrap_sys_exec;
   syscall_table_rw[__NR_exit]           = wrap_sys_exit;
   syscall_table_rw[__NR_wait4]          = wrap_sys_waitpid;
@@ -375,6 +385,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_unlinkat]       = wrap_sys_unlinkat;
   syscall_table_rw[__NR_renameat]       = wrap_sys_renameat;
   syscall_table_rw[__NR_uname]          = wrap_sys_uname;
+  syscall_table_rw[__NR_sysinfo]        = wrap_sys_sysinfo;
   syscall_table_rw[__NR_access]         = wrap_sys_access;
   syscall_table_rw[__NR_faccessat]      = wrap_sys_faccessat;
   syscall_table_rw[__NR_dup]            = wrap_sys_dup;
@@ -411,6 +422,11 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_mount]          = wrap_sys_mount;
   syscall_table_rw[__NR_umount2]        = wrap_sys_umount;
   syscall_table_rw[__NR_sync]           = wrap_sys_sync;
+  syscall_table_rw[__NR_personality]    = wrap_sys_personality;
+  syscall_table_rw[__NR_getpriority]    = wrap_sys_getpriority;
+  syscall_table_rw[__NR_setpriority]    = wrap_sys_setpriority;
+  syscall_table_rw[__NR_fsync]          = wrap_sys_fsync;
+  syscall_table_rw[__NR_fdatasync]      = wrap_sys_fdatasync;
   syscall_table_rw[__NR_console_scroll]  = wrap_console_scroll;
   syscall_table_rw[__NR_console_clear]   = wrap_console_clear;
   syscall_table_rw[__NR_keymap_set]      = wrap_keymap_set;
@@ -510,6 +526,15 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
   }
   r = handler(arg1, arg2, arg3, arg4, arg5, arg6);
   KTM_TRACE_SYSCALL_RET((uint32_t)syscall_num, (uint32_t)r);
+  /*
+   * Watchdog on the way out: rate-limited internally, so this bounds how
+   * long a corrupted initial stack image can go unnoticed without putting a
+   * user copy on every syscall.
+   */
+  if (current_process && current_process->mode == USER_MODE)
+    ktm_user_canary_poll(process_pgd(current_process),
+			 (uint64_t)USER_STACK_TOP,
+			 (uint32_t)current_process->task.pid);
   ktm_probe_diag_syscall_post(syscall_num, r);
   if (current_process && current_process->mode == USER_MODE &&
       syscall_num == __NR_read)

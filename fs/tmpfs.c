@@ -135,7 +135,7 @@ static tmpfs_inode_t *tmpfs_alloc_inode(tmpfs_data_t *tmpfs)
             tmpfs_inode_t *inode = &tmpfs->inodes[i];
             memset(inode, 0, sizeof(tmpfs_inode_t));
             inode->ino = ++tmpfs->next_ino;
-            inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+            inode->mtime = clock_get_current_time();
             return inode;
         }
     }
@@ -608,7 +608,7 @@ int tmpfs_write_file(const char *path, const void *buf, size_t count, size_t *wr
     if (count > 0)
     {
         memcpy(inode->data + offset, buf, count);
-        inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+        inode->mtime = clock_get_current_time();
     }
     
     if (written_count)
@@ -789,7 +789,7 @@ int tmpfs_chown(const char *path, uid_t owner, gid_t group)
     if (group != (gid_t)-1)
         inode->gid = (uint32_t)group;
 
-    inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+    inode->mtime = clock_get_current_time();
     return 0;
 }
 
@@ -814,7 +814,7 @@ int tmpfs_truncate(const char *path, size_t length)
 
     if (length < inode->size) {
         inode->size = (uint32_t)length;
-        inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+        inode->mtime = clock_get_current_time();
         return 0;
     }
 
@@ -826,7 +826,7 @@ int tmpfs_truncate(const char *path, size_t length)
         if (inode->data && length <= inode->data_cap) {
             memset(inode->data + inode->size, 0, length - inode->size);
             inode->size = (uint32_t)length;
-            inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+            inode->mtime = clock_get_current_time();
             return 0;
         }
 
@@ -843,11 +843,11 @@ int tmpfs_truncate(const char *path, size_t length)
         inode->data = new_data;
         inode->size = (uint32_t)length;
         inode->data_cap = length;
-        inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+        inode->mtime = clock_get_current_time();
         return 0;
     }
 
-    inode->mtime = (time_t)(clock_get_uptime_milliseconds() / 1000);
+    inode->mtime = clock_get_current_time();
     return 0;
 }
 

@@ -30,6 +30,7 @@
 #include <ir0/net.h>
 #include <ir0/driver.h>
 #include <ir0/klog.h>
+#include <ir0/ktm/stack_watch.h>
 #include <ir0/process.h>
 #include <ir0/credentials.h>
 #include <config.h>
@@ -755,6 +756,9 @@ int proc_meminfo_read(char *buf, size_t count)
 	size_t total_frames = 0;
 	size_t used_frames = 0;
 	size_t free_frames = 0;
+	size_t heap_total = 0;
+	size_t heap_used = 0;
+	size_t heap_allocs = 0;
 	uint64_t total_kb;
 	uint64_t used_kb;
 	uint64_t free_kb;
@@ -769,15 +773,48 @@ int proc_meminfo_read(char *buf, size_t count)
 	used_kb = ((uint64_t)used_frames * (uint64_t)IR0_MM_PAGE_SIZE) / BYTES_PER_KB;
 	free_kb = ((uint64_t)free_frames * (uint64_t)IR0_MM_PAGE_SIZE) / BYTES_PER_KB;
 
+	/*
+	 * Report the kernel heap too. The PMM figures barely move because the
+	 * heap is carved out of a region reserved at boot, so an exec failing
+	 * with -ENOMEM from a fragmented heap looked like a machine with tens
+	 * of MiB free. Slab is the Linux field for kernel data structures.
+	 */
+	ir0_mm_alloc_stats(&heap_total, &heap_used, &heap_allocs);
+
 	len = snprintf(buf, count,
 		       "MemTotal:       %llu kB\n"
 		       "MemFree:        %llu kB\n"
+		       /*
+			* Linux field order; BusyBox free reads MemAvailable
+			* for its "available" column and printed 0 while the
+			* field was missing. IR0 has no reclaimable page
+			* cache, so everything free is available and Buffers
+			* and Cached are genuinely zero rather than unknown.
+			*/
+		       "MemAvailable:   %llu kB\n"
+		       "Buffers:        0 kB\n"
+		       "Cached:         0 kB\n"
 		       "MemUsed:        %llu kB\n"
-		       "PageSize:       %u kB\n",
+		       "PageSize:       %u kB\n"
+		       "Slab:           %llu kB\n"
+		       "SlabTotal:      %llu kB\n"
+		       "SlabAllocs:     %llu\n"
+		       "KStackMinFree:  %llu\n"
+		       "IrqNestMax:     %u\n"
+		       "KStackPeak:     %llu\n",
 		       (unsigned long long)total_kb,
 		       (unsigned long long)free_kb,
+		       (unsigned long long)free_kb,
 		       (unsigned long long)used_kb,
-		       (unsigned)(IR0_MM_PAGE_SIZE / BYTES_PER_KB));
+		       (unsigned)(IR0_MM_PAGE_SIZE / BYTES_PER_KB),
+		       (unsigned long long)((uint64_t)heap_used / BYTES_PER_KB),
+		       (unsigned long long)((uint64_t)heap_total / BYTES_PER_KB),
+		       (unsigned long long)(uint64_t)heap_allocs,
+		       /* Worst kernel stack headroom seen since boot; a #DF on
+			* a deep path walk showed 32 KiB is not comfortable. */
+		       (unsigned long long)ktm_stack_min_headroom_get(),
+		       ktm_irq_nest_max_get(),
+		       (unsigned long long)ktm_stack_peak_used());
 	if (len < 0)
 		return -1;
 	if (len >= (int)count)
@@ -1413,6 +1450,32 @@ int proc_mounts_read(char *buf, size_t count)
             break;
         off += (size_t)n;
     }
+    /*
+     * Pseudo-filesystems are served through the registry, not through the VFS
+     * mount list, so they never appeared here and mount(1) showed only the
+     * root. Linux lists proc, sysfs and devtmpfs; /heart is IR0-specific but
+     * is a namespace the session can use, so it is listed too. vfs_statfs()
+     * reports them with zero blocks, so df skips them without -a.
+     */
+    {
+        static const char *const pseudo[] = {
+            "proc /proc proc rw 0 0\n",
+            "sysfs /sys sysfs rw 0 0\n",
+            "devtmpfs /dev devtmpfs rw 0 0\n",
+            "heartfs /heart heartfs rw 0 0\n",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(pseudo) / sizeof(pseudo[0]) && off < count; i++) {
+            size_t len = strlen(pseudo[i]);
+
+            if (len >= count - off)
+                break;
+            memcpy(buf + off, pseudo[i], len);
+            off += len;
+        }
+    }
+
     if (off < count)
         buf[off] = '\0';
     return (int)off;

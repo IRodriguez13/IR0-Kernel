@@ -73,7 +73,6 @@ static inline void ktm_fail_at(const char *kind, const char *expr,
 /* Context snapshot + panic class (CONFIG_KTM / always declared)             */
 /* ------------------------------------------------------------------------- */
 
-void ktm_ctx_snapshot(const struct process *p, const char *reason);
 void ktm_panic_class_emit(const char *klass);
 
 void ktm_panic_site_emit(const char *file, unsigned int line, const char *caller,
@@ -186,12 +185,11 @@ void ktm_invariant_process(const struct process *p, const char *tag);
 	klog_debug("KTM", tag); \
 } while (0)
 
+void ktm_ctx_snapshot(const struct process *p, const char *reason);
+
 void ktm_sched_gate_enter_irq(void);
 void ktm_sched_gate_leave_irq(void);
 void ktm_sched_gate_check_before_sched(const char *caller);
-
-void ktm_sched_trace_wake(const struct process *p, const char *tag);
-void ktm_sched_trace_pick(const struct process *prev, const struct process *next);
 
 #else /* !IR0_KERNEL_TESTS */
 
@@ -206,19 +204,6 @@ static inline void ktm_sched_gate_leave_irq(void) { }
 static inline void ktm_sched_gate_check_before_sched(const char *caller)
 {
 	(void)caller;
-}
-
-static inline void ktm_sched_trace_wake(const struct process *p, const char *tag)
-{
-	(void)p;
-	(void)tag;
-}
-
-static inline void ktm_sched_trace_pick(const struct process *prev,
-					const struct process *next)
-{
-	(void)prev;
-	(void)next;
 }
 
 #endif /* IR0_KERNEL_TESTS */

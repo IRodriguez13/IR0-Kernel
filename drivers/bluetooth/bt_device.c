@@ -331,16 +331,38 @@ int bt_hci_ioctl(unsigned int cmd, unsigned long arg)
 /**
  * bt_proc_devices_read - Read /proc/bluetooth/devices
  */
+static int bt_proc_devices_fill(char *buffer, size_t count,
+                                struct bluetooth_device *devices);
+
+/*
+ * The discovered-device array is 8 KiB. On the stack it made this reader the
+ * deepest kernel path a plain session could reach: `cat /proc/bluetooth/
+ * devices`, or any find over /proc, ran it under sys_read for a measured
+ * 14 KiB peak on a 32 KiB kernel stack.
+ */
 int bt_proc_devices_read(char *buffer, size_t count)
 {
+    struct bluetooth_device *devices;
+    int rc;
+
     if (!buffer || count == 0)
         return -EINVAL;
-    
+
+    devices = kmalloc_try(sizeof(*devices) * 32);
+    if (!devices)
+        return -ENOMEM;
+
+    rc = bt_proc_devices_fill(buffer, count, devices);
+    kfree(devices);
+    return rc;
+}
+
+static int bt_proc_devices_fill(char *buffer, size_t count,
+                                struct bluetooth_device *devices)
+{
     /* Process pending events to update device list */
     hci_process_events();
     
-    /* Get discovered devices */
-    struct bluetooth_device devices[32];
     int num_devices = hci_get_discovered_devices(devices, 32);
     if (num_devices < 0)
         return num_devices;

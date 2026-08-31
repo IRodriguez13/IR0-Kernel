@@ -210,6 +210,16 @@
  * which a single shared global syscall stack allowed.
  */
 #define IR0_PROC_KSTACK_SIZE (32 * 1024)
+/*
+ * Linux-like: per-task kernel stacks live in a dedicated supervisor VA range
+ * outside the low identity / user-brk window (see process_kernel_stack_alloc).
+ * Slot = guard page + IR0_PROC_KSTACK_SIZE; grows down from kstack_top.
+ */
+#define IR0_KSTACK_VA_BASE    0xFFFFFE8000000000ULL
+#define IR0_KSTACK_SLOT_SIZE  (64UL * 1024UL) /* 4K guard + 32K stack + slack */
+#define IR0_KSTACK_MAX_SLOTS  8192U
+/* Fill byte for unused kernel stack; see ktm_stack_peak_used(). */
+#define IR0_KSTACK_POISON     0xAAU
 
 /* MEMORY LAYOUT — virtual addresses and segment selectors */
 #define USER_STACK_TOP      0x7FFFF000UL
@@ -217,8 +227,14 @@
 #define USER_STACK_SIZE     0x80000
 #define USER_STACK_BASE     (USER_STACK_TOP - USER_STACK_SIZE)
 #define USER_STACK_GUARD    (USER_STACK_BASE - 0x1000UL)
-#define USER_HEAP_BASE      0x2000000UL
-/* Anon mmap arena starts above the PMM identity window (see PMM_PHYS_*). */
+/*
+ * Program break for processes without an ELF image starts at the mmap floor
+ * (above PMM identity). Exec'd images set heap from PT_LOAD end (see
+ * elf_compute_initial_brk) — contiguous with BSS, no artificial hole.
+ * Anon mmap arena also starts here so mmap never lands in PMM identity.
+ */
+#define USER_HEAP_BASE      0x20000000UL
+/* Anon mmap arena starts at the same floor; sys_mmap searches above heap_end. */
 #define USER_MMAP_START     0x20000000UL
 /*
  * Linux-like separation: anon mmap arena ends at least USER_STACK_MMAP_GAP below

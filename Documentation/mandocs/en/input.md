@@ -32,9 +32,11 @@ TTY stdin path separately. PS/2 mouse adds `EV_REL`/`EV_KEY` events when
 ```text
   IRQ1 → keyboard_poll_ps2 → keyboard_feed_scancode
        ├─ input_event_push(EV_KEY, KEY_*, value)  → events ring
+       ├─ input_event_push(EV_SYN, SYN_REPORT, 0)
        └─ keyboard_buffer_add(ascii)              → /dev/console stdin path
 
-  Mouse IRQ → input_mouse_handle_interrupt → input_event_push(EV_REL|EV_KEY)
+  Mouse IRQ → input_mouse_handle_interrupt → keyboard_poll_ps2 (shared i8042)
+  Idle poll → kernel_idle_poll → input_kbd_poll_ps2 → keyboard_poll_ps2
 
   read(/dev/events0) → ir0_input_read_event → dequeue (batch up to 16 events)
   poll → devfs_events0_can_read → ir0_input_poll()
@@ -85,10 +87,16 @@ Dual path diagram:
 ## 8. Important invariants
 
 1. Queue depth **64** events; overflow drops.
-2. `EV_SYN` defined but not pushed in current code.
+2. `EV_SYN` is pushed after each `EV_KEY` from `keyboard_feed_scancode`.
 3. Extended scancodes (0xE0 prefix) mapped for Doom key subset.
 4. `ir0_input_is_available()` returns 1 on x86 bring-up; poll checks ring non-empty.
 5. Read returns 0 if buffer empty (non-blocking friendly).
+6. **i8042 claim is atomic** — `keyboard_poll_ps2()` holds `irq_save()` across the
+   status test and the data read. Idle polling runs with interrupts enabled, so
+   without that serialisation IRQ1 can land between the two `inb`s, consume the
+   byte, and leave the idle path re-reading the controller's last byte. That
+   produced duplicated keystrokes (`/proc//uptime`, `uptimee`). Linux protects
+   the same pair under `i8042_lock`.
 
 ## 9. Debugging tips
 
@@ -102,6 +110,8 @@ Dual path diagram:
 - USB keyboard/mouse — PS/2 primary today.
 - `EV_SYN` reporting for libinput-style clients.
 - Back-pressure or larger queue for fast key repeat.
+- Getty that prints `Enter your Unix username:` after `exit` but accepts no
+  input (session soak stalls at relogin). Separate from the i8042 race above.
 - ARM64: keyboard ring helpers under `#ifdef __x86_64__` only.
 
 See: `IR0-tty`, `IR0-graphics`.

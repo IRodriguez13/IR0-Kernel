@@ -1,7 +1,8 @@
 # IR0 Filesystem Architecture
 
-> **Last verified:** 2026-07-11  
-> **Source of truth:** `fs/vfs.c`, `fs/fat16_*.c`, `fs/ext2_*.c`, `drivers/storage/ahci.c`,  
+> **Last verified:** 2026-08-30  
+> **Source of truth:** `fs/vfs.c`, `fs/minix_fs.c`, `fs/simplefs.c`, `fs/fat16_*.c`,  
+> `fs/ext2_*.c`, `drivers/storage/ahci.c`,  
 > `includes/ir0/blockdev.h`, [`BACKLOG_REMAINING.md`](BACKLOG_REMAINING.md)
 
 IR0 uses a VFS-first design where policy is centralized and backend filesystems
@@ -43,6 +44,28 @@ provide concrete operations.
 - Relative paths are resolved against per-process `cwd`.
 - `/proc` per-process contexts avoid pseudo-fd collisions across processes.
 
+### MINIX directory names
+
+The on-disk name field is `MINIX_NAME_LEN` (14) bytes and carries **no
+terminator when the name fills it**. Treating it as a C string reads into the
+following directory entry.
+
+- `minix_dirent_name()` is the only sanctioned way to read the field: bounded
+  copy into a `MINIX_NAME_LEN + 1` buffer.
+- A component longer than the field is rejected with `-ENAMETOOLONG` by
+  `minix_fs_split_path()`; it used to be truncated silently, so creating
+  `abcdefghijklmno` wrote an entry named `abcdefghijklmn` and then reported
+  `ENOENT` for the name the caller asked for, leaving a wrongly named file
+  behind.
+- Callers propagate the `split_path` return value instead of flattening it to
+  `-EINVAL`, so the distinction reaches userspace.
+
+Symptom before the fix: `du` walking the tree printed
+`/usr/share/ash-completion<garbage>: Invalid argument`, because that name is
+exactly 14 characters. Regression coverage lives in `smoke-session-walk`, which
+round-trips 13-, 14- and 15-character names through create, `readdir` and
+`stat`.
+
 ## Strengths
 
 - Clear separation between VFS policy and backend implementation.
@@ -56,3 +79,5 @@ provide concrete operations.
 - **NVMe** and richer FS features remain Future — see [`BACKLOG_REMAINING.md`](BACKLOG_REMAINING.md).
 - Some metadata and edge-case behavior remains hobby-kernel grade.
 - Heavy runtime correctness depends on broad integration testing.
+- MINIX caps components at 14 bytes, so longer names cannot be created at all
+  rather than being stored in a longer-name format.

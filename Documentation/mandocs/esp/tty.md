@@ -104,7 +104,8 @@ Canónico vs raw:
 2. id dispositivo stdin 17 (no 16 — colisión con events0 documentada en devfs).
 3. ioctl: TCGETS/TCSETS/TCSETSW/TCSETSF, TIOCGWINSZ; otras peticiones `-ENOTTY`.
 4. open `/dev/console` dispara `ir0_console_on_userspace_attach()` una vez.
-5. TTY no toca punteros user — devfs/capa syscall copian.
+5. TTY no toca punteros user — devfs/capa syscall copian.5. TTY no toca punteros user — devfs/capa syscall copian.
+6. El drenado del teclado se comparte con el subsistema de entrada — ver el invariante de reclamo atómico del i8042 en IR0-input. Los caracteres duplicados en la línea casi siempre son esa carrera, no un bug de eco del TTY.
 
 ## 9. Consejos de depuración
 

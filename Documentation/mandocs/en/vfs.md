@@ -218,6 +218,22 @@ See section 3 ASCII map and `Documentation/mandocs/diagrams/vfs-routing.mmd`.
 6. **Proc fd isolation** — per-process pseudo-fd context avoids cross-process collisions (see procfs chapter when available).
 7. **Negative errno throughout** — VFS and backends do not return positive error codes.
 8. **Symlink dispatch** — prefer backend `symlink`/`readlink`; else `named_symlink_*` fallback from `fs_syscalls.c`.
+9. **statfs matches pseudo prefixes first** — `vfs_statfs()` checks `/proc`, `/sys` and `/dev` before `find_mount()`. They are not mounts, so the longest-prefix rule would otherwise hand them the root mount and report `/proc` with the size of the disk.
+
+### statfs (`vfs_statfs`)
+
+| Path | `f_type` | Blocks |
+|---|---|---|
+| `/proc` | `IR0_PROC_SUPER_MAGIC` | 0 |
+| `/sys` | `IR0_SYSFS_MAGIC` | 0 |
+| `/dev` | `IR0_TMPFS_MAGIC` (as devtmpfs) | 0 |
+| minix mount | `IR0_MINIX_SUPER_MAGIC` | `minix_fs_statfs()` |
+| tmpfs mount | `IR0_TMPFS_MAGIC` | 0 |
+| 9p mount | `IR0_9P_MAGIC` | host `Tstatfs`, else 0 |
+| unknown | 0 | 0 |
+
+Magics live in `includes/ir0/statfs.h`. Zero blocks make `df` skip the row
+without `-a`, which is the intent for the pseudo rows.
 
 ## 9. Debugging tips
 

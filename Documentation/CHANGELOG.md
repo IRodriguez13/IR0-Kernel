@@ -1,6 +1,6 @@
 # IR0 Kernel Changelog
 
-> **Last verified:** 2026-07-30
+> **Last verified:** 2026-08-30
 > **Source of truth:** git history, `make ktm-check`, roadmap smokes in `Makefile`, [`HARDENING.md`](HARDENING.md), [`KTM.md`](KTM.md)
 
 This file tracks user-visible and developer-facing changes per iteration.
@@ -21,6 +21,30 @@ Notes: [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md), [`releases/NETW
 - Stress: `setup/pid1/net_command_stress.c` → `NET_STRESS_PASS` / `NC_ONLY_PASS`.
 
 ## [Unreleased]
+
+### Session stabilization: i8042 race, mount visibility, 9p statfs (2026-08-30)
+
+- **Duplicated keystrokes fixed.** `keyboard_poll_ps2()` now claims the i8042
+  byte with `irq_save()` held across the status test and the data read.
+  `kernel_idle_poll()` drains the controller with interrupts enabled, so IRQ1
+  could land between the two `inb`s: the handler consumed the byte and the idle
+  path re-read the controller's last byte, doubling a character
+  (`/proc//uptime`, `hexdump  -C`, `uptimee`). Linux serialises the same pair
+  under `i8042_lock`.
+- `/proc/mounts` lists `proc`, `sysfs` and `devtmpfs`, as Linux does.
+- `vfs_statfs()` matches pseudo-filesystem prefixes before `find_mount()` and
+  reports their Linux magic with zero blocks; previously `/proc` inherited the
+  root mount and `df` printed it with the size of the disk.
+- 9p `Tstatfs` (opcode 8) implemented (`virtio_9p_statfs`), so `df` shows real
+  host sizes instead of zero. Falls back to zeros if the server does not answer.
+- `smoke-session-soak` login is deterministic: prompt baseline sampled before
+  `exit`, settle after the username prompt, retry when getty respawns.
+  `SOAK_EXTRA` forwards flags, e.g. `SOAK_EXTRA="--relogin-every 3"`.
+- `smoke-session-walk` asserts pseudo-FS in `/proc/mounts`, zero blocks on
+  `statfs("/proc")` and non-zero blocks on the 9p mount.
+
+Open: getty prints `Enter your Unix username:` after `exit` but accepts no
+input, stalling the soak at relogin.
 
 ### `/proc/stat` + BusyBox `top` + ATA odd-buffer bounce (2026-07-29)
 

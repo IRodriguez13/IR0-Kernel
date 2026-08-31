@@ -104,13 +104,24 @@ Canonical vs raw:
 3. ioctl: TCGETS/TCSETS/TCSETSW/TCSETSF, TIOCGWINSZ; other requests `-ENOTTY`.
 4. `/dev/console` open triggers `ir0_console_on_userspace_attach()` once.
 5. TTY does not touch user pointers — devfs/syscall layer copies.
+6. Keyboard drain is shared with the input subsystem — see IR0-input invariant
+   on atomic i8042 claim. Duplicated characters on the line are almost always
+   that race, not a TTY echo bug.
 
 ## 9. Debugging tips
 
 - Interactive ash smoke: `Documentation/fase58e-ash-interactive-console.md`.
+- Session soak with relogin: `make smoke-session-soak SOAK_EXTRA="--relogin-every 3"`
+  (or run `scripts/smoke_session_soak.py` with `--relogin-every`). Login must
+  sample the getty prompt baseline *before* typing `exit`, and settle ~1.5 s
+  after the username prompt; typing too early makes getty respawn without
+  printing `Password:`.
 - Serial: keyboard layout via `CONFIG_KEYBOARD_LAYOUT`; syscall keymap get/set.
 - Blank echo but serial OK: check ICANON/ECHO termios; verify backend attach.
 - poll blocked: ensure `stdin_wake_check` runs from idle loop.
+- Relogin prints `Enter your Unix username:` but accepts no input: open P0 —
+  getty after `CONSOLE_SESSION_REPROMPT` does not reattach stdin to the
+  keyboard ring. Distinct from the i8042 duplication race (fixed).
 
 Build/run: `make run-fase58e-ash-gui` (see SETUP.md).
 
@@ -120,3 +131,4 @@ Build/run: `make run-fase58e-ash-gui` (see SETUP.md).
 - Full termios flag parity with Linux — subset only.
 - USB keyboard — PS/2 primary path today.
 - Multiple virtual terminals — single console focus.
+- Fix getty dead-input after session end / `CONSOLE_SESSION_REPROMPT`.

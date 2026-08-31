@@ -88,7 +88,8 @@ Diagrama de doble ruta:
 2. `EV_SYN` definido pero no empujado en código actual.
 3. Scancodes extendidos (prefijo 0xE0) mapeados para subconjunto de teclas Doom.
 4. `ir0_input_is_available()` devuelve 1 en bring-up x86; poll comprueba ring no vacío.
-5. Read devuelve 0 si buffer vacío (amigable non-blocking).
+5. Read devuelve 0 si buffer vacío (amigable non-blocking).5. Read devuelve 0 si buffer vacío (amigable non-blocking).
+6. **El reclamo del i8042 es atómico** — `keyboard_poll_ps2()` mantiene `irq_save()` sobre el test de estado y la lectura del dato. El sondeo idle corre con interrupciones habilitadas, así que sin esa serialización la IRQ1 puede colarse entre los dos `inb`, consumir el byte y dejar al camino idle releyendo el último byte del controlador. Eso producía teclas duplicadas (`/proc//uptime`, `uptimee`). Linux protege ese mismo par con `i8042_lock`.
 
 ## 9. Consejos de depuración
 

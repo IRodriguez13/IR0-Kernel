@@ -1,8 +1,11 @@
 # IR0 Virtual Filesystems
 
-> **Last verified:** 2026-07-29
+> **Last verified:** 2026-08-30
 > **Source of truth:** `fs/procfs.c`, `fs/sysfs.c`, `fs/devfs.c`, `fs/heartfs.c`,
-> `fs/pseudo_fs_registry.c`, [`PSEUDO_FS_HEART.md`](PSEUDO_FS_HEART.md),
+> `fs/pseudo_fs_registry.c`, `fs/pseudo_fs_nodes.c`,
+> `kernel/syscalls/mm_syscalls.c` (`sys_sysinfo`),
+> `fs/vfs.c` (`vfs_statfs`), `includes/ir0/statfs.h`,
+> [`PSEUDO_FS_HEART.md`](PSEUDO_FS_HEART.md),
 > [`KLOG.md`](KLOG.md) (`/proc/kmsg`, `/dev/kmsg`)
 
 This document focuses on pseudo-filesystems exposed through VFS.
@@ -18,7 +21,7 @@ See [`PSEUDO_FS_HEART.md`](PSEUDO_FS_HEART.md) for layout, gates, and ARCH-3 not
 
 ### Common Endpoints
 
-- `/proc/meminfo`
+- `/proc/meminfo` — includes `MemAvailable`, `Buffers` and `Cached`
 - `/proc/uptime`
 - `/proc/stat` — aggregate + `cpu0` jiffy lines for BusyBox `top` (see below)
 - `/proc/loadavg`
@@ -67,6 +70,58 @@ Static files remain openable by path even when truncated from a directory listin
 - Path-based readdir for `/proc`, `/proc/pid`, `/proc/pid/N` via `proc_readdir()`.
 - `/proc/kmsg` mirrors the same event ring as serial (not the legacy textual-only path).
 
+### Memory and uptime reporting
+
+BusyBox `free` and `uptime` go through **`sysinfo(2)`** (syscall 99), not
+through `/proc`. While it was unimplemented the applets printed uninitialised
+stack after `ENOSYS`, which is where "57 days of uptime" and gigabytes of used
+RAM came from. `sys_sysinfo` fills uptime, load averages, memory totals and
+process count from kernel state; `_Static_assert`s pin the struct layout to the
+Linux ABI.
+
+`MemAvailable` is reported equal to `MemFree`, and `Buffers` / `Cached` are
+zero. That is accurate rather than unimplemented: IR0 has no reclaimable page
+cache, so nothing is held back that a request could reclaim. `free` reads
+`MemAvailable` for its `available` column and printed `0` while the field was
+absent.
+
+### Timestamps
+
+Pseudo-filesystem `stat` handlers must call `pseudo_fs_stat_now()`, which sets
+`st_atime` / `st_mtime` / `st_ctime` from `clock_get_current_time()`. Handlers
+that only `memset` the struct report the 1970 epoch, which is what `ls -l`
+showed across `/proc`, `/sys` and `/heart`.
+
+Wall-clock time, not uptime: `tmpfs` and `minix_fs` both derived timestamps
+from the millisecond uptime counter and produced 1970 dates on a freshly booted
+system.
+
+### Mount visibility
+
+`/proc/mounts` lists the real VFS mount list, and `/etc/mtab` is a symlink to
+it, so `df` and `mount` see whatever is actually mounted. Only the root
+filesystem is mounted at boot, so a single real row is expected output, not a
+missing-mount bug.
+
+Pseudo-filesystems are not VFS mounts, but `proc_mounts_read()`
+(`fs/procfs.c`) appends them so the session sees the namespaces it is actually
+using, as Linux does:
+
+```
+proc /proc proc rw 0 0
+sysfs /sys sysfs rw 0 0
+devtmpfs /dev devtmpfs rw 0 0
+```
+
+`vfs_statfs()` (`fs/vfs.c`) matches those prefixes before `find_mount()` and
+reports the Linux magic (`PROC_SUPER_MAGIC`, `SYSFS_MAGIC`, `TMPFS_MAGIC` for
+devfs, as devtmpfs) with zero blocks. Without that match `find_mount()` would
+attribute `/proc` to the root mount and `df` would print it with the size of
+the disk; the zero blocks also make `df` skip these rows without `-a`.
+
+`/heart` is served through the same registry but is IR0-specific and is not
+listed.
+
 ## `/dev`
 
 `devfs` exposes kernel device entry points.
@@ -113,3 +168,6 @@ Static files remain openable by path even when truncated from a directory listin
 - Coverage of edge-case parsing/format compatibility still depends on runtime tests.
 - `getdents` batch size still caps how many `/proc` names a single listing returns.
 - `/proc/stat` CPU breakdown is approximate until real per-task accounting exists.
+- `/heart` is absent from `/proc/mounts`, unlike the other pseudo-filesystems.
+- `statfs` on a pseudo-filesystem reports zero blocks by design; there is no
+  per-node accounting behind it.

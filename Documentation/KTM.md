@@ -1,7 +1,8 @@
 # KTM — Kernel Test Module
 
-> **Last verified:** 2026-07-24
+> **Last verified:** 2026-08-30
 > **Source of truth:** `includes/ir0/ktm/*`, `ktm/*.c`, `ktm/include/klog.h`,
+> `mm/page_fault.c`, `scripts/smoke_session_soak.py`,
 > `includes/ir0/klog_event.h`, [`KLOG.md`](KLOG.md),
 > `tests/ktm/`, `setup/Kconfig` (`CONFIG_KTM*`), `scripts/ktm_*.py`,
 > `scripts/ktm_userdev_runit_run.sh`, `scripts/smoke_autokill.py`,
@@ -365,6 +366,10 @@ valid **dev aids**; T3 checklist smokes are already on the hybrid path.
 make -s ktm-run
 make -s ktm-run SCENARIO=mm.cow_fork
 
+# Session-level corruption watchdogs (section 7)
+make -s smoke-session-walk                  # 9p tree walk, kstack peak, name round-trip
+make -s smoke-session-soak SOAK_ROUNDS=14   # long console soak; fails only on watchdogs
+
 # Userspace /dev/ktm pilots
 make -s ktm-userdev-run
 make -s ktm-userdev-cow-run
@@ -429,7 +434,66 @@ smoke-runit-boot                   # product PID1 — not migrated to userdev
 
 ---
 
-## 7. Policy
+## 7. Corruption watchdogs
+
+Three mechanisms that turn a late, anonymous crash into a named event at the
+point of damage. Added while chasing a session that died with a `rep movsq`
+read fault one page above the user stack.
+
+### 7.1 Ring dump quotas
+
+`ktm_event_ring_dump()` selects newest-first **under a per-type quota**
+(a quarter of the budget per event type, then a backfill pass).
+
+Without it a dump is useless whenever one type dominates. `KTM_EVENT_CTX_USER_IRET`
+fires on every return to ring 3, and `ktm_deferred_flush()` replays its backlog
+at the head of the ring just before the walk, so a segfault dump came out as 48
+identical resume-gate rows with the page faults and pipe transitions that explain
+the crash already evicted.
+
+Source: `ktm/event_ring.c` (`g_dump_selected`, `g_dump_type_count`).
+
+### 7.2 User stack canary
+
+The 16 bytes between the end of the initial `argv`/`envp`/auxv image and
+`USER_STACK_TOP` are slack that no correct program touches. They are stamped at
+`execve` and re-read on a rate-limited syscall poll and on every SIGSEGV.
+
+| Symbol | Role |
+|---|---|
+| `ktm_user_canary_install()` | Stamp, from `elf_setup_stack()` |
+| `ktm_user_canary_check()` | Verify; emits `KTM_USER_CANARY_BROKEN` and dumps the ring once per task |
+| `ktm_user_canary_poll()` | Watchdog on syscall exit, 1 in 256 |
+
+The pattern is **not** mixed with the pid: a fork child inherits the parent's
+stack image verbatim, so a pid-derived value reports every child as corrupted.
+
+Source: `ktm/user_canary.c`, `includes/ir0/ktm/user_canary.h`.
+
+### 7.3 Stack-top overrun classification
+
+A fault in the page immediately above `USER_STACK_TOP` is logged as
+`STACK_TOP_OVERRUN` with rip and offset. `segv addr=7ffff000` reads as a wild
+pointer; it is in fact the first address past the top of the stack, which means
+something walked off the end of the initial image.
+
+Source: `mm/page_fault.c` (`pf_user_segv`).
+
+### 7.4 Soak harness
+
+`make smoke-session-soak SOAK_ROUNDS=N` drives many rounds of pipelines, heavy
+`readdir` and set-id exec over one console. It fails **only** on the watchdogs
+above; a stalled command or a session segv is counted and reported, not treated
+as the verdict.
+
+Relogin is off by default (`--relogin-every 0`): the harness stalls after a few
+logout cycles, which cut every run short before the soak accumulated any uptime.
+
+Source: `scripts/smoke_session_soak.py`.
+
+---
+
+## 8. Policy
 
 1. Prefer KTM scenarios / `libktm_user` / `KTM_CHECKPOINT` over new serial slogans.
 2. Do not grow `ktm/` with test cases — put scenarios under `tests/ktm/scenarios/` and
@@ -455,7 +519,7 @@ remain SUB / non-default. Doom/TCC keep runit recipes; KTM names are hybrid alia
 
 ---
 
-## 8. Related docs
+## 9. Related docs
 
 | Doc | Content |
 |-----|---------|

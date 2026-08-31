@@ -114,6 +114,7 @@ See IR0-vfs for the two-stage router diagram.
 4. minix is default root (`CONFIG_ROOT_FILESYSTEM="minix"`).
 5. Negative errno throughout all backends.
 6. 9p symlink requires backend `vfs_ops.symlink` / `readlink` (see IR0-vfs).
+7. 9p `statfs` asks the host and degrades instead of failing: `virtio_9p_statfs()` issues `Tstatfs` (opcode 8) against the root fid, and `vfs_statfs()` keeps its zeroed defaults if the server does not answer.
 
 ## 9. Debugging tips
 
@@ -130,6 +131,7 @@ See IR0-vfs for the two-stage router diagram.
 - FAT16 (RO + write audit), EXT2 RO, GPT, AHCI(+NCQ) have QEMU smokes; NVMe is Future F6.
 - Richer permission model on pseudo nodes (future chmod semantics).
 - Process-local mount namespaces — **not implemented**.
-- 9p: more 9P2000.L ops (xattr, flock) — **not implemented**.
+- 9p: more 9P2000.L ops (xattr, flock) — **not implemented**. `Tstatfs` (8) is
+  implemented; `fsid` from `Rstatfs` is parsed over but discarded.
 
 Legacy: `Documentation/FILESYSTEM.md`, `Documentation/VIRTUAL_FILESYSTEMS.md`.

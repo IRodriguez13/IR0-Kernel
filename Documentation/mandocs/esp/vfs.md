@@ -218,7 +218,22 @@ Ver mapa ASCII de la sección 3 y `Documentation/mandocs/diagrams/vfs-routing.mm
 5. **ramfs es tmpfs** — alias en `vfs_mount`.
 6. **Aislamiento fd proc** — contexto pseudo-fd por proceso.
 7. **errno negativo** — VFS y backends no devuelven códigos de error positivos.
-8. **Dispatch symlink** — preferir backend `symlink`/`readlink`; si no, fallback `named_symlink_*` desde `fs_syscalls.c`.
+8. **Dispatch symlink** — preferir backend `symlink`/`readlink`; si no, fallback `named_symlink_*` desde `fs_syscalls.c`.8. **Dispatch symlink** — preferir backend `symlink`/`readlink`; si no, fallback `named_symlink_*` desde `fs_syscalls.c`.
+9. **statfs reconoce primero los prefijos pseudo** — `vfs_statfs()` chequea `/proc`, `/sys` y `/dev` antes de `find_mount()`. No son montajes, así que el prefijo más largo les asignaría el montaje raíz y `df` mostraría `/proc` con el tamaño del disco.
+
+### statfs (`vfs_statfs`)
+
+| Ruta | `f_type` | Bloques |
+|---|---|---|
+| `/proc` | `IR0_PROC_SUPER_MAGIC` | 0 |
+| `/sys` | `IR0_SYSFS_MAGIC` | 0 |
+| `/dev` | `IR0_TMPFS_MAGIC` (como devtmpfs) | 0 |
+| montaje minix | `IR0_MINIX_SUPER_MAGIC` | `minix_fs_statfs()` |
+| montaje tmpfs | `IR0_TMPFS_MAGIC` | 0 |
+| montaje 9p | `IR0_9P_MAGIC` | `Tstatfs` del host, si no 0 |
+| desconocido | 0 | 0 |
+
+Los magics viven en `includes/ir0/statfs.h`. Cero bloques hace que `df` omita la fila sin `-a`, que es la intención en las filas pseudo.
 
 ## 9. Consejos de depuración
 

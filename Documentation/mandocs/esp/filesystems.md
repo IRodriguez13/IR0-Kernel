@@ -114,7 +114,8 @@ Ver IR0-vfs para el diagrama del router en dos etapas.
 3. Fds pseudo proc 1000–1999 con mapa PID por owner; sysfs offsets 3000–3999.
 4. minix es raíz por defecto (`CONFIG_ROOT_FILESYSTEM="minix"`).
 5. errno negativo en todos los backends.
-6. Symlink 9p requiere `vfs_ops.symlink` / `readlink` (ver IR0-vfs).
+6. Symlink 9p requiere `vfs_ops.symlink` / `readlink` (ver IR0-vfs).6. Symlink 9p requiere `vfs_ops.symlink` / `readlink` (ver IR0-vfs).
+7. El `statfs` de 9p consulta al host y degrada en vez de fallar: `virtio_9p_statfs()` emite `Tstatfs` (opcode 8) contra el fid raíz, y `vfs_statfs()` conserva sus valores en cero si el servidor no responde.
 
 ## 9. Consejos de depuración
 

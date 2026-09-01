@@ -3,7 +3,7 @@
  * IR0 Kernel — utimensat path facade (VFS backend, no BusyBox coupling).
  */
 
-#include "utimens.h"
+#include <ir0/utimens.h>
 #include <fs/vfs.h>
 #include <ir0/errno.h>
 #include <ir0/stat.h>

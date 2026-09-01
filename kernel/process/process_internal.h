@@ -47,8 +47,8 @@
 #include <ir0/sock_icmp.h>
 #include <kernel/syscalls/process_syscalls.h>
 
-extern void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
-				uint64_t *blocked_readers, uint64_t *blocked_writers);
+extern void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
+			      uint64_t *blocked_readers, uint64_t *blocked_writers);
 extern void pipe_wake_all(pipe_t *pipe);
 extern int64_t process_close_fd(process_t *proc, int fd);
 

@@ -24,53 +24,14 @@
 
 void page_fault_handler_x64(uint64_t *stack)
 {
-	struct arch_page_fault_info info;
+	struct page_fault_info info;
 	int ret;
 
-	ret = arch_page_fault_decode(&info, stack ? stack[1] : 0, stack);
+	ret = page_fault_decode(&info, stack ? stack[1] : 0, stack);
 	if (ret < 0)
-		panic("arch_page_fault_decode failed");
+		panic("page_fault_decode failed");
 
 	mm_page_fault_handle(&info, stack);
-}
-
-/* Double Fault */
-void double_fault_x64(uint64_t error_code, uint64_t rip)
-{
-	print_colored("DOUBLE FAULT!\n", 0x0C, 0x00);
-	print("Error code: ");
-	print_hex(error_code);
-	print("\n");
-	print("RIP: ");
-	print_hex(rip);
-	print("\n");
-	panic("Double fault - Kernel halted");
-}
-
-/* Triple Fault */
-void triple_fault_x64()
-{
-	print_colored("TRIPLE FAULT!\n", 0x0C, 0x00);
-	print("FATAL: CPU reset imminent\n");
-	panic("Triple fault - System halted");
-}
-
-void general_protection_fault_x64(uint64_t error_code, uint64_t rip, uint64_t cs, uint64_t rsp)
-{
-	print_colored("GENERAL PROTECTION FAULT!\n", 0x0C, 0x00);
-	print("Error code: ");
-	print_hex(error_code);
-	print("\n");
-	print("RIP: ");
-	print_hex(rip);
-	print("\n");
-	print("CS: ");
-	print_hex(cs);
-	print("\n");
-	print("RSP: ");
-	print_hex(rsp);
-	print("\n");
-	panic("GPF - Kernel halted");
 }
 
 void gpf_audit_from_isr(uint64_t *stack)
@@ -114,22 +75,4 @@ void gpf_audit_from_isr(uint64_t *stack)
 		klog_debug("GPF", "CLASSIFY GPF_IN_USERSPACE");
 	}
 #endif /* DEBUG_PAGE_FAULTS */
-}
-
-void invalid_opcode_x64(uint64_t rip)
-{
-	print_colored("INVALID OPCODE!\n", 0x0C, 0x00);
-	print("RIP: ");
-	print_hex(rip);
-	print("\n");
-	panic("Invalid instruction - Kernel halted");
-}
-
-void divide_by_zero_x64(uint64_t rip)
-{
-	print_colored("DIVIDE BY ZERO!\n", 0x0C, 0x00);
-	print("RIP: ");
-	print_hex(rip);
-	print("\n");
-	panic("Divide by zero - Kernel halted");
 }

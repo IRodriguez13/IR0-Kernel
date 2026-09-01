@@ -292,6 +292,19 @@ endif
 
 # Storage: ATA/IDE disk (product run uses IR0_DISK → ISD image; smokes may override)
 IR0_DISK ?= disk.img
+# When 1, local run/smokes reuse DISK + inject stamps (skip stamp rm). CI leaves unset/0.
+IR0_DEV_PERSIST ?= 0
+# Dev disk image (override to ISD development disk.img when persist=1).
+ifeq ($(IR0_DEV_PERSIST),1)
+  _ISD_DEV_DISK := $(IR0_USERSPACE_ROOT)/out/x86_64/images/development/disk.img
+  ifneq ($(wildcard $(_ISD_DEV_DISK)),)
+    IR0_DEV_DISK := $(_ISD_DEV_DISK)
+  else
+    IR0_DEV_DISK ?= $(IR0_DISK)
+  endif
+else
+  IR0_DEV_DISK ?= $(IR0_DISK)
+endif
 QEMU_STORAGE_IDE = -drive file=$(IR0_DISK),format=raw,if=ide,index=0
 
 # Serial: COM1 para debug
@@ -330,6 +343,7 @@ KERNEL_OBJS = \
     kernel/process/exit.o \
     kernel/process/wait.o \
     kernel/process/fdtable.o \
+    kernel/process/pseudo_fd_bind.o \
     kernel/process/mm.o \
     kernel/process/signals.o \
     kernel/debug/fase_audit.o \
@@ -337,7 +351,6 @@ KERNEL_OBJS = \
     kernel/credentials.o \
     kernel/power/power_manag.o \
     kernel/kexec.o \
-    kernel/task.o \
     kernel/syscalls.o \
     kernel/syscalls/fs_syscalls.o \
     kernel/syscalls/fs_path_syscalls.o \
@@ -455,37 +468,37 @@ MEMORY_OBJS = \
 	mm/page_fault.o
 
 LIB_OBJS = \
-    includes/ir0/vga.o \
-    includes/ir0/logging.o \
-    includes/ir0/boot_log_hostshare.o \
-    includes/ir0/oops.o \
-    includes/ir0/signals.o \
-    includes/ir0/pipe.o \
-    includes/ir0/copy_user.o \
-    includes/ir0/open_flags.o \
-    includes/ir0/stat_user.o \
-    includes/ir0/named_fifo.o \
-    includes/ir0/named_devnode.o \
-    includes/ir0/supervise_path.o \
-    includes/ir0/named_symlink.o \
-    includes/ir0/path_user.o \
-    includes/ir0/path_routed.o \
-    includes/ir0/utsname_info.o \
-    includes/ir0/console.o \
-    includes/ir0/ps2_set1.o \
-    includes/ir0/ps2_mouse_pkt.o \
-    includes/ir0/ash_smoke.o \
-    includes/ir0/debug_trap.o \
-    includes/ir0/fb.o \
-    includes/ir0/input.o \
-    includes/ir0/utimens.o \
-    includes/ir0/exec_read_trace.o \
-    includes/ir0/blockdev.o \
-    includes/ir0/mm_port.o \
-    includes/ir0/rtc_calendar.o \
-    includes/ir0/video_backend.o \
-    includes/ir0/input_backend.o \
-    includes/ir0/audio_backend.o \
+    kernel/lib/vga.o \
+    kernel/lib/logging.o \
+    kernel/lib/boot_log_hostshare.o \
+    kernel/lib/oops.o \
+    kernel/lib/signals.o \
+    kernel/lib/pipe.o \
+    kernel/lib/copy_user.o \
+    kernel/lib/open_flags.o \
+    kernel/lib/stat_user.o \
+    kernel/lib/named_fifo.o \
+    kernel/lib/named_devnode.o \
+    kernel/lib/supervise_path.o \
+    kernel/lib/named_symlink.o \
+    kernel/lib/path_user.o \
+    kernel/lib/path_routed.o \
+    kernel/lib/utsname_info.o \
+    kernel/lib/console.o \
+    kernel/lib/ps2_set1.o \
+    kernel/lib/ps2_mouse_pkt.o \
+    kernel/lib/ash_smoke.o \
+    kernel/lib/debug_trap.o \
+    kernel/lib/fb.o \
+    kernel/lib/input.o \
+    kernel/lib/utimens.o \
+    kernel/lib/exec_read_trace.o \
+    kernel/lib/blockdev.o \
+    kernel/lib/mm_port.o \
+    kernel/lib/rtc_calendar.o \
+    kernel/lib/video_backend.o \
+    kernel/lib/input_backend.o \
+    kernel/lib/audio_backend.o \
     includes/string.o
 
 INTERRUPT_OBJS_X86_64 = \
@@ -1440,6 +1453,13 @@ delete-disk:
 	else \
 		./scripts/delete_disk.sh $$ARGS; \
 	fi
+
+# Reset dev disk + inject stamps (explicit wipe; ignores IR0_DEV_PERSIST).
+disk-reset:
+	@DISK=$${DISK:-$(IR0_DISK)}; \
+	./scripts/delete_disk.sh $$DISK; \
+	rm -f $$DISK.runit.stamp $$DISK.devtools.stamp; \
+	echo "✓ disk-reset: $$DISK + inject stamps cleared"
 
 # Load Init binary into virtual disk
 # Usage: make load-init [filesystem] [disk_image] [init_binary]
@@ -2496,7 +2516,7 @@ load-userspace-runit: check-userspace build-runit build-busybox-ir0-auth build-o
 		$(MAKE) -s prepare-guest-mandocs || \
 			echo "  WARN    prepare-guest-mandocs failed (optional)"; \
 	fi
-	@DISK=$${DISK:-disk.img}; \
+	@DISK=$${DISK:-$(IR0_DEV_DISK)}; \
 	set -e; \
 	PROFILE=$${IR0_PRODUCT_PROFILE:-minimal}; \
 	STAMP=$${DISK}.runit.stamp; \
@@ -2531,7 +2551,7 @@ load-userspace-runit: check-userspace build-runit build-busybox-ir0-auth build-o
 		fi; \
 	fi; \
 	if [ $$NEED -eq 0 ]; then \
-		echo "  DISK    $$DISK up to date (cached)"; \
+		echo "  DISK    $$DISK up to date (cached)$${IR0_DEV_PERSIST:+ persist=1}"; \
 	else \
 		echo "  DISK    $$DISK (200M MINIX, profile=$$PROFILE)"; \
 		dd if=/dev/zero of=$$DISK bs=1M count=200 status=none; \
@@ -2571,7 +2591,7 @@ build-gmake-static:
 # Product disk + TinyCC + GNU make. Default profile is minimal (firstboot wizard).
 # Lab autologin root: IR0_PRODUCT_PROFILE=development make load-userspace-devtools
 load-userspace-devtools: build-tcc-fase52 build-gmake-static
-	@rm -f disk.img.runit.stamp disk.img.devtools.stamp
+	@if [ "$${IR0_DEV_PERSIST:-0}" != "1" ]; then rm -f disk.img.runit.stamp disk.img.devtools.stamp; fi
 	@IR0_PRODUCT_PROFILE=$${IR0_PRODUCT_PROFILE:-minimal} IR0_NO_AUTOLOGIN=$${IR0_NO_AUTOLOGIN:-0} \
 		$(MAKE) -s load-userspace-runit
 	@chmod +x scripts/inject_devtools_minix.sh
@@ -2607,21 +2627,23 @@ smoke-runit-boot: load-userspace-runit kernel-x64-userspace.iso
 RUNIT_LOGIN_SMOKE_LOG = /tmp/runit-login-smoke.log
 smoke-runit-login: load-userspace-runit kernel-x64-userspace.iso
 	@echo "  SMOKE   runit Unix login (root / empty password)..."
+	@if [ "$${IR0_DEV_PERSIST:-0}" != "1" ]; then rm -f $(IR0_DEV_DISK).runit.stamp; fi
 	@chmod +x scripts/smoke_runit_login.py
+	@IR0_PRODUCT_PROFILE=development IR0_NO_AUTOLOGIN=0 DISK=$(IR0_DEV_DISK) $(MAKE) -s load-userspace-runit
 	@python3 scripts/smoke_runit_login.py --log $(RUNIT_LOGIN_SMOKE_LOG) --timeout 75 \
-		--iso kernel-x64-userspace.iso --disk disk.img
+		--iso kernel-x64-userspace.iso --disk $(IR0_DEV_DISK)
 	@echo "  LOG     $(RUNIT_LOGIN_SMOKE_LOG)"
 
 smoke-tty-raw-probe: kernel-x64-userspace.iso
 	@echo "  SMOKE   TTY raw probe (Ctrl-X=0x18 + ESC[A)..."
-	@rm -f disk.img.runit.stamp
+	@if [ "$${IR0_DEV_PERSIST:-0}" != "1" ]; then rm -f disk.img.runit.stamp; fi
 	@IR0_PRODUCT_PROFILE=development IR0_NO_AUTOLOGIN=0 $(MAKE) -s load-userspace-runit
 	@chmod +x scripts/smoke_tty_raw_probe.py
 	@python3 scripts/smoke_tty_raw_probe.py --iso kernel-x64-userspace.iso --disk disk.img
 
 smoke-desktop-nano: kernel-x64-userspace.iso
 	@echo "  SMOKE   GNU nano Ctrl-X save path..."
-	@rm -f disk.img.runit.stamp
+	@if [ "$${IR0_DEV_PERSIST:-0}" != "1" ]; then rm -f disk.img.runit.stamp; fi
 	@IR0_PRODUCT_PROFILE=development IR0_NO_AUTOLOGIN=0 $(MAKE) -s load-userspace-runit
 	@chmod +x scripts/smoke_desktop_nano_mnt.py
 	@python3 scripts/smoke_desktop_nano_mnt.py --iso kernel-x64-userspace.iso --disk disk.img
@@ -3208,13 +3230,13 @@ arm64-all-objs-probe: arm64-portable-compile
 		rm -f /tmp/ir0-arm64-probe-$$$$.o; \
 	done; \
 	if [ $$fail -eq 0 ]; then \
-		for src in kernel/main.c includes/ir0/open_flags.c \
+		for src in kernel/main.c kernel/lib/open_flags.c \
 			kernel/errno.c kernel/credentials.c \
 			sched/switch/switch_arm64.c \
 			kernel/clock_wait.c kernel/driver_registry.c \
-			includes/ir0/copy_user.c \
-			includes/ir0/logging.c kernel/futex.c \
-			kernel/net_compat.c kernel/task.c; do \
+			kernel/lib/copy_user.c \
+			kernel/lib/logging.c kernel/futex.c \
+			kernel/net_compat.c; do \
 			echo "  CC      $$src (KERNEL probe)"; \
 			if ! aarch64-linux-gnu-gcc $(ARM64_BOOT_CFLAGS) -DARCH_ARM64=1 \
 				-I$(KERNEL_ROOT)/includes -I$(KERNEL_ROOT)/includes/ir0 \
@@ -3230,7 +3252,7 @@ arm64-all-objs-probe: arm64-portable-compile
 		done; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
-		echo "MEMORY_OBJS+KERNEL sample(+errno/cred/switch/clock/drv/copy_user/logging/futex/net_compat/task): compile OK (not linked)" \
+		echo "MEMORY_OBJS+KERNEL sample(+errno/cred/switch/clock/drv/copy_user/logging/futex/net_compat): compile OK (not linked)" \
 			| tee -a /tmp/ir0-arm64-all-objs-probe.log; \
 		echo "NEXT: make ARCH=arm64 kernel-arm64-all.bin (portable ALL link; x86 drivers still out)"; \
 		echo "✓ arm64-all-objs-probe: interrupt wall cleared; probe compile OK"; \
@@ -3262,7 +3284,7 @@ kernel-arm64-boot.bin: arch/arm64/sources/boot_stub.c arch/arm64/sources/mmu_ear
 		arch/arm64/sources/virtio_blk_early.c arch/arm64/sources/virtio_blk_early.h \
 		arch/arm64/sources/virtio_net_early.c arch/arm64/sources/virtio_net_early.h \
 		drivers/virtio/virtio_mmio.c includes/ir0/virtio_mmio.h \
-		includes/ir0/blockdev.c includes/ir0/blockdev.h \
+		kernel/lib/blockdev.c includes/ir0/blockdev.h \
 		sched/rr_sched.c sched/switch/switch_arm64.c sched/task.h \
 		$(MUSL_AARCH64_HELLO) build/busybox_aarch64 arch/arm64/linker.ld
 	@$(MAKE) -s musl-aarch64-hello
@@ -3351,10 +3373,10 @@ kernel-arm64-boot.bin: arch/arm64/sources/boot_stub.c arch/arm64/sources/mmu_ear
 	@aarch64-linux-gnu-gcc $(ARM64_BOOT_CFLAGS) -I$(KERNEL_ROOT)/includes \
 		-I$(KERNEL_ROOT)/includes/ir0 -c \
 		drivers/virtio/virtio_mmio.c -o drivers/virtio/virtio_mmio.o
-	@echo "  CC      includes/ir0/blockdev.c (portable facade)"
+	@echo "  CC      kernel/lib/blockdev.c (portable facade)"
 	@aarch64-linux-gnu-gcc $(ARM64_BOOT_CFLAGS) -I$(KERNEL_ROOT)/includes \
 		-I$(KERNEL_ROOT)/includes/ir0 -c \
-		includes/ir0/blockdev.c -o build/arm64-boot/blockdev.o
+		kernel/lib/blockdev.c -o build/arm64-boot/blockdev.o
 	@echo "  CC      arch/arm64/sources/virtio_blk_early.c"
 	@aarch64-linux-gnu-gcc $(ARM64_BOOT_CFLAGS) -I$(KERNEL_ROOT)/includes \
 		-I$(KERNEL_ROOT)/includes/ir0 -c \
@@ -3440,7 +3462,7 @@ kernel-arm64-min.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 	@mkdir -p build/arm64-min
 	@fail=0; \
 	for src in mm/allocator.c mm/paging.c mm/pmm.c mm/kmem.c \
-		kernel/errno.c includes/ir0/open_flags.c; do \
+		kernel/errno.c kernel/lib/open_flags.c; do \
 		base=$$(basename $$src .c); \
 		echo "  CC      $$src (min)"; \
 		if ! aarch64-linux-gnu-gcc $(ARM64_BOOT_CFLAGS) -DARCH_ARM64=1 \
@@ -3493,7 +3515,7 @@ kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 	@fail=0; \
 	for src in mm/allocator.c mm/paging.c mm/pmm.c mm/kmem.c \
 		kernel/errno.c \
-		includes/ir0/open_flags.c \
+		kernel/lib/open_flags.c \
 		arch/arm64/sources/portable_string.c; do \
 		base=$$(basename $$src .c); \
 		echo "  CC      $$src (all)"; \
@@ -6803,6 +6825,9 @@ help:
 	@echo "  make create-disk      Create virtual disk (MINIX by default)"
 	@echo "  make create-disk hints  Show create-disk help"
 	@echo "  make delete-disk      Delete virtual disk"
+	@echo "  make disk-reset       Delete $(IR0_DISK) + inject stamps (full dev wipe)"
+	@echo "  IR0_DEV_PERSIST=1     Reuse disk/stamps across local smokes (not CI)"
+	@echo "  IR0_DEV_DISK=path     Dev disk (auto ISD development when persist=1)"
 	@echo "  make load-init        Load Init binary into disk (requires sudo)"
 	@echo "  make load-init hints  Show load-init help"
 	@echo "  make build-init-smoke Build nostdlib /sbin/init smoke binary (setup/pid1/init)"
@@ -7104,7 +7129,7 @@ test-drivers-clean:
 
 # PHONY TARGETS
 
-.PHONY: all clean run run-debug run-dbgshell run-tap run-nodisk run-console run-gdb debug create-disk delete-disk load-init remove-init help \
+.PHONY: all clean run run-debug run-dbgshell run-tap run-nodisk run-console run-gdb debug create-disk delete-disk disk-reset load-init remove-init help \
         unibuild unibuild-cpp unibuild-rust unibuild-win unibuild-cpp-win unibuild-rust-win unibuild-clean \
         ir0 ir0-auto auto windows win windows-clean win-clean deptest check-env pre-submit menuconfig menuconfig-en menuconfig-es defconfig sync-menuconfig sync-menuconfig-defconfig sync-menuconfig-check \
         en-ext-drv dis-ext-drv \

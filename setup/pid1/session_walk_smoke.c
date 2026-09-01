@@ -309,6 +309,78 @@ static int test_mem_consistency(void)
 
 
 /*
+ * ps and top read VSZ and thread count out of /proc/<pid>/stat. Both used to
+ * be hardcoded to 0, which made every process look like it owned no address
+ * space at all. Field 23 is vsize in bytes, field 20 is num_threads,
+ * field 24 is rss in pages (Linux proc(5)).
+ */
+static int test_proc_stat_fields(void)
+{
+	char buf[512];
+	int fd;
+	ssize_t n;
+	char *p;
+	unsigned long vsize = 0;
+	unsigned long rss = 0;
+	long num_threads = 0;
+	int field;
+
+	fd = open("/proc/self/stat", O_RDONLY);
+	if (fd < 0)
+		return -1;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return -1;
+	buf[n] = '\0';
+
+	/* comm (field 2) may hold spaces and parens, so resume after the last ')'. */
+	p = strrchr(buf, ')');
+	if (!p)
+		return -1;
+	p++;
+
+	/* p now sits just before field 3, so walk forward to 20, 23 and 24. */
+	for (field = 3; field <= 24; field++)
+	{
+		while (*p == ' ')
+			p++;
+		if (!*p || *p == '\n')
+			return -1;
+		if (field == 20)
+			num_threads = strtol(p, NULL, 10);
+		else if (field == 23)
+			vsize = strtoul(p, NULL, 10);
+		else if (field == 24)
+			rss = strtoul(p, NULL, 10);
+		while (*p && *p != ' ' && *p != '\n')
+			p++;
+	}
+
+	if (num_threads < 1)
+	{
+		printf("SESSION_WALK_STAT_THREADS_BAD n=%ld\n", num_threads);
+		return -1;
+	}
+	/* Heap plus stack plus any mmap: a live process cannot total zero. */
+	if (vsize == 0)
+	{
+		printf("SESSION_WALK_STAT_VSIZE_ZERO\n");
+		return -1;
+	}
+	if (rss == 0)
+	{
+		printf("SESSION_WALK_STAT_RSS_ZERO\n");
+		return -1;
+	}
+
+	printf("SESSION_WALK_STAT_OK vsize=%lu rss=%lu threads=%ld\n",
+	       vsize, rss, num_threads);
+	fflush(stdout);
+	return 0;
+}
+
+/*
  * BusyBox ships no lsblk applet, so the product provides /bin/lsblk on top of
  * /proc/blockdevices. Exercise it here rather than through the console: the
  * interactive path is the flaky one, and this only needs fork/exec.
@@ -533,6 +605,8 @@ int main(void)
 		return fail("SESSION_WALK_NAMES_FAIL", errno);
 	if (test_mem_consistency() != 0)
 		return fail("SESSION_WALK_MEM_FAIL", errno);
+	if (test_proc_stat_fields() != 0)
+		return fail("SESSION_WALK_STAT_FAIL", errno);
 
 	kstack_free = meminfo_field("KStackMinFree:");
 	irq_nest = meminfo_field("IrqNestMax:");

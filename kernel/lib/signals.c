@@ -21,8 +21,8 @@
 #include <ir0/copy_user.h>
 #include <ir0/paging.h>
 #include <ir0/kmem.h>
-#include <ir0/arch_task_ops.h>
-#include <ir0/arch_signal.h>
+#include <ir0/task_ops.h>
+#include <ir0/signal_irq.h>
 #include <ir0/arch_cpu.h>
 #include <ir0/arch_task.h>
 #include <ir0/errno.h>
@@ -78,10 +78,10 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 	if (!ctx)
 		return 0;
 
-	arch_signal_fill_sigcontext_from_irq_frame(ctx, frame);
+	signal_fill_sigcontext_from_irq_frame(ctx, frame);
 	p->saved_context = ctx;
 
-	new_rsp = arch_irq_frame_sp(frame);
+	new_rsp = irq_frame_sp(frame);
 	if (sa_flags & SA_SIGINFO)
 		new_rsp -= 256;
 	else
@@ -129,7 +129,7 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 		load_page_directory(old_cr3);
 	}
 
-	arch_signal_redirect_irq_frame(frame, (void *)handler, sig, new_rsp,
+	signal_redirect_irq_frame(frame, (void *)handler, sig, new_rsp,
 				       info_addr, uctx_addr,
 				       (sa_flags & SA_SIGINFO) ? 1 : 0);
 	irq_save_user_frame(frame);
@@ -144,7 +144,7 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 		      "[SIGNAL][DELIVER] pid=0x%x sig=0x%x cr2=0x%llx rip=0x%llx handler=0x%llx sa_siginfo=0x%x rsp=0x%llx",
 		      (unsigned)p->task.pid, (unsigned)sig,
 		      (unsigned long long)fault_addr,
-		      (unsigned long long)arch_sigcontext_ip(ctx),
+		      (unsigned long long)sigcontext_ip(ctx),
 		      (unsigned long long)(uintptr_t)handler,
 		      (unsigned)((sa_flags & SA_SIGINFO) ? 1U : 0U),
 		      (unsigned long long)new_rsp);
@@ -156,7 +156,7 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 
 		KTM_FLIGHT(KTM_FL_PF_USER, pid, (uint32_t)fault_addr,
 			   (uint32_t)(fault_addr >> 32),
-			   (uint32_t)arch_sigcontext_ip(ctx));
+			   (uint32_t)sigcontext_ip(ctx));
 		KTM_FLIGHT(KTM_FL_SIGNAL_DELIVER, (uint32_t)sig, pid,
 			   (uint32_t)(uintptr_t)handler, 0);
 	}
@@ -654,15 +654,15 @@ void handle_signals(void)
                          * while blocked in recvfrom/nanosleep.
                          */
                         if (current->syscall_frame_fresh)
-                            arch_signal_fill_sigcontext_from_syscall_frame(
+                            signal_fill_sigcontext_from_syscall_frame(
                                 ctx, &current->syscall_frame,
                                 (uint64_t)(int64_t)(-EINTR));
                         else
-                            arch_task_store_sigcontext(ctx, &current->task);
+                            task_store_sigcontext(ctx, &current->task);
 
                         current->saved_context = ctx;
 
-                        user_sp = arch_sigcontext_sp(ctx) & ~0xFUL;
+                        user_sp = sigcontext_sp(ctx) & ~0xFUL;
                         /*
                          * Layout (low→high): [restorer][sigframe…]
                          * Handler `ret` → musl __restore_rt → rt_sigreturn.
@@ -714,7 +714,7 @@ void handle_signals(void)
                         memcpy((void *)user_sp, &restorer, sizeof(restorer));
                         load_page_directory(old_cr3);
 
-                        arch_signal_prepare_task_handler(&current->task,
+                        signal_prepare_task_handler(&current->task,
                                                          (void *)handler, sig,
                                                          user_sp);
 
@@ -740,7 +740,7 @@ void handle_signals(void)
                         process_apply_syscall_frame_to_task(
                             &current->task, &current->syscall_frame,
                             (uint64_t)(uint32_t)sig);
-                        arch_restore_user_fs_base();
+                        restore_user_fs_base();
                         current->signal_enter_pending = 1;
 
                         current->signal_pending &= ~SIGNAL_MASK(sig);

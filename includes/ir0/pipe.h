@@ -42,13 +42,11 @@ void pipe_close_end(pipe_t *pipe, int end);
 void pipe_acquire(pipe_t *pipe);
 void pipe_acquire_end(pipe_t *pipe, int end);
 
-void pipe_fase48_get_stats(uint64_t *created, uint64_t *destroyed);
-void pipe_fase49_fd_trace(uint32_t pid, int fd, pipe_t *pipe, int end,
-			  int refcount, const char *op);
-void pipe_fase49_note_read_sleep(pipe_t *pipe);
-void pipe_fase49_note_read_wake(pipe_t *pipe);
-void pipe_fase49_note_write_wake(pipe_t *pipe);
+void pipe_stats_get(uint64_t *created, uint64_t *destroyed);
+void pipe_ktm_note_read_sleep(pipe_t *pipe);
+void pipe_ktm_note_read_wake(pipe_t *pipe);
+void pipe_ktm_note_write_wake(pipe_t *pipe);
 void pipe_abort_unopened(pipe_t *pipe);
-void pipe_fase49_classify(void);
+void pipe_ipc_lifecycle_audit(void);
 
 #endif /* _IR0_PIPE_H */

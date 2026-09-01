@@ -26,7 +26,7 @@
 #define ARCH_ELF_MACHINE ELF_EM_X86_64
 #endif
 
-static inline int arch_elf_machine_supported(uint16_t machine)
+static inline int elf_machine_supported(uint16_t machine)
 {
 	return machine == (uint16_t)ARCH_ELF_MACHINE;
 }

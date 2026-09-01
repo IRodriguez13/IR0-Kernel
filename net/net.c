@@ -260,6 +260,8 @@ void net_receive(struct net_device *dev, const void *data, size_t len)
 {
     if (!dev || !data || len < sizeof(struct eth_header))
     {
+        if (dev)
+            dev->rx_dropped++;
         LOG_WARNING_FMT("NET", "Invalid packet: dev=%p, data=%p, len=%d", dev, data, (int)len);
         return;
     }
@@ -280,6 +282,9 @@ void net_receive(struct net_device *dev, const void *data, size_t len)
     
     bool is_for_us = is_broadcast || 
                      (memcmp(eth->dest, dev->mac, 6) == 0);
+
+    if (is_multicast)
+        dev->rx_multicast++;
     
     /* FILTER: Drop multicast packets early if they're not for us and not ARP/IP protocols we handle.
      * This prevents spam from mDNS, SSDP, IPv6 neighbor discovery, etc.
@@ -291,6 +296,7 @@ void net_receive(struct net_device *dev, const void *data, size_t len)
     if (is_multicast && !is_for_us && type != ETHERTYPE_ARP)
     {
         /* Drop multicast IPv6 and non-ARP multicast IPv4 silently */
+        dev->rx_dropped++;
         /* Log only occasionally to avoid spam (every 100th packet) */
         static int multicast_drop_count = 0;
         multicast_drop_count++;
@@ -362,6 +368,7 @@ void net_receive(struct net_device *dev, const void *data, size_t len)
     }
     else
     {
+        dev->rx_dropped++;
         /* CRITICAL: Log ARP packets even if handler not found (shouldn't happen) */
         if (type == ETHERTYPE_ARP)
         {

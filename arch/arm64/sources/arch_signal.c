@@ -21,17 +21,17 @@
 #include <stdint.h>
 #include <string.h>
 
-uint64_t arch_sigcontext_ip(const struct sigcontext *ctx)
+uint64_t sigcontext_ip(const struct sigcontext *ctx)
 {
 	return ctx ? ctx->pc : 0;
 }
 
-uint64_t arch_sigcontext_sp(const struct sigcontext *ctx)
+uint64_t sigcontext_sp(const struct sigcontext *ctx)
 {
 	return ctx ? ctx->sp : 0;
 }
 
-void arch_signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
+void signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
 						    const struct arch_syscall_frame *sf,
 						    uint64_t retval)
 {
@@ -75,7 +75,7 @@ void arch_signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
 	ctx->pstate = sf->spsr;
 }
 
-void arch_signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
+void signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
 						const uint64_t *frame)
 {
 	uint64_t far;
@@ -101,7 +101,7 @@ void arch_signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
 	ctx->sp = sp_el0;
 }
 
-uint64_t arch_irq_frame_sp(const uint64_t *frame)
+uint64_t irq_frame_sp(const uint64_t *frame)
 {
 	uint64_t sp_el0;
 
@@ -110,7 +110,7 @@ uint64_t arch_irq_frame_sp(const uint64_t *frame)
 	return sp_el0;
 }
 
-void arch_signal_redirect_irq_frame(uint64_t *frame, void *handler, int sig,
+void signal_redirect_irq_frame(uint64_t *frame, void *handler, int sig,
 				    uint64_t new_rsp, uint64_t info_addr,
 				    uint64_t uctx_addr, int sa_siginfo)
 {
@@ -137,7 +137,7 @@ void arch_signal_redirect_irq_frame(uint64_t *frame, void *handler, int sig,
 	__asm__ volatile("isb" ::: "memory");
 }
 
-void arch_signal_prepare_task_handler(task_t *t, void *handler, int sig,
+void signal_prepare_task_handler(task_t *t, void *handler, int sig,
 				      uint64_t frame_sp)
 {
 	if (!t || !handler)

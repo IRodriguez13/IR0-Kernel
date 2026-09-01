@@ -19,8 +19,9 @@
 #define CONSOLE_WIDTH  80
 #define CONSOLE_HEIGHT 25
 
-#define CONSOLE_FB_SCALE_DEFAULT 2
-#define CONSOLE_FB_SCALE_MAX     2
+/* Product FB uses native Terminus 14×28 — no nearest-neighbor upscale. */
+#define CONSOLE_FB_SCALE_DEFAULT 1
+#define CONSOLE_FB_SCALE_MAX     1
 #define CONSOLE_FB_BORDER_COLOR  0x00u
 
 struct console_geometry

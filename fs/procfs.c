@@ -196,6 +196,9 @@ int proc_net_dev_read(char *buf, size_t count)
         char txe_str[24];
         char rxb_str[24];
         char txb_str[24];
+        char rxd_str[24];
+        char rxf_str[24];
+        char rxm_str[24];
 
         if (dev->get_stats)
             dev->get_stats(dev, &rxp, &txp, &rxe, &txe);
@@ -208,11 +211,20 @@ int proc_net_dev_read(char *buf, size_t count)
         proc_u64_to_dec(txb, txb_str, sizeof(txb_str));
         proc_u64_to_dec(txp, txp_str, sizeof(txp_str));
         proc_u64_to_dec(txe, txe_str, sizeof(txe_str));
-        /* bytes packets errs drop fifo frame compressed multicast | tx... */
+        proc_u64_to_dec(dev->rx_dropped, rxd_str, sizeof(rxd_str));
+        proc_u64_to_dec(dev->rx_fifo_errors, rxf_str, sizeof(rxf_str));
+        proc_u64_to_dec(dev->rx_multicast, rxm_str, sizeof(rxm_str));
+        /*
+         * bytes packets errs drop fifo frame compressed multicast | tx...
+         * RX frame/compressed and every TX column past errs stay 0: no driver
+         * accounts alignment errors, compression, TX drops, collisions or
+         * carrier losses yet (would require reading NIC error registers).
+         */
         n = snprintf(buf + off, count - off,
-                     "  %s: %s %s %s 0 0 0 0 0 %s %s %s 0 0 0 0 0\n",
+                     "  %s: %s %s %s %s %s 0 0 %s %s %s %s 0 0 0 0 0\n",
                      (dev->name && dev->name[0] != '\0') ? dev->name : "eth0",
-                     rxb_str, rxp_str, rxe_str, txb_str, txp_str, txe_str);
+                     rxb_str, rxp_str, rxe_str, rxd_str, rxf_str, rxm_str,
+                     txb_str, txp_str, txe_str);
         if (n < 0)
             return -1;
         if ((size_t)n >= count - off)
@@ -866,6 +878,8 @@ int proc_pid_stat_read(char *buf, size_t count, pid_t pid)
     process_t *proc;
     const char *state_str = "?";
     int tty_nr = IR0_PROC_CONSOLE_TTY_NR;
+    uint64_t vsize = 0;
+    uint64_t rss = 0;
     int len;
 
     if (VALIDATE_BUFFER(buf, count) != 0)
@@ -885,15 +899,39 @@ int proc_pid_stat_read(char *buf, size_t count, pid_t pid)
     }
 
     /*
+     * vsize (field 23) is the sum of the address-space regions IR0 actually
+     * tracks: heap, user stack, and every mmap() region. The ELF image is not
+     * on mmap_list — elf_load_segments maps it straight into the page tables —
+     * so this undercounts by the binary's text and data. Still real accounting,
+     * and reporting 0 made ps and top print VSZ 0 for every process.
+     */
+    {
+        const struct mmap_region *r;
+        uint64_t heap_start = process_heap_start(proc);
+        uint64_t heap_end = process_heap_end(proc);
+
+        if (heap_end > heap_start)
+            vsize = heap_end - heap_start;
+        vsize += process_stack_size(proc);
+        for (r = process_mmap_list(proc); r; r = r->next)
+            vsize += (uint64_t)r->length;
+    }
+
+    rss = process_count_resident_user_pages(proc);
+
+    /*
      * Linux proc(5) after ") ": state … tpgid, then flags..priority (10
      * fields), nice, num_threads, itrealvalue, starttime, vsize, rss, …
      * Misplacing starttime as field 21 made BusyBox FAST_TOP see nice≠0
      * and vsz=0 → STAT "RWN" instead of "R".
+     *
+     * rss (field 24) is resident user pages (4 KiB units), from a read-only
+     * page-table walk — not bytes, matching Linux proc(5).
      */
     len = snprintf(buf, count,
                    "%d (%s) %s %d %d %d %d %d "     /*  1-8  */
                    "0 0 0 0 0 0 0 0 0 %d "          /*  9-18 (18=priority) */
-                   "0 0 0 %llu 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n", /* 19-37 */
+                   "0 1 0 %llu %llu %llu 0 0 0 0 0 0 0 0 0 0 0 0\n", /* 19-36 */
                    (int)proc->task.pid,
                    proc->comm[0] ? proc->comm : "none",
                    state_str,
@@ -903,7 +941,9 @@ int proc_pid_stat_read(char *buf, size_t count, pid_t pid)
                    tty_nr,
                    (int)proc->pgid,               /* tpgid: fg group on tty */
                    (int)proc->sched_prio,         /* 18: priority */
-                   (unsigned long long)proc->start_ticks); /* 22: starttime */
+                   (unsigned long long)proc->start_ticks, /* 22: starttime */
+                   (unsigned long long)vsize,               /* 23: vsize */
+                   (unsigned long long)rss);                /* 24: rss pages */
     if (len < 0)
         return -1;
     if (len >= (int)count)
@@ -1173,8 +1213,8 @@ int proc_cpuinfo_read(char *buf, size_t count)
     {
 	char hv_vendor[16];
 
-	if (arch_hypervisor_present() &&
-	    arch_hypervisor_vendor(hv_vendor, sizeof(hv_vendor)) == 0)
+	if (hypervisor_present() &&
+	    hypervisor_vendor(hv_vendor, sizeof(hv_vendor)) == 0)
 	{
 	    n = snprintf(buf + off, (off < count) ? (count - off) : 0,
 			 "hypervisor_vendor\t%s\n", hv_vendor);

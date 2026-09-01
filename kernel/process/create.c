@@ -14,7 +14,7 @@
 
 #include "process_internal.h"
 #include <mm/pmm.h>
-#include <ir0/arch_mm.h>
+#include <ir0/mm.h>
 #include <ir0/arch_cpu.h>
 
 static uint32_t ir0_kstack_slot_next;
@@ -44,7 +44,7 @@ int process_kernel_stack_alloc(process_t *p)
 	 * identity / user-brk window so huge-PDE breaks can use pte_none
 	 * without #DF on TSS.RSP0.
 	 *
-	 * Map into the pinned boot/kernel PML4 only. arch_mm_copy_kernel_half
+	 * Map into the pinned boot/kernel PML4 only. mm_copy_kernel_half
 	 * shares those high PML4 slots by reference, so every process CR3 sees
 	 * every kstack. Required: switch_context_x64 loads next CR3 while still
 	 * on prev's RSP (same as Linux — kernel stacks live in shared kernel VA).
@@ -100,7 +100,7 @@ int process_kernel_stack_alloc(process_t *p)
 		uint64_t *proc_pml4 = process_pgd(p);
 
 		if (proc_pml4 && proc_pml4 != pml4)
-			arch_mm_copy_kernel_half(proc_pml4, pml4);
+			mm_copy_kernel_half(proc_pml4, pml4);
 	}
 
 	p->kstack_base = (void *)va;
@@ -323,7 +323,7 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 
 		/* Setup stack pointer just below USER_STACK_TOP (stack grows down) */
 		task_set_sp(&proc->task, USER_STACK_TOP - 16);
-		arch_task_set_frame_pointer(&proc->task, task_get_sp(&proc->task));
+		task_set_frame_pointer(&proc->task, task_get_sp(&proc->task));
 	}
 	else
 	{
@@ -339,7 +339,7 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 		process_set_stack_layout(proc, (uint64_t)(uintptr_t)kstack, 0x2000);
 		memset(kstack, 0, 0x2000);
 		task_set_sp(&proc->task, process_stack_start(proc) + process_stack_size(proc) - 16);
-		arch_task_set_frame_pointer(&proc->task, task_get_sp(&proc->task));
+		task_set_frame_pointer(&proc->task, task_get_sp(&proc->task));
 	}
 
 	/* Setup task registers for clean start */
@@ -349,9 +349,9 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	else
 		task_set_flags(&proc->task, RFLAGS_IF);
 	if (proc->mode == KERNEL_MODE)
-		arch_task_set_kernel_segments(&proc->task);
+		task_set_kernel_segments(&proc->task);
 	else
-		arch_task_set_user_segments(&proc->task);
+		task_set_user_segments(&proc->task);
 
 	/* Initialize file descriptor table */
 	process_init_fd_table(proc);

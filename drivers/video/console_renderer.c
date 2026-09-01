@@ -81,13 +81,51 @@ static void csi_clear_screen(int cols, int rows, uint8_t color)
 			console_put_cell(r, c, ' ', color);
 }
 
+/*
+ * SGR state must survive across CSI sequences. BusyBox ls emits ESC[1;34m
+ * (bold then blue); if bold is applied only as a one-shot brighten before
+ * the fg is set, directories stay VGA blue-on-near-black and vanish. Nano uses
+ * A_REVERSE (SGR 7) for title/status/selection — ignore that and the UI
+ * looks broken regardless of FB scale.
+ */
+static uint8_t sgr_fg = CONSOLE_RENDERER_COLOR_DEFAULT & 0x0F;
+static uint8_t sgr_bg = (CONSOLE_RENDERER_COLOR_DEFAULT >> 4) & 0x0F;
+static int sgr_bold;
+static int sgr_reverse;
+
+static void sgr_compose(uint8_t *color)
+{
+	uint8_t fg = sgr_fg & 0x0F;
+	uint8_t bg = sgr_bg & 0x0F;
+
+	if (sgr_bold && fg < 8)
+		fg = (uint8_t)(fg + 8);
+	if (sgr_reverse)
+	{
+		uint8_t tmp = fg;
+
+		fg = bg;
+		bg = tmp;
+	}
+	*color = (uint8_t)((bg << 4) | fg);
+}
+
+static void sgr_reset_attrs(void)
+{
+	sgr_fg = CONSOLE_RENDERER_COLOR_DEFAULT & 0x0F;
+	sgr_bg = (CONSOLE_RENDERER_COLOR_DEFAULT >> 4) & 0x0F;
+	sgr_bold = 0;
+	sgr_reverse = 0;
+}
+
 static void sgr_apply(int *params, int count, uint8_t *color)
 {
 	int i;
 
 	if (count == 0)
 	{
-		*color = CONSOLE_RENDERER_COLOR_DEFAULT;
+		sgr_reset_attrs();
+		sgr_compose(color);
 		return;
 	}
 
@@ -96,27 +134,29 @@ static void sgr_apply(int *params, int count, uint8_t *color)
 		int p = params[i];
 
 		if (p == 0)
-			*color = CONSOLE_RENDERER_COLOR_DEFAULT;
+			sgr_reset_attrs();
 		else if (p == 1)
-		{
-			uint8_t fg = *color & 0x0F;
-
-			if (fg < 8)
-				*color = (uint8_t)((*color & 0xF0) | (fg + 8));
-		}
+			sgr_bold = 1;
+		else if (p == 22)
+			sgr_bold = 0;
+		else if (p == 7)
+			sgr_reverse = 1;
+		else if (p == 27)
+			sgr_reverse = 0;
 		else if (p >= 30 && p <= 37)
-			*color = (uint8_t)((*color & 0xF0) | (uint8_t)(p - 30));
+			sgr_fg = (uint8_t)(p - 30);
 		else if (p >= 90 && p <= 97)
-			*color = (uint8_t)((*color & 0xF0) | (uint8_t)(p - 90 + 8));
+			sgr_fg = (uint8_t)(p - 90 + 8);
 		else if (p >= 40 && p <= 47)
-			*color = (uint8_t)((uint8_t)(p - 40) << 4 | (*color & 0x0F));
+			sgr_bg = (uint8_t)(p - 40);
+		else if (p >= 100 && p <= 107)
+			sgr_bg = (uint8_t)(p - 100 + 8);
 		else if (p == 39)
-			*color = (uint8_t)((CONSOLE_RENDERER_COLOR_DEFAULT & 0x0F) |
-					   (*color & 0xF0));
+			sgr_fg = CONSOLE_RENDERER_COLOR_DEFAULT & 0x0F;
 		else if (p == 49)
-			*color = (uint8_t)((CONSOLE_RENDERER_COLOR_DEFAULT & 0xF0) |
-					   (*color & 0x0F));
+			sgr_bg = (CONSOLE_RENDERER_COLOR_DEFAULT >> 4) & 0x0F;
 	}
+	sgr_compose(color);
 }
 
 static void csi_apply(char cmd, int cols, int rows, uint8_t *color)
@@ -331,7 +371,12 @@ void console_renderer_reset(uint8_t color)
 	extern int cursor_pos;
 
 	csi_reset();
+	sgr_reset_attrs();
+	/* Caller may pass an explicit clear color; keep SGR defaults unless
+	 * it matches the composed default (typical product path). */
 	render_color = color;
+	if (color == CONSOLE_RENDERER_COLOR_DEFAULT)
+		sgr_compose(&render_color);
 	render_cursor_visible = 0;
 	render_cursor_row = 0;
 	render_cursor_col = 0;

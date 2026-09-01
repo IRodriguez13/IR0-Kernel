@@ -15,7 +15,7 @@
 #include <ir0/arch_page_fault.h>
 #include <ir0/errno.h>
 
-int arch_page_fault_decode(struct arch_page_fault_info *out, uint64_t errcode,
+int page_fault_decode(struct page_fault_info *out, uint64_t errcode,
 			   void *irq_frame)
 {
 	uint64_t *frame = (uint64_t *)irq_frame;

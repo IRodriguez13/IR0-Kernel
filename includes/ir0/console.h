@@ -124,4 +124,6 @@ int ir0_console_set_termios(const struct ir0_termios *in);
 void ir0_console_reset_cooked_echo(void);
 void ir0_console_flush_input(void);
 int ir0_console_set_fg_pgid(int32_t pgid);
+/* TIOCSCTTY on the console: session-leader check + foreground pgrp bind. */
+int ir0_console_ioctl_set_ctty(void);
 int32_t ir0_console_get_fg_pgid(void);

@@ -3,7 +3,7 @@
  * IR0 Kernel — Linux open(2) ABI → IR0 internal open flags translation.
  */
 
-#include "open_flags.h"
+#include <ir0/open_flags.h>
 #include <ir0/ktm/klog.h>
 #include <string.h>
 

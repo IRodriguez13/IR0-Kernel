@@ -121,11 +121,15 @@ static void clear_vga(uint8_t color)
 }
 
 #if CONFIG_ENABLE_VBE
-/* Soft product palette: off-black bg, light-gray fg (not pure white). */
+/*
+ * Soft product palette: off-black bg, light-gray fg (not pure white).
+ * Blues are lifted so ANSI di/title colors stay readable on the dark bg
+ * (classic VGA 0,0,170 on #0c0c0e is nearly invisible).
+ */
 static const uint8_t vga_palette_rgb[16][3] = {
-	{12, 12, 14}, {0, 0, 170}, {0, 170, 0}, {0, 170, 170},
+	{12, 12, 14}, {110, 150, 255}, {0, 170, 0}, {0, 170, 170},
 	{170, 0, 0}, {170, 0, 170}, {200, 140, 40}, {180, 180, 180},
-	{90, 90, 95}, {85, 85, 255}, {85, 255, 85}, {85, 255, 255},
+	{90, 90, 95}, {160, 190, 255}, {85, 255, 85}, {85, 255, 255},
 	{230, 70, 70}, {255, 85, 255}, {255, 200, 80}, {220, 220, 220}
 };
 
@@ -158,6 +162,8 @@ static void fb_fill_border(uint32_t w, uint32_t h, uint32_t pitch, uint8_t *fb)
 	size_t pixels = (pitch * h) / 4;
 	uint32_t *p = (uint32_t *)fb;
 
+	(void)w;
+	(void)h;
 	for (i = 0; i < pixels; i++)
 		p[i] = border;
 }
@@ -280,7 +286,6 @@ static void scroll_up_fb(uint8_t clear_color)
 	uint32_t pitch;
 	uint8_t *fb;
 	int pw;
-	int ph;
 	int row;
 	int dy;
 	uint32_t bg_rgb;
@@ -294,7 +299,6 @@ static void scroll_up_fb(uint8_t clear_color)
 		return;
 
 	pw = fb_console_cols * fb_cell_w;
-	ph = fb_console_rows * fb_cell_h;
 	bg_rgb = fb_rgb_from_vga((clear_color >> 4) & 0x0F);
 
 	for (row = 1; row < fb_console_rows; row++)

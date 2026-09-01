@@ -17,7 +17,7 @@
 #include <ir0/logging.h>
 #include <ir0/oops.h>
 #include <ir0/process.h>
-#include <ir0/arch_mm.h>
+#include <ir0/mm.h>
 #include <ir0/debug_runtime.h>
 #include <ir0/video_backend.h>
 #include "paging.h"
@@ -74,7 +74,9 @@ static uint64_t ir0_mm_frame_kernel_free;
 
 static uint8_t *ir0_mm_frame_type_map;
 static size_t ir0_mm_frame_type_map_frames;
+#if IR0_DEBUG_PROC
 static uint32_t ir0_mm_frame_log_events;
+#endif
 
 static uint64_t fase43_oom_boot_fatal;
 static uint64_t fase43_oom_kernel_fatal;
@@ -89,23 +91,9 @@ static fase43_oom_class_t paging_classify_oom(void)
     return FASE43_OOM_KERNEL_FATAL;
 }
 
-static const char *fase43_oom_class_name(fase43_oom_class_t cls)
-{
-    switch (cls)
-    {
-    case FASE43_OOM_BOOT_FATAL:
-        return "BOOT_FATAL";
-    case FASE43_OOM_KERNEL_FATAL:
-        return "KERNEL_FATAL";
-    case FASE43_OOM_USER_RECOVERABLE:
-        return "USER_RECOVERABLE";
-    default:
-        return "UNKNOWN";
-    }
-}
-
 void paging_fase43_note_oom(const char *site, fase43_oom_class_t cls)
 {
+    (void)site;
     switch (cls)
     {
     case FASE43_OOM_BOOT_FATAL:
@@ -125,6 +113,7 @@ void paging_fase43_note_oom(const char *site, fase43_oom_class_t cls)
 
 void paging_fase43_oom_audit(const char *tag)
 {
+    (void)tag;
 }
 
 fase43_oom_class_t paging_fase43_classify_current(void)
@@ -1151,7 +1140,7 @@ int copy_process_memory(struct process *parent, struct process *child)
     parent_pml4 = process_pgd(parent);
     child_pml4 = process_pgd(child);
 
-    for (i4 = 0; i4 < (size_t)arch_mm_user_root_slots(); i4++)
+    for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
     {
         uint64_t *pdpt = get_existing_table(parent_pml4, i4);
 
@@ -1218,7 +1207,7 @@ int copy_process_memory(struct process *parent, struct process *child)
         }
     }
 
-    for (i4 = 0; i4 < (size_t)arch_mm_user_root_slots(); i4++)
+    for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
     {
         uint64_t *pdpt = get_existing_table(parent_pml4, i4);
 
@@ -1411,7 +1400,7 @@ void paging_reclaim_lower_half_tables(uint64_t *pml4)
     if (!pml4)
         return;
 
-    for (i4 = 0; i4 < (size_t)arch_mm_user_root_slots(); i4++)
+    for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
     {
         uint64_t pml4e = pml4[i4];
         uint64_t *pdpt;

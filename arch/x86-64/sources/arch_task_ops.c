@@ -16,7 +16,7 @@
 #include <ir0/debug_trap.h>
 #include <config.h>
 
-void arch_task_store_sigcontext(struct sigcontext *ctx, const task_t *t)
+void task_store_sigcontext(struct sigcontext *ctx, const task_t *t)
 {
 	if (!ctx || !t)
 		return;
@@ -44,7 +44,7 @@ void arch_task_store_sigcontext(struct sigcontext *ctx, const task_t *t)
 	ctx->ss = t->arch.ss;
 }
 
-void arch_task_load_sigcontext(task_t *t, const struct sigcontext *ctx)
+void task_load_sigcontext(task_t *t, const struct sigcontext *ctx)
 {
 	if (!t || !ctx)
 		return;
@@ -71,7 +71,7 @@ void arch_task_load_sigcontext(task_t *t, const struct sigcontext *ctx)
 	t->arch.ss = (uint16_t)ctx->ss;
 }
 
-void arch_task_save_irq_user_frame(task_t *t, const uint64_t *frame)
+void task_save_irq_user_frame(task_t *t, const uint64_t *frame)
 {
 	if (!t || !frame)
 		return;
@@ -113,7 +113,7 @@ void arch_task_save_irq_user_frame(task_t *t, const uint64_t *frame)
 	}
 }
 
-void arch_task_sync_syscall_soft_mirror(task_t *t,
+void task_sync_syscall_soft_mirror(task_t *t,
 					const arch_task_syscall_frame_t *sf)
 {
 	uint64_t rflags;
@@ -149,7 +149,7 @@ void arch_task_sync_syscall_soft_mirror(task_t *t,
 	t->arch.r9 = sf->r9;
 }
 
-void arch_task_apply_syscall_frame(task_t *t,
+void task_apply_syscall_frame(task_t *t,
 				   const arch_task_syscall_frame_t *sf,
 				   uint64_t rax)
 {
@@ -177,20 +177,20 @@ void arch_task_apply_syscall_frame(task_t *t,
 	t->arch.r9 = sf->r9;
 	t->arch.rcx = sf->rip;
 	t->arch.r11 = rflags;
-	arch_task_apply_user_segments(t);
+	task_apply_user_segments(t);
 }
 
-void arch_task_apply_user_segments(task_t *t)
+void task_apply_user_segments(task_t *t)
 {
-	arch_task_set_user_segments(t);
+	task_set_user_segments(t);
 }
 
-void arch_task_apply_kernel_segments(task_t *t)
+void task_apply_kernel_segments(task_t *t)
 {
-	arch_task_set_kernel_segments(t);
+	task_set_kernel_segments(t);
 }
 
-uint64_t *arch_task_retval_slot_addr(task_t *t)
+uint64_t *task_retval_slot_addr(task_t *t)
 {
 	return t ? &t->arch.rax : NULL;
 }

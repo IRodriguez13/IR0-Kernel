@@ -18,6 +18,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/acpi_pm.h>
+#include <ir0/errno.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/paging.h>
 #include <ir0/arch_port.h>
@@ -435,6 +436,14 @@ int ir0_acpi_pm_try_suspend(void)
 	uint8_t typ_b;
 
 	(void)ir0_acpi_pm_init();
+
+	/*
+	 * With no usable PM1a control block there is no sleep path at all:
+	 * report it instead of pretending the system suspended and resumed.
+	 */
+	if (!g_acpi_pm_ready || g_pm1a_cnt == 0)
+		return -EOPNOTSUPP;
+
 	klog_smoke("SYSTEM_S3_ENTER");
 
 	typ_a = g_s3_ok ? g_s3_typ_a : 0;

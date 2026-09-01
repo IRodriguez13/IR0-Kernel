@@ -22,7 +22,7 @@ void test_pipe_close_end_last_ref_frees_once(void)
 	uint64_t created1 = 0, destroyed1 = 0;
 
 	TEST_BEGIN("pipe_close_end frees only on last fd_ref");
-	pipe_fase48_get_stats(&created0, &destroyed0);
+	pipe_stats_get(&created0, &destroyed0);
 	p = pipe_create();
 	ASSERT(p != 0);
 	/* Match sys_pipe2: create then acquire each end. */
@@ -36,13 +36,13 @@ void test_pipe_close_end_last_ref_frees_once(void)
 	ASSERT_EQ(p->fd_refs, 1);
 	ASSERT_EQ(p->closed_read, 1);
 
-	pipe_fase48_get_stats(&created1, &destroyed1);
+	pipe_stats_get(&created1, &destroyed1);
 	ASSERT_EQ(destroyed1, destroyed0);
 
 	pipe_close_end(p, 1);
 	p = 0;
 
-	pipe_fase48_get_stats(&created1, &destroyed1);
+	pipe_stats_get(&created1, &destroyed1);
 	ASSERT_EQ(created1, created0 + 1);
 	ASSERT_EQ(destroyed1, destroyed0 + 1);
 	TEST_END();
@@ -54,7 +54,7 @@ void test_pipe_pipeline_two_closes_destroy_once(void)
 	uint64_t destroyed0 = 0, destroyed1 = 0;
 
 	TEST_BEGIN("pipeline-style two ends → one destroy");
-	pipe_fase48_get_stats(0, &destroyed0);
+	pipe_stats_get(0, &destroyed0);
 	p = pipe_create();
 	ASSERT(p != 0);
 	pipe_acquire_end(p, 0);
@@ -62,7 +62,7 @@ void test_pipe_pipeline_two_closes_destroy_once(void)
 	pipe_close_end(p, 1);
 	pipe_close_end(p, 0);
 	p = 0;
-	pipe_fase48_get_stats(0, &destroyed1);
+	pipe_stats_get(0, &destroyed1);
 	ASSERT_EQ(destroyed1, destroyed0 + 1);
 	TEST_END();
 }

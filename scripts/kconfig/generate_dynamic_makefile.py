@@ -238,9 +238,15 @@ def generate_makefile(config_file, subsystems_json, arch, kernel_root, output_pa
         f.write("# Object files from selected subsystems\n")
         f.write("OBJS =\n")
         
+        # Emit only files that passed the existence check above: warning about a
+        # stale subsystems.json entry and then emitting its .o anyway just moves
+        # the failure to link time.
+        existing_files = set(all_files)
+
         total_files = 0
         for subsystem_id in all_subsystems:
-            files = get_subsystem_files(subsystems_data, subsystem_id, arch)
+            files = [f for f in get_subsystem_files(subsystems_data, subsystem_id, arch)
+                     if f in existing_files]
             if files:
                 f.write(f"\n# Subsystem: {subsystem_id} ({len(files)} files)\n")
                 for file_path in files:

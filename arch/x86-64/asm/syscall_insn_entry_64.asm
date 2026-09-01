@@ -25,7 +25,7 @@ global syscall_insn_entry_asm
 extern syscall_dispatch
 extern process_capture_syscall_frame_at_entry
 extern fase24_log_stack_once
-extern arch_restore_user_fs_base
+extern restore_user_fs_base
 
 section .bss
 align 16
@@ -234,7 +234,7 @@ syscall_insn_entry_asm:
     push r10
     sub rsp, 8                  ; 10 pushes = 80 bytes; keep 16-byte align
     call fase24_log_stack_once
-    call arch_restore_user_fs_base
+    call restore_user_fs_base
     add rsp, 8
     pop r10
     pop r9

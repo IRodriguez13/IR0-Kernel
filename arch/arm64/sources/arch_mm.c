@@ -19,18 +19,18 @@
 
 #include <ir0/arch_mm.h>
 
-unsigned arch_mm_user_root_slots(void)
+unsigned mm_user_root_slots(void)
 {
 	/* Entire TTBR0 L0 is process-owned for walk/COW (no TTBR1 split). */
 	return 512;
 }
 
-unsigned arch_mm_root_slots(void)
+unsigned mm_root_slots(void)
 {
 	return 512;
 }
 
-void arch_mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
+void mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
 {
 	(void)dst_root;
 	(void)src_root;

@@ -38,9 +38,11 @@
 #include <ir0/clock.h>
 #include <ir0/process.h>
 #include <ir0/signals.h>
+#include <ir0/arch_cpu.h>
 #include <ir0/klog.h>
 #include <ir0/serial_io.h>
 #include <ir0/ipc.h>
+#include <ir0/arch_cpu.h>
 #if CONFIG_ENABLE_BLUETOOTH
 #include <ir0/bluetooth.h>
 #endif
@@ -377,10 +379,10 @@ static int64_t dev_console_ioctl(devfs_entry_t *entry, uint64_t request, void *a
 
     /*
      * Job-control ioctls on /dev/console. Without these, BusyBox ash may
-     * disable job control; stubs keep interactive read path alive.
+     * disable job control.
      */
     if (request == IR0_TIOCSCTTY)
-	return 0;
+	return ir0_console_ioctl_set_ctty();
     if (request == IR0_TIOCSPGRP)
     {
 	pid_t pg;
@@ -600,8 +602,12 @@ int64_t dev_audio_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
 int64_t dev_audio_read(devfs_entry_t *entry, void *buf, size_t count, off_t offset)
 {
     (void)entry; (void)buf; (void)count; (void)offset;
-    /* Audio input not implemented yet */
-    return 0;
+    /*
+     * Playback-only device: no capture backend exists. Returning 0 would
+     * mean EOF to read(2) callers, so report the node as unsuitable for
+     * reading instead (read(2) ERRORS: EINVAL).
+     */
+    return -EINVAL;
 }
 
 #if CONFIG_ENABLE_MOUSE
@@ -1191,22 +1197,35 @@ int64_t devfs_text_snap_read(const devfs_text_snap_t *snap, void *buf,
 
 void devfs_text_snap_acquire(devfs_text_snap_t *snap)
 {
-	if (snap)
-		snap->refs++;
+	unsigned long irq_flags;
+
+	if (!snap)
+		return;
+
+	irq_flags = irq_save();
+	snap->refs++;
+	irq_restore(irq_flags);
 }
 
 void devfs_text_snap_release(devfs_text_snap_t *snap)
 {
+	unsigned long irq_flags;
+	int last;
+
 	if (!snap)
 		return;
+
+	irq_flags = irq_save();
 	if (snap->refs > 0)
 		snap->refs--;
-	if (snap->refs == 0)
-	{
-		if (snap->buf)
-			kfree(snap->buf);
-		kfree(snap);
-	}
+	last = (snap->refs == 0);
+	irq_restore(irq_flags);
+
+	if (!last)
+		return;
+	if (snap->buf)
+		kfree(snap->buf);
+	kfree(snap);
 }
 
 devfs_text_snap_t *devfs_text_snap_capture(uint32_t device_id)
@@ -2357,8 +2376,18 @@ static void pty_hangup_fg(void)
 
 static int pty_ring_push(struct pty_ring *r, const char *src, size_t n)
 {
+	unsigned long irq_flags;
 	size_t i;
 
+	if (!r || !src || n == 0)
+		return 0;
+
+	/*
+	 * Same race as pipe_write: count++ is a read-modify-write. Master and
+	 * slave are different processes; preemption between load and store can
+	 * drop bytes or inflate count past what is actually queued.
+	 */
+	irq_flags = irq_save();
 	for (i = 0; i < n; i++)
 	{
 		if (r->count >= PTY_BUF_SIZE)
@@ -2367,13 +2396,19 @@ static int pty_ring_push(struct pty_ring *r, const char *src, size_t n)
 		r->head = (r->head + 1) % PTY_BUF_SIZE;
 		r->count++;
 	}
+	irq_restore(irq_flags);
 	return (int)i;
 }
 
 static int pty_ring_pop(struct pty_ring *r, char *dst, size_t n)
 {
+	unsigned long irq_flags;
 	size_t i;
 
+	if (!r || !dst || n == 0)
+		return 0;
+
+	irq_flags = irq_save();
 	for (i = 0; i < n; i++)
 	{
 		if (r->count == 0)
@@ -2382,6 +2417,7 @@ static int pty_ring_pop(struct pty_ring *r, char *dst, size_t n)
 		r->tail = (r->tail + 1) % PTY_BUF_SIZE;
 		r->count--;
 	}
+	irq_restore(irq_flags);
 	return (int)i;
 }
 
@@ -3056,21 +3092,35 @@ int64_t devfs_open_node(devfs_node_t *node, int flags)
             return rc;
     }
 
-    node->ref_count++;
+    {
+        unsigned long irq_flags = irq_save();
+
+        node->ref_count++;
+        irq_restore(irq_flags);
+    }
     return 0;
 }
 
 int64_t devfs_close_node(devfs_node_t *node)
 {
     int64_t rc;
+    unsigned long irq_flags;
+    int ref_after;
 
     if (!node)
         return -EINVAL;
 
+    irq_flags = irq_save();
     if (node->ref_count == 0)
+    {
+        irq_restore(irq_flags);
         return -EBADF;
+    }
 
     node->ref_count--;
+    ref_after = node->ref_count;
+    irq_restore(irq_flags);
+
     rc = 0;
     if (node->ops && node->ops->close)
     {
@@ -3079,7 +3129,7 @@ int64_t devfs_close_node(devfs_node_t *node)
          * Other devices: last-close teardown only.
          */
         if (node == &dev_events0 || node == &dev_input_event0 ||
-            node->ref_count == 0)
+            ref_after == 0)
             rc = node->ops->close(&node->entry);
     }
 

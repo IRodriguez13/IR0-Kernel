@@ -23,6 +23,10 @@
 #ifndef _IR0_ERRNO_H
 #define _IR0_ERRNO_H
 
+/* The helpers at the bottom take fixed-width types, so stay self-contained:
+ * including this first in a translation unit used to fail to compile. */
+#include <stdint.h>
+
 /* ERROR NUMBER DEFINITIONS (POSIX-compatible)                               */
 
 #define EPERM   1   /* Operation not permitted */

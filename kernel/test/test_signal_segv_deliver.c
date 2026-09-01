@@ -15,7 +15,7 @@
 #include "test/ktest_harness.h"
 #include <config.h>
 #include <ir0/signals.h>
-#include <ir0/arch_signal.h>
+#include <ir0/signal_irq.h>
 #include <ir0/process.h>
 #include <ir0/kmem.h>
 #include <stdint.h>
@@ -61,7 +61,7 @@ void ktest_signal_segv_deliver_irq_frame(void)
 	KASSERT(frame[2] == (uint64_t)(uintptr_t)handler);
 	KASSERT(frame[-7] == (uint64_t)SIGSEGV);
 	KASSERT(current_process->saved_context != NULL);
-	KASSERT(arch_sigcontext_ip(current_process->saved_context) ==
+	KASSERT(sigcontext_ip(current_process->saved_context) ==
 		0x004422E3UL);
 
 	if (current_process->saved_context)

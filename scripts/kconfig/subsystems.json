@@ -8,16 +8,11 @@
       "files": {
         "x86-64": [
           "kernel/main.c",
-          "kernel/init.c",
           "kernel/process.c",
-          "kernel/task.c",
           "kernel/syscalls.c",
           "kernel/elf_loader.c",
           "sched/rr_sched.c",
-          "sched/scheduler_api.c",
-          "kernel/driver_registry.c",
-          "kernel/dbgshell.c",
-          "kernel/process_util.c"
+          "kernel/driver_registry.c"
         ],
         "arm32": []
       },
@@ -65,10 +60,8 @@
         "x86-64": [
           "fs/vfs.c",
           "fs/minix_fs.c",
-          "fs/vfs_simple.c",
           "fs/path.c",
-          "fs/chmod.c",
-          "fs/ramfs.c"
+          "fs/chmod.c"
         ],
         "arm32": []
       },
@@ -98,18 +91,17 @@
     },
     "LIBRARIES": {
       "name": "Kernel Libraries",
-      "description": "Core kernel libraries including VGA, logging, validation, string functions, signals, pipes, and user-space copy utilities. Essential utilities.",
+      "description": "Core kernel libraries including VGA, logging, oops, string functions, signals, pipes, and user-space copy utilities. Essential utilities.",
       "required": true,
       "architectures": ["x86-64", "arm32"],
       "files": {
         "x86-64": [
-          "includes/ir0/vga.c",
-          "includes/ir0/logging.c",
-          "includes/ir0/validation.c",
-          "includes/ir0/oops.c",
-          "includes/ir0/signals.c",
-          "includes/ir0/pipe.c",
-          "includes/ir0/copy_user.c",
+          "kernel/lib/vga.c",
+          "kernel/lib/logging.c",
+          "kernel/lib/oops.c",
+          "kernel/lib/signals.c",
+          "kernel/lib/pipe.c",
+          "kernel/lib/copy_user.c",
           "includes/string.c"
         ],
         "arm32": []
@@ -179,7 +171,7 @@
         "x86-64": [
           "drivers/video/vbe.c",
           "drivers/video/typewriter.c",
-          "includes/ir0/vga.c"
+          "kernel/lib/vga.c"
         ],
         "arm32": []
       },
@@ -285,19 +277,6 @@
       },
       "dependencies": []
     },
-    "NET_E1000": {
-      "name": "Intel e1000 Ethernet Driver",
-      "description": "Intel e1000 (82540EM) Gigabit Ethernet network adapter driver. Provides network connectivity.",
-      "required": false,
-      "architectures": ["x86-64"],
-      "files": {
-        "x86-64": [
-          "drivers/net/e1000.c"
-        ],
-        "arm32": []
-      },
-      "dependencies": ["NETWORK"]
-    },
     "NET_RTL8139": {
       "name": "Realtek RTL8139 Ethernet Driver",
       "description": "Realtek RTL8139 Fast Ethernet network adapter driver. Provides network connectivity.",
@@ -336,7 +315,7 @@
       },
       {
         "name": "Network Layer",
-        "subsystems": ["NETWORK", "NET_E1000", "NET_RTL8139"],
+        "subsystems": ["NETWORK", "NET_RTL8139"],
         "y": 400
       },
       {
@@ -354,7 +333,7 @@
       "subsystems": [
         "KERNEL", "MEMORY", "INTERRUPT", "ARCH", "LIBRARIES", "SCHEDULER",
         "FILESYSTEM", "DISK", "SERIAL", "PS2_KEYBOARD", "PS2_MOUSE", "VIDEO", 
-        "TIMER", "STORAGE", "AUDIO_SB16", "AUDIO_ADLIB", "DMA", "NETWORK", "NET_E1000", "NET_RTL8139"
+        "TIMER", "STORAGE", "AUDIO_SB16", "AUDIO_ADLIB", "DMA", "NETWORK", "NET_RTL8139"
       ]
     },
     "x86-64-minimal": {

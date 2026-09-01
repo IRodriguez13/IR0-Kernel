@@ -34,13 +34,6 @@ void process_exec_close_cloexec(process_t *p)
 			continue;
 		if (!(e->fd_flags & FD_CLOEXEC))
 			continue;
-		if (e->is_pipe && e->vfs_file)
-		{
-			pipe_t *pip = (pipe_t *)e->vfs_file;
-
-			pipe_fase49_fd_trace((uint32_t)p->task.pid, i, pip, e->pipe_end,
-					     pip->fd_refs, "EXEC_CLOSE");
-		}
 		(void)process_close_fd(p, i);
 	}
 }

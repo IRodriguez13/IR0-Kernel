@@ -49,7 +49,6 @@ volatile int *shared_keyboard_buffer_pos =
     (volatile int *)(KEYBOARD_BUFFER_ADDR + KEYBOARD_BUFFER_SIZE);
 
 static int system_in_idle_mode = 0;
-static int wake_requested = 0;
 
 static struct ps2_set1_state kbd_state;
 
@@ -218,8 +217,23 @@ int keyboard_buffer_has_data(void)
 
 void keyboard_buffer_clear(void)
 {
-	keyboard_buffer_head = 0;
-	keyboard_buffer_tail = 0;
+	int guard = KERNEL_KBD_RING_SIZE;
+
+	/*
+	 * Discard by advancing tail, not by resetting both indices. Linux keeps
+	 * head producer-published and tail consumer-published (n_tty_data), and
+	 * the only writer of both is n_tty_flush_buffer(), which serialises
+	 * against the producer under an exclusive termios_rwsem. IR0 flushes
+	 * against a live IRQ1 producer with no such lock, and resetting head
+	 * from here raced it: the IRQ resumed a stale index and left head ahead
+	 * of tail over dead slots, replayed as random characters.
+	 *
+	 * Touching only tail keeps that ownership rule, so no masking is needed.
+	 * Bounded because a held key can refill the ring while we drain.
+	 */
+	while (guard-- > 0 && keyboard_buffer_head != keyboard_buffer_tail)
+		keyboard_buffer_tail =
+			(keyboard_buffer_tail + 1) % KERNEL_KBD_RING_SIZE;
 }
 #endif
 
@@ -381,8 +395,6 @@ void keyboard_init(void)
 void set_idle_mode(int is_idle)
 {
 	system_in_idle_mode = is_idle;
-	if (is_idle)
-		wake_requested = 0;
 }
 
 int is_in_idle_mode(void)
@@ -394,7 +406,6 @@ void wakeup_from_idle(void)
 {
 	if (system_in_idle_mode)
 	{
-		wake_requested = 1;
 		system_in_idle_mode = 0;
 	}
 	else
@@ -402,14 +413,4 @@ void wakeup_from_idle(void)
 		print_colored("DEBUG: wakeup called but not in idle mode\n",
 			      VGA_COLOR_RED, VGA_COLOR_BLACK);
 	}
-}
-
-int is_wake_requested(void)
-{
-	return wake_requested;
-}
-
-void clear_wake_request(void)
-{
-	wake_requested = 0;
 }

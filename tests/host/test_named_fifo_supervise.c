@@ -115,7 +115,7 @@ void test_named_fifo_supervise(void)
 		uint64_t created0 = 0, destroyed0 = 0;
 		uint64_t created1 = 0, destroyed1 = 0;
 
-		pipe_fase48_get_stats(&created0, &destroyed0);
+		pipe_stats_get(&created0, &destroyed0);
 		rc = named_fifo_create("/etc/runit/sv/console/supervise/ok", 0600);
 		ASSERT_EQ(rc, 0);
 		p = named_fifo_lookup("/etc/runit/sv/console/supervise/ok");
@@ -127,7 +127,7 @@ void test_named_fifo_supervise(void)
 		pipe_close_end(p, 0);
 		pipe_close_end(p, 1);
 
-		pipe_fase48_get_stats(&created1, &destroyed1);
+		pipe_stats_get(&created1, &destroyed1);
 		ASSERT_EQ(destroyed1, destroyed0); /* still owned by inode */
 
 		p = named_fifo_lookup("/etc/runit/sv/console/supervise/ok");
@@ -142,7 +142,7 @@ void test_named_fifo_supervise(void)
 
 		rc = named_fifo_unlink("/etc/runit/sv/console/supervise/ok");
 		ASSERT_EQ(rc, 0);
-		pipe_fase48_get_stats(&created1, &destroyed1);
+		pipe_stats_get(&created1, &destroyed1);
 		ASSERT_EQ(destroyed1, destroyed0 + 1);
 		ASSERT_EQ(created1, created0 + 1);
 	}

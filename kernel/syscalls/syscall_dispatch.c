@@ -504,10 +504,6 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
                                  process_syscall_sp(current_process));
   }
 
-  if (do_trace) {
-    extern uint64_t iretq_checkpoint_buf[40];
-  }
-
   if (syscall_num >= __NR_syscall_max)
     return -ENOSYS;
 
@@ -589,7 +585,7 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
       current_process->irq_frame_saved = 0;
       current_process->coop_resched_resume = 0;
       current_process->want_kernel_ret = 0;
-      arch_restore_user_fs_base();
+      restore_user_fs_base();
       switch_to_user_task(&current_process->task);
     }
 

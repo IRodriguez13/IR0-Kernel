@@ -19,6 +19,7 @@
  * Real implementations in net/net.c override these symbols.
  */
 
+#include <ir0/errno.h>
 #include <ir0/net.h>
 #include <net/ip.h>
 #include <net/icmp.h>
@@ -35,7 +36,12 @@ __attribute__((weak)) void net_stack_poll(void)
 
 __attribute__((weak)) int net_stack_post_irq_init(void)
 {
-    return 0;
+    /*
+     * Reached only when no networking backend is linked. The single caller is
+     * the explicit "dhcp" devfs command, so a real failure must be visible to
+     * userspace; boot does not depend on this hook.
+     */
+    return -ENODEV;
 }
 
 __attribute__((weak)) int net_stack_get_irq_line(void)

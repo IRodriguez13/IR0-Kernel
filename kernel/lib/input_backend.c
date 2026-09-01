@@ -15,7 +15,7 @@
 #include <ir0/input_backend.h>
 #include <config.h>
 #if CONFIG_ENABLE_MOUSE
-#include <drivers/IO/ps2_mouse.h>
+#include <ir0/ps2_mouse.h>
 #endif
 #include <ir0/irq.h>
 

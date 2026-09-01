@@ -12,14 +12,12 @@
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-#include <ir0/context.h>
 #include <ir0/arch_switch.h>
 #include <ir0/task.h>
 #include <ir0/arch_task.h>
 #include <ir0/process.h>
 #include <ir0/klog.h>
 #include <ir0/oops.h>
-#include <ir0/paging.h>
 
 /*
  * Called from switch_context_x64 when kernel_ret RIP is outside kernel .text.
@@ -45,9 +43,4 @@ void arch_report_bad_kernel_ret_rip(uint64_t rip, task_t *task)
 void switch_to(task_t *prev, task_t *next)
 {
 	arch_switch_to(prev, next);
-}
-
-uint64_t arch_get_current_page_directory(void)
-{
-	return get_current_page_directory();
 }

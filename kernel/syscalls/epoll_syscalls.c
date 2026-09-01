@@ -138,7 +138,7 @@ int64_t sys_epoll_create1(int flags)
 	tab[fd].is_epoll = true;
 	tab[fd].vfs_file = &g_epoll[slot];
 	tab[fd].flags = 0;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
 }
 

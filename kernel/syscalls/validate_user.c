@@ -17,7 +17,6 @@
 #include <ir0/copy_user.h>
 #include <ir0/errno.h>
 #include <ir0/process.h>
-#include <stdint.h>
 
 /**
  * validate_userspace_string - Validate that a string argument is in userspace
@@ -30,28 +29,13 @@ int validate_userspace_string(const char *str, size_t max_len)
   if (!current_process)
     return -ESRCH;
 
-  /* For KERNEL_MODE processes (like dbgshell), allow addresses in process stack/heap range
-   * This allows debug_bins/ commands to work while still simulating userspace behavior
+  /*
+   * spawn_kernel / ktest harness: syscalls accept kernel pointers on the
+   * process kstack without copy_from_user. USER_MODE stays strict below.
    */
   if (current_process->mode == KERNEL_MODE)
-  {
-    /* Allow if address is in process's stack or heap region */
-    uint64_t addr = (uint64_t)str;
-    if (addr >= process_stack_start(current_process) &&
-        addr < process_stack_start(current_process) + process_stack_size(current_process))
-      return 0;
-    if (process_heap_start(current_process) > 0 &&
-        addr >= process_heap_start(current_process) &&
-        addr < process_heap_end(current_process))
-      return 0;
-    /* Also allow if it's a valid user address (for compatibility) */
-    if (is_user_address(str, max_len))
-      return 0;
-    /* For KERNEL_MODE, be more lenient - allow kernel addresses from current process stack */
-    return 0;  /* Allow kernel space addresses for debug_bins/ simulation */
-  }
+    return 0;
 
-  /* USER_MODE: strict validation - must be in userspace */
   if (!is_user_address(str, max_len))
     return -EFAULT;
 
@@ -69,28 +53,13 @@ int validate_userspace_buffer(const void *buf, size_t size)
   if (!current_process)
     return -ESRCH;
 
-  /* For KERNEL_MODE processes (like dbgshell), allow addresses in process stack/heap range
-   * This allows debug_bins/ commands to work while still simulating userspace behavior
+  /*
+   * spawn_kernel / ktest harness: syscalls accept kernel buffers on the
+   * process kstack without copy_from_user. USER_MODE stays strict below.
    */
   if (current_process->mode == KERNEL_MODE)
-  {
-    /* Allow if address is in process's stack or heap region */
-    uint64_t addr = (uint64_t)buf;
-    if (addr >= process_stack_start(current_process) &&
-        addr + size <= process_stack_start(current_process) + process_stack_size(current_process))
-      return 0;
-    if (process_heap_start(current_process) > 0 &&
-        addr >= process_heap_start(current_process) &&
-        addr + size <= process_heap_end(current_process))
-      return 0;
-    /* Also allow if it's a valid user address (for compatibility) */
-    if (is_user_address(buf, size))
-      return 0;
-    /* For KERNEL_MODE, be more lenient - allow kernel addresses from current process stack */
-    return 0;  /* Allow kernel space addresses for debug_bins/ simulation */
-  }
+    return 0;
 
-  /* USER_MODE: strict validation - must be in userspace */
   if (!is_user_address(buf, size))
     return -EFAULT;
 

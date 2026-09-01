@@ -3,7 +3,7 @@
  * IR0 Kernel — EXEC-only busybox read path serial diagnostics.
  */
 
-#include "exec_read_trace.h"
+#include <ir0/exec_read_trace.h>
 #include <ir0/ktm/klog.h>
 
 int vfs_exec_audit_is_active(void);
@@ -40,8 +40,6 @@ void exec_read_trace_minix_file_begin(const char *path, uint16_t inode_num,
 
 void exec_read_trace_minix_zones(const uint16_t zones[9])
 {
-	int i;
-
 	if (!exec_read_trace_on() || !zones)
 		return;
 

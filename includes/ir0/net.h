@@ -98,6 +98,15 @@ struct net_device
     void (*get_byte_stats)(struct net_device *dev, uint64_t *rx_bytes,
 			   uint64_t *tx_bytes);
 
+    /*
+     * Receive counters exported by /proc/net/dev. rx_dropped and rx_multicast
+     * are maintained by the core receive path; rx_fifo_errors is driver owned
+     * (hardware FIFO/ring overrun), left at 0 by drivers that cannot detect it.
+     */
+    uint64_t rx_dropped;
+    uint64_t rx_fifo_errors;
+    uint64_t rx_multicast;
+
     struct net_device *next;
 };
 

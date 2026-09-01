@@ -193,9 +193,13 @@ static uint16_t tcp_checksum(const void *tcp_pkt, size_t len,
 	pseudo.protocol = IPPROTO_TCP;
 	pseudo.length = htons((uint16_t)len);
 
-	words = (const uint16_t *)&pseudo;
-	for (i = 0; i < sizeof(pseudo) / 2; i++)
-		sum += ntohs(words[i]);
+	{
+		uint16_t pw[sizeof(pseudo) / 2];
+
+		memcpy(pw, &pseudo, sizeof(pseudo));
+		for (i = 0; i < sizeof(pseudo) / 2; i++)
+			sum += ntohs(pw[i]);
+	}
 
 	words = (const uint16_t *)tcp_pkt;
 	for (i = 0; i < len / 2; i++)

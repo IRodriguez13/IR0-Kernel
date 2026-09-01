@@ -130,7 +130,7 @@ static int load_elf(const uint8_t *blob, uint64_t blob_len, uint64_t *entry_out)
 	if (ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
 	    ehdr->e_ident[2] != 'L' || ehdr->e_ident[3] != 'F')
 		return -1;
-	if (ehdr->e_type != ET_EXEC || !arch_elf_machine_supported(ehdr->e_machine))
+	if (ehdr->e_type != ET_EXEC || !elf_machine_supported(ehdr->e_machine))
 		return -1;
 	if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * ehdr->e_phentsize > blob_len)
 		return -1;

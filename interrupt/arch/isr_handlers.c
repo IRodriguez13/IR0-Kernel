@@ -43,6 +43,7 @@ extern uint64_t isr_abi_entry_has_err;
 extern uint64_t isr_abi_entry_rsp;
 extern uint64_t isr_abi_entry_qwords[16];
 
+#if CONFIG_DEBUG_ISRABI
 static int is_exception_with_hw_error_code(uint64_t int_no)
 {
     switch (int_no)
@@ -59,7 +60,9 @@ static int is_exception_with_hw_error_code(uint64_t int_no)
             return 0;
     }
 }
+#endif
 
+#if CONFIG_DEBUG_ISRABI
 static void dump_qwords16(const char *tag, const uint64_t *q)
 {
     char buf[384];
@@ -80,7 +83,6 @@ static void dump_qwords16(const char *tag, const uint64_t *q)
     klog_debug("ISR", buf);
 }
 
-#if CONFIG_DEBUG_ISRABI
 static void isr_abi_audit(uint64_t interrupt_number, uint64_t *stack)
 {
     uint64_t c_qwords[16] = {0};

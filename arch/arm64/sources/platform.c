@@ -72,12 +72,12 @@ uint32_t get_cpu_clflush_size(void)
 	return 0;
 }
 
-int arch_hypervisor_present(void)
+int hypervisor_present(void)
 {
 	return 0;
 }
 
-int arch_hypervisor_vendor(char *buf, size_t n)
+int hypervisor_vendor(char *buf, size_t n)
 {
 	if (buf && n)
 		buf[0] = '\0';

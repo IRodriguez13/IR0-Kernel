@@ -16,7 +16,7 @@
 
 #include <ir0/arch_port.h>
 #include <ir0/context.h>
-#include <ir0/arch_switch.h>
+#include <ir0/switch.h>
 #include <ir0/oops.h>
 #include <ir0/signals.h>
 #include <ir0/sched.h>
@@ -69,7 +69,7 @@ void sched_context_switch_to(process_t *next)
 	if (first)
 	{
 		first = 0;
-		arch_set_current_kernel_stack(next);
+		set_current_kernel_stack(next);
 		first_switch_to(next);
 		panic("Returned from first context switch");
 	}
@@ -84,7 +84,7 @@ void sched_context_switch_to(process_t *next)
 		 */
 		if (sched_context_switch_take_skip_prev_save())
 		{
-			arch_switch_save_user_rsp(prev);
+			switch_save_user_rsp(prev);
 			switch_to(NULL, &next->task);
 		}
 		else

@@ -134,7 +134,6 @@ KERNEL_OBJS = \
     kernel/init.o \
     kernel/process.o \
 	kernel/rr_sched.o \
-    kernel/task.o \
     kernel/syscalls.o \
     kernel/shell.o \
     kernel/elf_loader.o \
@@ -146,10 +145,11 @@ MEMORY_OBJS = \
 	mm/kmem.o
 
 LIB_OBJS = \
-    includes/ir0/vga.o \
-    includes/ir0/logging.o \
-    includes/ir0/validation.o \
-    includes/ir0/oops.o \
+    kernel/lib/vga.o \
+    kernel/lib/logging.o \
+    kernel/lib/oops.o \
+    kernel/lib/pipe.o \
+    kernel/lib/copy_user.o \
     includes/string.o
 
 INTERRUPT_OBJS = \

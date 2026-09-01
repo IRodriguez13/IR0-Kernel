@@ -14,7 +14,7 @@
 
 #include "process_internal.h"
 #include <ir0/clone.h>
-#include <ir0/arch_fork.h>
+#include <ir0/fork.h>
 #include <ir0/arch_task.h>
 #include <ir0/process_domains.h>
 #include <ir0/mm_struct.h>
@@ -47,7 +47,7 @@ static process_t *fork_process_create(process_t *parent, pid_t *child_pid_out)
 	child_pid = process_get_next_pid();
 	child->task.priority = parent->task.priority;
 	child->task.state = TASK_READY;
-	arch_task_context_clone(&child->task.arch, &parent->task.arch);
+	task_context_clone(&child->task.arch, &parent->task.arch);
 	child->start_ticks = clock_get_tick_count();
 	process_tls_set(child, process_tls_get(parent));
 
@@ -272,7 +272,7 @@ pid_t fork(void)
 			fork_rollback(child, child_pid, 0);
 			return -ENOMEM;
 		}
-		ret = arch_fork_prepare_child_return(child, parent);
+		ret = fork_prepare_child_return(child, parent);
 		if (ret < 0)
 		{
 			fork_rollback(child, child_pid, 0);
@@ -288,7 +288,7 @@ pid_t fork(void)
 
 	if (parent->mode == USER_MODE)
 	{
-		ret = arch_fork_prepare_parent_return(parent, child_pid);
+		ret = fork_prepare_parent_return(parent, child_pid);
 		if (ret < 0)
 		{
 			fork_rollback(child, child_pid, 1);
@@ -339,7 +339,7 @@ pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 
 	if (flags & CLONE_SETTLS)
 	{
-		int tls_ret = arch_process_set_tls(child, tls);
+		int tls_ret = process_set_tls(child, tls);
 
 		if (tls_ret < 0 && tls_ret != -EOPNOTSUPP)
 		{
@@ -369,7 +369,7 @@ pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 	child_sp = (uintptr_t)stack;
 	child->task.pid = child_pid;
 	task_set_sp(&child->task, (uint64_t)child_sp);
-	arch_task_clear_frame_pointer(&child->task);
+	task_clear_frame_pointer(&child->task);
 
 	if (parent->mode == USER_MODE)
 	{
@@ -380,7 +380,7 @@ pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 			fork_rollback(child, child_pid, 0);
 			return -ENOMEM;
 		}
-		cret = arch_fork_prepare_child_return(child, parent);
+		cret = fork_prepare_child_return(child, parent);
 		if (cret < 0)
 		{
 			fork_rollback(child, child_pid, 0);
@@ -413,7 +413,7 @@ pid_t clone_thread(unsigned long flags, void *stack, int *parent_tid,
 
 	if (parent->mode == USER_MODE)
 	{
-		int pret = arch_fork_prepare_parent_return(parent, child_pid);
+		int pret = fork_prepare_parent_return(parent, child_pid);
 
 		if (pret < 0)
 		{

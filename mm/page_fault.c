@@ -28,7 +28,8 @@
 #include <ir0/ktm/event.h>
 #include <ir0/ktm/deferred.h>
 #include <ir0/ktm/user_canary.h>
-#include <ir0/arch_page_fault.h>
+#include <ir0/page_fault.h>
+#include <mm/paging.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ktm.h>
 #include <ktm_probe_diag.h>
@@ -64,9 +65,80 @@ static int pf_addr_in_heap(process_t *p, uint64_t fa)
 
 static int pf_addr_in_stack(process_t *p, uint64_t fa)
 {
+	uint64_t lo;
+	uint64_t hi;
+
 	if (!p)
 		return 0;
-	return (fa >= (USER_STACK_TOP - USER_STACK_SIZE) && fa < USER_STACK_TOP);
+
+	lo = (uint64_t)process_stack_start(p);
+	hi = lo + (uint64_t)process_stack_size(p);
+	if (lo == 0 || hi <= lo)
+	{
+		lo = (uint64_t)USER_STACK_TOP - (uint64_t)USER_STACK_SIZE;
+		hi = (uint64_t)USER_STACK_TOP;
+	}
+	return (fa >= lo && fa < hi);
+}
+
+/*
+ * Exclusive region tops (brk / stack) faulted at exactly the limit: musl getc
+ * and occasional stack memcpy walk one page past. Grow the VMA by one page so
+ * identity promote / demand-zero can install a USER leaf (Linux would already
+ * have that page inside the VMA after an explicit brk/mmap).
+ */
+static int pf_heap_try_soft_extend(process_t *p, uint64_t fa)
+{
+	uint64_t heap_lo;
+	uint64_t heap_hi;
+	uint64_t page;
+	uint64_t new_hi;
+
+	if (!p)
+		return 0;
+	heap_hi = (uint64_t)process_heap_end(p);
+	if (heap_hi == 0)
+		return 0;
+	page = fa & ~(uint64_t)(PAGE_SIZE_4KB - 1);
+	if (page != heap_hi)
+		return 0;
+	heap_lo = (uint64_t)process_heap_start(p);
+	if (heap_lo == 0)
+		heap_lo = PF_USER_SPACE_START;
+	new_hi = heap_hi + (uint64_t)PAGE_SIZE_4KB;
+	if (new_hi < heap_hi ||
+	    new_hi > heap_lo + (uint64_t)USER_HEAP_MAX_SIZE)
+		return 0;
+	process_set_heap_end(p, new_hi);
+	return 1;
+}
+
+static int pf_stack_try_soft_extend(process_t *p, uint64_t fa)
+{
+	uint64_t lo;
+	uint64_t hi;
+	uint64_t page;
+	uint64_t new_size;
+
+	if (!p)
+		return 0;
+	lo = (uint64_t)process_stack_start(p);
+	hi = lo + (uint64_t)process_stack_size(p);
+	if (lo == 0 || hi <= lo)
+	{
+		lo = (uint64_t)USER_STACK_TOP - (uint64_t)USER_STACK_SIZE;
+		hi = (uint64_t)USER_STACK_TOP;
+	}
+	page = fa & ~(uint64_t)(PAGE_SIZE_4KB - 1);
+	/* Only the first page past the exclusive top (STACK_TOP_OVERRUN). */
+	if (page != hi)
+		return 0;
+	/* Do not keep growing past one page above the nominal USER_STACK_TOP. */
+	if (hi > (uint64_t)USER_STACK_TOP)
+		return 0;
+	new_size = (hi - lo) + (uint64_t)PAGE_SIZE_4KB;
+	process_set_stack_layout(p, lo, new_size);
+	return 1;
 }
 
 static struct mmap_region *pf_mmap_region_for(process_t *p, uint64_t fa)
@@ -96,6 +168,8 @@ static int pf_addr_may_promote_identity(process_t *p, uint64_t fa)
 
 	if (!p)
 		return 0;
+	(void)pf_heap_try_soft_extend(p, fa);
+	(void)pf_stack_try_soft_extend(p, fa);
 	if (pf_addr_in_heap(p, fa) || pf_addr_in_stack(p, fa) ||
 	    pf_mmap_region_for(p, fa) != NULL)
 		return 1;
@@ -112,7 +186,7 @@ static int pf_addr_may_promote_identity(process_t *p, uint64_t fa)
 }
 
 static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
-			 const struct arch_page_fault_info *info);
+			 const struct page_fault_info *info);
 
 /*
  * Linux do_anonymous_page (mm/memory.c): install a private zeroed USER leaf.
@@ -120,7 +194,7 @@ static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
  */
 static void pf_demand_zero_page(process_t *current, uint64_t fault_addr,
 				uint64_t map_flags, uint64_t *stack,
-				const struct arch_page_fault_info *info)
+				const struct page_fault_info *info)
 {
 	uintptr_t phys_addr;
 	uint64_t vaddr_aligned;
@@ -173,7 +247,7 @@ static int pf_identity_to_anon_zero(process_t *current, uint64_t vaddr_aligned,
 
 #if DEBUG_D1_DIAG
 static void pf_d110_stack_adjacent_diag(uint64_t *frame, uint64_t fault_addr,
-					const struct arch_page_fault_info *info,
+					const struct page_fault_info *info,
 					process_t *p)
 {
 	uint64_t rax;
@@ -301,7 +375,7 @@ static void pf_d110_stack_adjacent_diag(uint64_t *frame, uint64_t fault_addr,
 }
 
 static void pf_d114_memmove_fault_diag(uint64_t *frame, uint64_t fault_addr,
-				       const struct arch_page_fault_info *info,
+				       const struct page_fault_info *info,
 				       process_t *p)
 {
 	uint64_t rip;
@@ -325,7 +399,7 @@ static void pf_d114_memmove_fault_diag(uint64_t *frame, uint64_t fault_addr,
 }
 #else
 static void pf_d110_stack_adjacent_diag(uint64_t *frame, uint64_t fault_addr,
-					const struct arch_page_fault_info *info,
+					const struct page_fault_info *info,
 					process_t *p)
 {
 	(void)frame;
@@ -335,7 +409,7 @@ static void pf_d110_stack_adjacent_diag(uint64_t *frame, uint64_t fault_addr,
 }
 
 static void pf_d114_memmove_fault_diag(uint64_t *frame, uint64_t fault_addr,
-				       const struct arch_page_fault_info *info,
+				       const struct page_fault_info *info,
 				       process_t *p)
 {
 	(void)frame;
@@ -346,7 +420,7 @@ static void pf_d114_memmove_fault_diag(uint64_t *frame, uint64_t fault_addr,
 #endif
 
 static void pf_audit_classify(uint64_t *stack,
-			      const struct arch_page_fault_info *info)
+			      const struct page_fault_info *info)
 {
 #if !DEBUG_PAGE_FAULTS
 	(void)stack;
@@ -408,7 +482,7 @@ static void pf_audit_classify(uint64_t *stack,
 }
 
 static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
-			 const struct arch_page_fault_info *info)
+			 const struct page_fault_info *info)
 {
 	if (signals_deliver_from_irq_frame(p, SIGSEGV, stack, fault_addr))
 		return;
@@ -437,6 +511,9 @@ static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
 	 */
 	if (fault_addr >= (uint64_t)USER_STACK_TOP &&
 	    fault_addr < (uint64_t)USER_STACK_TOP + PAGE_SIZE_4KB)
+	{
+		uint64_t sp_words[4] = { 0, 0, 0, 0 };
+
 		klog_notice_fmt("PF",
 				"[PF] STACK_TOP_OVERRUN pid=%x addr=%llx rip=%llx write=%llx off=%llx\n",
 				(unsigned)((uint32_t)p->task.pid),
@@ -444,6 +521,31 @@ static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
 				(unsigned long long)(info ? (unsigned long long)info->ip : 0ULL),
 				(unsigned long long)(info && info->write ? 1 : 0),
 				(unsigned long long)(fault_addr - (uint64_t)USER_STACK_TOP));
+
+		/*
+		 * The fault RIP lands inside the libc block copy, so it names
+		 * memcpy and not whoever asked for the bad length. Snapshot the
+		 * top of the user stack instead: musl's x86-64 memcpy pushes
+		 * nothing, so the first word is the caller's return address.
+		 *
+		 * That last part is a SysV assumption. On link-register ISAs the
+		 * caller lives in a register and this only shows stack words;
+		 * recovering the caller there needs an arch facade for the GPR
+		 * set, which does not exist yet.
+		 */
+		if (info && info->sp &&
+		    copy_from_user_region_in_directory(process_pgd(p),
+						       (uintptr_t)info->sp,
+						       sp_words,
+						       sizeof(sp_words)) == 0)
+			klog_notice_fmt("PF",
+					"[PF] STACK_TOP_OVERRUN usp=%llx w0=%llx w1=%llx w2=%llx w3=%llx\n",
+					(unsigned long long)info->sp,
+					(unsigned long long)sp_words[0],
+					(unsigned long long)sp_words[1],
+					(unsigned long long)sp_words[2],
+					(unsigned long long)sp_words[3]);
+	}
 
 	ktm_user_canary_check(process_pgd(p), (uint64_t)USER_STACK_TOP,
 			      (uint32_t)p->task.pid, "segv");
@@ -526,7 +628,7 @@ static void pf_user_segv(process_t *p, uint64_t *stack, uint64_t fault_addr,
 	}
 }
 
-void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_frame)
+void mm_page_fault_handle(const struct page_fault_info *info, void *irq_frame)
 {
 	uint64_t *stack = (uint64_t *)irq_frame;
 	uint64_t fault_addr;
@@ -631,6 +733,12 @@ void mm_page_fault_handle(const struct arch_page_fault_info *info, void *irq_fra
 			}
 		}
 
+		if (!pf_addr_in_heap(current, fault_addr) &&
+		    !pf_addr_in_stack(current, fault_addr))
+		{
+			(void)pf_heap_try_soft_extend(current, fault_addr);
+			(void)pf_stack_try_soft_extend(current, fault_addr);
+		}
 		if (!pf_addr_in_heap(current, fault_addr) &&
 		    !pf_addr_in_stack(current, fault_addr))
 		{

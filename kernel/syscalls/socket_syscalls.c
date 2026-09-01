@@ -123,18 +123,8 @@ static int sock_alloc_fd_flags(void *sock, int is_stream, int type_flags)
 		fd_table[fd].fd_flags = FD_CLOEXEC;
 	if (type_flags & SOCK_NONBLOCK)
 		fd_table[fd].flags = O_NONBLOCK;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
-}
-
-static int sock_alloc_fd_any(void *sock, int is_stream)
-{
-	return sock_alloc_fd_flags(sock, is_stream, 0);
-}
-
-static int sock_alloc_fd(struct sock_udp *sock)
-{
-	return sock_alloc_fd_any(sock, 0);
 }
 
 static struct sock_udp *sock_fd_lookup(int fd)
@@ -310,26 +300,26 @@ int64_t sys_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 
 		if (copy_from_user(&family, addr, sizeof(family)) != 0)
 			return -EFAULT;
-			if (family == AF_UNIX)
-			{
-				struct sockaddr_un sun;
-				size_t plen;
-				int abs;
+		if (family == AF_UNIX)
+		{
+			struct sockaddr_un sun;
+			size_t plen;
+			int abs;
 
-				if (addrlen < sizeof(sun.sun_family) + 1)
-					return -EINVAL;
-				memset(&sun, 0, sizeof(sun));
-				if (copy_from_user(&sun, addr,
-						   addrlen < sizeof(sun) ? addrlen : sizeof(sun)) != 0)
-					return -EFAULT;
-				abs = (sun.sun_path[0] == '\0');
-				plen = (size_t)addrlen - sizeof(sun.sun_family);
-				if (plen >= sizeof(sun.sun_path))
-					plen = sizeof(sun.sun_path) - 1;
-				if (!abs)
-					plen = sock_strnlen(sun.sun_path, plen);
-				return sock_stream_bind_unix_n(ss, sun.sun_path, plen, abs);
-			}
+			if (addrlen < sizeof(sun.sun_family) + 1)
+				return -EINVAL;
+			memset(&sun, 0, sizeof(sun));
+			if (copy_from_user(&sun, addr,
+					   addrlen < sizeof(sun) ? addrlen : sizeof(sun)) != 0)
+				return -EFAULT;
+			abs = (sun.sun_path[0] == '\0');
+			plen = (size_t)addrlen - sizeof(sun.sun_family);
+			if (plen >= sizeof(sun.sun_path))
+				plen = sizeof(sun.sun_path) - 1;
+			if (!abs)
+				plen = sock_strnlen(sun.sun_path, plen);
+			return sock_stream_bind_unix_n(ss, sun.sun_path, plen, abs);
+		}
 		if (family == AF_INET)
 		{
 			struct sockaddr_in sin;
@@ -718,24 +708,24 @@ int64_t sys_connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
 
 		if (copy_from_user(&family, addr, sizeof(family)) != 0)
 			return -EFAULT;
-			if (family == AF_UNIX)
-			{
-				struct sockaddr_un sun;
-				size_t plen;
-				int abs;
+		if (family == AF_UNIX)
+		{
+			struct sockaddr_un sun;
+			size_t plen;
+			int abs;
 
-				memset(&sun, 0, sizeof(sun));
-				if (copy_from_user(&sun, addr,
-						   addrlen < sizeof(sun) ? addrlen : sizeof(sun)) != 0)
-					return -EFAULT;
-				abs = (sun.sun_path[0] == '\0');
-				plen = (size_t)addrlen - sizeof(sun.sun_family);
-				if (plen >= sizeof(sun.sun_path))
-					plen = sizeof(sun.sun_path) - 1;
-				if (!abs)
-					plen = sock_strnlen(sun.sun_path, plen);
-				return sock_stream_connect_unix_n(ss, sun.sun_path, plen, abs);
-			}
+			memset(&sun, 0, sizeof(sun));
+			if (copy_from_user(&sun, addr,
+					   addrlen < sizeof(sun) ? addrlen : sizeof(sun)) != 0)
+				return -EFAULT;
+			abs = (sun.sun_path[0] == '\0');
+			plen = (size_t)addrlen - sizeof(sun.sun_family);
+			if (plen >= sizeof(sun.sun_path))
+				plen = sizeof(sun.sun_path) - 1;
+			if (!abs)
+				plen = sock_strnlen(sun.sun_path, plen);
+			return sock_stream_connect_unix_n(ss, sun.sun_path, plen, abs);
+		}
 		if (family == AF_INET)
 		{
 			struct sockaddr_in sin;
@@ -991,7 +981,7 @@ static int scm_clone_fd_entry(fd_entry_t *dst, int srcfd)
 	{
 		pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)dst->vfs_file;
 
-		bind->refs++;
+		pseudo_fd_bind_acquire(bind);
 	}
 	else if (dst->is_memfd && dst->vfs_file)
 		ir0_memfd_acquire((struct ir0_memfd *)dst->vfs_file);
@@ -1016,7 +1006,7 @@ static int scm_install_fd_entry(const fd_entry_t *src)
 		return -EMFILE;
 	tab[fd] = *src;
 	tab[fd].in_use = true;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
 }
 

@@ -16,10 +16,11 @@
 #include <ir0/fcntl.h>
 #include <ir0/clock.h>
 #include <ir0/time.h>
+#include <ir0/arch_cpu.h>
 #include <string.h>
 
 extern fd_entry_t *get_process_fd_table(void);
-extern void fase48_note_fd_created(void);
+extern void fd_slot_note_created(void);
 extern void poll_wake_check(void);
 
 #define TFD_MAX 16
@@ -77,17 +78,31 @@ int ir0_timerfd_is(const void *ptr)
 
 void ir0_timerfd_acquire(struct ir0_timerfd *t)
 {
-	if (t && ir0_timerfd_is(t))
-		t->refs++;
+	unsigned long irq_flags;
+
+	if (!t || !ir0_timerfd_is(t))
+		return;
+
+	irq_flags = irq_save();
+	t->refs++;
+	irq_restore(irq_flags);
 }
 
 void ir0_timerfd_release(struct ir0_timerfd *t)
 {
+	unsigned long irq_flags;
+	int last;
+
 	if (!t || !ir0_timerfd_is(t))
 		return;
+
+	irq_flags = irq_save();
 	if (t->refs > 0)
 		t->refs--;
-	if (t->refs > 0)
+	last = (t->refs == 0);
+	irq_restore(irq_flags);
+
+	if (!last)
 		return;
 	memset(t, 0, sizeof(*t));
 }
@@ -170,7 +185,7 @@ int64_t sys_timerfd_create(int clockid, int flags)
 		tab[fd].flags |= O_NONBLOCK;
 	if (flags & IR0_TFD_CLOEXEC)
 		tab[fd].fd_flags = FD_CLOEXEC;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
 }
 

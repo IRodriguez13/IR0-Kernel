@@ -85,6 +85,8 @@ void ktm_classify_kernel_panic_ex(const char *message, int panic_level,
 void ktm_classify_user_fault(struct process *proc, uint64_t fault_addr,
 			     uint64_t fault_rip, uint64_t fault_cs);
 
+void ktm_ctx_snapshot(const struct process *p, const char *reason);
+
 /* ------------------------------------------------------------------------- */
 /* Flight recorder (CONFIG_KTM_FLIGHT) — ring buffer dumped on panic         */
 /* ------------------------------------------------------------------------- */
@@ -184,8 +186,6 @@ void ktm_invariant_process(const struct process *p, const char *tag);
 #define KTM_TRACE(tag) do { \
 	klog_debug("KTM", tag); \
 } while (0)
-
-void ktm_ctx_snapshot(const struct process *p, const char *reason);
 
 void ktm_sched_gate_enter_irq(void);
 void ktm_sched_gate_leave_irq(void);

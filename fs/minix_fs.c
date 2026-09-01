@@ -2871,27 +2871,6 @@ int minix_fs_link(const char *oldpath, const char *newpath)
   return 0;
 }
 
-
-int minix_fs_ensure_valid(void)
-{
-  uint8_t block_buffer[MINIX_BLOCK_SIZE];
-  if (minix_read_block(1, block_buffer) != 0)
-  {
-    return minix_fs_format();
-  }
-  kmemcpy(&minix_fs.superblock, block_buffer, sizeof(minix_superblock_t));
-
-  /* Check magic number */
-  if (minix_fs.superblock.s_magic != MINIX_SUPER_MAGIC)
-  {
-    // Invalid - format disk
-    return minix_fs_format();
-  }
-
-  // Valid filesystem found
-  return 0;
-}
-
 /**
  * Remove a directory
  * @param path Path to the directory to remove

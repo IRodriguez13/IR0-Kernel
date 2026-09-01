@@ -14,11 +14,12 @@
 #include <ir0/process.h>
 #include <ir0/copy_user.h>
 #include <ir0/fcntl.h>
+#include <ir0/arch_cpu.h>
 #include <stdint.h>
 #include <string.h>
 
 extern fd_entry_t *get_process_fd_table(void);
-extern void fase48_note_fd_created(void);
+extern void fd_slot_note_created(void);
 extern void poll_wake_check(void);
 
 #define EFD_MAX 32
@@ -50,17 +51,31 @@ int ir0_eventfd_is(const void *ptr)
 
 void ir0_eventfd_acquire(struct ir0_eventfd *e)
 {
-	if (e && ir0_eventfd_is(e))
-		e->refs++;
+	unsigned long irq_flags;
+
+	if (!e || !ir0_eventfd_is(e))
+		return;
+
+	irq_flags = irq_save();
+	e->refs++;
+	irq_restore(irq_flags);
 }
 
 void ir0_eventfd_release(struct ir0_eventfd *e)
 {
+	unsigned long irq_flags;
+	int last;
+
 	if (!e || !ir0_eventfd_is(e))
 		return;
+
+	irq_flags = irq_save();
 	if (e->refs > 0)
 		e->refs--;
-	if (e->refs > 0)
+	last = (e->refs == 0);
+	irq_restore(irq_flags);
+
+	if (!last)
 		return;
 	memset(e, 0, sizeof(*e));
 }
@@ -165,6 +180,6 @@ int64_t sys_eventfd2(unsigned int count, int flags)
 		tab[fd].flags |= O_NONBLOCK;
 	if (flags & IR0_EFD_CLOEXEC)
 		tab[fd].fd_flags = FD_CLOEXEC;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
 }

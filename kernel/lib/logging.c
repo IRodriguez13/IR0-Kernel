@@ -11,9 +11,9 @@
  * Description: IR0 kernel source/header file
  */
 
-#include "logging.h"
-#include "vga.h"
-#include "string.h"
+#include <ir0/logging.h>
+#include <ir0/vga.h>
+#include <string.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <ir0/serial_io.h>

@@ -12,7 +12,7 @@
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-#include "named_symlink.h"
+#include <ir0/named_symlink.h>
 #include <ir0/errno.h>
 #include <ir0/path.h>
 #include <string.h>

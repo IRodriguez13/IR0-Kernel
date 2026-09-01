@@ -11,10 +11,10 @@
  * Description: IR0 kernel source/header file
  */
 
-#include "vga.h"
+#include <ir0/vga.h>
 #include <ir0/serial_io.h>
 #include <ir0/console_backend.h>
-#include <drivers/video/console.h>
+#include <ir0/video_console.h>
 
 static int vga_cols(void)
 {

@@ -25,7 +25,7 @@
 /* Defined in task.h; accessors accept incomplete type via pointer. */
 typedef struct task task_t;
 
-static inline void arch_task_context_init(arch_task_context_t *ctx)
+static inline void task_context_init(arch_task_context_t *ctx)
 {
 	if (!ctx)
 		return;
@@ -33,7 +33,7 @@ static inline void arch_task_context_init(arch_task_context_t *ctx)
 	*ctx = (arch_task_context_t){0};
 }
 
-static inline void arch_task_context_clone(arch_task_context_t *dst,
+static inline void task_context_clone(arch_task_context_t *dst,
 					   const arch_task_context_t *src)
 {
 	if (!dst || !src)
@@ -99,7 +99,7 @@ static inline void task_set_flags(task_t *t, uint64_t flags)
 		t->arch.spsr_el1 = flags;
 }
 
-static inline void arch_task_set_user_return(task_t *task, uint64_t ip,
+static inline void task_set_user_return(task_t *task, uint64_t ip,
 					     uint64_t sp, uint64_t flags)
 {
 	if (!task)
@@ -110,13 +110,13 @@ static inline void arch_task_set_user_return(task_t *task, uint64_t ip,
 	task_set_flags(task, flags);
 }
 
-static inline void arch_task_prepare_fork_child(arch_task_context_t *child,
+static inline void task_prepare_fork_child(arch_task_context_t *child,
 						const arch_task_context_t *parent)
 {
 	if (!child || !parent)
 		return;
 
-	arch_task_context_clone(child, parent);
+	task_context_clone(child, parent);
 	child->x0 = 0;
 }
 
@@ -144,13 +144,13 @@ static inline void task_set_ss(task_t *t, uint16_t ss)
 	(void)ss;
 }
 
-static inline void arch_task_clear_frame_pointer(task_t *t)
+static inline void task_clear_frame_pointer(task_t *t)
 {
 	if (t)
 		t->arch.x29 = 0;
 }
 
-static inline void arch_task_set_frame_pointer(task_t *t, uint64_t fp)
+static inline void task_set_frame_pointer(task_t *t, uint64_t fp)
 {
 	if (t)
 		t->arch.x29 = fp;
@@ -220,7 +220,7 @@ static inline void task_set_arg2(task_t *t, uint64_t val)
 	task_set_rdx(t, val);
 }
 
-static inline void arch_task_set_user_segments(task_t *t)
+static inline void task_set_user_segments(task_t *t)
 {
 	(void)t;
 }
@@ -231,7 +231,7 @@ static inline int task_cs_is_user(const task_t *t)
 	return 1;
 }
 
-static inline void arch_task_set_kernel_segments(task_t *t)
+static inline void task_set_kernel_segments(task_t *t)
 {
 	(void)t;
 }
@@ -315,7 +315,7 @@ static inline void task_set_ss(task_t *t, uint16_t ss)
 		t->arch.ss = ss;
 }
 
-static inline void arch_task_set_user_return(task_t *task, uint64_t ip,
+static inline void task_set_user_return(task_t *task, uint64_t ip,
 					     uint64_t sp, uint64_t flags)
 {
 	if (!task)
@@ -333,23 +333,23 @@ static inline void arch_task_set_user_return(task_t *task, uint64_t ip,
 #endif
 }
 
-static inline void arch_task_prepare_fork_child(arch_task_context_t *child,
+static inline void task_prepare_fork_child(arch_task_context_t *child,
 						const arch_task_context_t *parent)
 {
 	if (!child || !parent)
 		return;
 
-	arch_task_context_clone(child, parent);
+	task_context_clone(child, parent);
 	child->rax = 0;
 }
 
-static inline void arch_task_clear_frame_pointer(task_t *t)
+static inline void task_clear_frame_pointer(task_t *t)
 {
 	if (t)
 		t->arch.rbp = 0;
 }
 
-static inline void arch_task_set_frame_pointer(task_t *t, uint64_t fp)
+static inline void task_set_frame_pointer(task_t *t, uint64_t fp)
 {
 	if (t)
 		t->arch.rbp = fp;
@@ -419,7 +419,7 @@ static inline void task_set_arg2(task_t *t, uint64_t val)
 	task_set_rdx(t, val);
 }
 
-static inline void arch_task_set_user_segments(task_t *t)
+static inline void task_set_user_segments(task_t *t)
 {
 	if (!t)
 		return;
@@ -446,7 +446,7 @@ static inline int task_cs_is_user(const task_t *t)
 	return (task_get_cs(t) & 3u) != 0u;
 }
 
-static inline void arch_task_set_kernel_segments(task_t *t)
+static inline void task_set_kernel_segments(task_t *t)
 {
 	if (!t)
 		return;

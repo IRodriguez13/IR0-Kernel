@@ -14,11 +14,11 @@
 
 #include <stdint.h>
 
-void fase48_note_fd_created(void)
+void fd_slot_note_created(void)
 {
 }
 
-void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
+void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
 			 uint64_t *blocked_readers, uint64_t *blocked_writers)
 {
 	if (created)

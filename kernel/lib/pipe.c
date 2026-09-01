@@ -4,10 +4,10 @@
  * Copyright (C) 2025  Iván Rodriguez
  *
  * File: pipe.c
- * Description: IPC pipes — FASE49 FD/pipe lifetime + EOF/EPIPE semantics
+ * Description: IPC pipes — refcount, EOF/EPIPE, KTM lifecycle events
  */
 
-#include "pipe.h"
+#include <ir0/pipe.h>
 #include <ir0/kmem.h>
 #include <ir0/arch_cpu.h>
 #include <ir0/errno.h>
@@ -15,34 +15,17 @@
 #include <ir0/ktm/fault.h>
 #include <string.h>
 #include <config.h>
-static uint64_t fase48_pipe_created;
-static uint64_t fase48_pipe_destroyed;
-static uint64_t fase49_next_pipe_id = 1;
 
-static void fase49_pipe_line(pipe_t *pipe, const char *event)
-{
-	if (!pipe || !event)
-		return;
+static uint64_t pipe_stats_created;
+static uint64_t pipe_stats_destroyed;
+static uint64_t pipe_next_id = 1;
 
-}
-
-void pipe_fase49_fd_trace(uint32_t pid, int fd, pipe_t *pipe, int end,
-			  int refcount, const char *op)
-{
-	(void)pid;
-	(void)fd;
-	(void)pipe;
-	(void)end;
-	(void)refcount;
-	(void)op;
-}
-
-void pipe_fase48_get_stats(uint64_t *created, uint64_t *destroyed)
+void pipe_stats_get(uint64_t *created, uint64_t *destroyed)
 {
 	if (created)
-		*created = fase48_pipe_created;
+		*created = pipe_stats_created;
 	if (destroyed)
-		*destroyed = fase48_pipe_destroyed;
+		*destroyed = pipe_stats_destroyed;
 }
 
 pipe_t *pipe_create(void)
@@ -57,9 +40,13 @@ pipe_t *pipe_create(void)
 		return NULL;
 
 	memset(pipe, 0, sizeof(*pipe));
-	pipe->pipe_id = fase49_next_pipe_id++;
-	fase48_pipe_created++;
-	fase49_pipe_line(pipe, "CREATE");
+	{
+		unsigned long irq_flags = irq_save();
+
+		pipe->pipe_id = pipe_next_id++;
+		irq_restore(irq_flags);
+	}
+	pipe_stats_created++;
 	ktm_event_emit4(KTM_EVENT_PIPE_CREATE, KTM_SUBSYS_IPC, pipe->pipe_id, 0, 0, 0);
 	return pipe;
 }
@@ -70,17 +57,19 @@ pipe_t *pipe_create(void)
  */
 void pipe_acquire_end(pipe_t *pipe, int end)
 {
+	unsigned long irq_flags;
+
 	if (!pipe)
 		return;
 
 	if (end != 0 && end != 1)
 		return;
 
+	irq_flags = irq_save();
 	pipe->fd_refs++;
 	if (end == 0)
 	{
 		pipe->readers++;
-		/* Reopen after last closer: named FIFOs stay allocated. */
 		if (pipe->named)
 			pipe->closed_read = 0;
 	}
@@ -90,8 +79,8 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 		if (pipe->named)
 			pipe->closed_write = 0;
 	}
+	irq_restore(irq_flags);
 
-	fase49_pipe_line(pipe, "ACQUIRE");
 	ktm_event_emit4(KTM_EVENT_PIPE_END_ACQUIRE, KTM_SUBSYS_IPC,
 			pipe->pipe_id, (uint64_t)(uint32_t)end,
 			(uint64_t)(uint32_t)pipe->readers,
@@ -100,11 +89,14 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 
 void pipe_acquire(pipe_t *pipe)
 {
+	unsigned long irq_flags;
+
 	if (!pipe)
 		return;
 
+	irq_flags = irq_save();
 	pipe->fd_refs++;
-	fase49_pipe_line(pipe, "ACQUIRE");
+	irq_restore(irq_flags);
 }
 
 int pipe_read(pipe_t *pipe, void *buf, size_t count)
@@ -139,7 +131,6 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 
 		if ((int)writers_snapshot <= 0)
 		{
-			fase49_pipe_line(pipe, "EOF");
 			ktm_event_emit4(KTM_EVENT_PIPE_EOF, KTM_SUBSYS_IPC,
 					pipe->pipe_id,
 					(uint64_t)readers_snapshot,
@@ -236,6 +227,7 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 void pipe_close_end(pipe_t *pipe, int end)
 {
 	int last = 0;
+	unsigned long irq_flags;
 
 	if (!pipe)
 		return;
@@ -243,6 +235,7 @@ void pipe_close_end(pipe_t *pipe, int end)
 	if (end != 0 && end != 1)
 		return;
 
+	irq_flags = irq_save();
 	if (end == 0)
 	{
 		if (pipe->readers > 0)
@@ -258,18 +251,13 @@ void pipe_close_end(pipe_t *pipe, int end)
 			pipe->closed_write = 1;
 	}
 
-	/*
-	 * Free only on the 1→0 transition. fd_refs<=0 must not call kfree again
-	 * (stale pointer after a prior last-close → double-free panic).
-	 * Named FIFOs are owned by the inode table — never free here.
-	 */
 	if (pipe->fd_refs > 0)
 	{
 		pipe->fd_refs--;
 		last = (pipe->fd_refs == 0);
 	}
+	irq_restore(irq_flags);
 
-	fase49_pipe_line(pipe, "CLOSE");
 	ktm_event_emit4(KTM_EVENT_PIPE_END_CLOSE, KTM_SUBSYS_IPC, pipe->pipe_id,
 			(uint64_t)(uint32_t)end,
 			(uint64_t)(uint32_t)pipe->readers,
@@ -287,33 +275,38 @@ void pipe_close_end(pipe_t *pipe, int end)
 
 	if (last && !pipe->named)
 	{
-		fase49_pipe_line(pipe, "DESTROY");
-		fase48_pipe_destroyed++;
+		pipe_stats_destroyed++;
 		kfree(pipe);
 	}
 }
 
-void pipe_fase49_note_read_sleep(pipe_t *pipe)
+void pipe_ktm_note_read_sleep(pipe_t *pipe)
 {
-	fase49_pipe_line(pipe, "READ_SLEEP");
+	if (!pipe)
+		return;
+
+	ktm_event_emit4(KTM_EVENT_BLOCK, KTM_SUBSYS_IPC, pipe->pipe_id, 0,
+			(uint64_t)(uint32_t)pipe->writers, pipe->count);
 }
 
-void pipe_fase49_note_read_wake(pipe_t *pipe)
+void pipe_ktm_note_read_wake(pipe_t *pipe)
 {
-	fase49_pipe_line(pipe, "READ_WAKE");
-	if (pipe)
-		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 0,
-				(uint64_t)(uint32_t)pipe->writers,
-				(uint64_t)pipe->count);
+	if (!pipe)
+		return;
+
+	ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 0,
+			(uint64_t)(uint32_t)pipe->writers,
+			(uint64_t)pipe->count);
 }
 
-void pipe_fase49_note_write_wake(pipe_t *pipe)
+void pipe_ktm_note_write_wake(pipe_t *pipe)
 {
-	fase49_pipe_line(pipe, "WRITE_WAKE");
-	if (pipe)
-		ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 1,
-				(uint64_t)(uint32_t)pipe->readers,
-				(uint64_t)pipe->count);
+	if (!pipe)
+		return;
+
+	ktm_event_emit4(KTM_EVENT_PIPE_WAKE, KTM_SUBSYS_IPC, pipe->pipe_id, 1,
+			(uint64_t)(uint32_t)pipe->readers,
+			(uint64_t)pipe->count);
 }
 
 void pipe_abort_unopened(pipe_t *pipe)
@@ -321,15 +314,14 @@ void pipe_abort_unopened(pipe_t *pipe)
 	if (!pipe)
 		return;
 
-	fase49_pipe_line(pipe, "DESTROY");
-	fase48_pipe_destroyed++;
+	pipe_stats_destroyed++;
 	kfree(pipe);
 }
 
-extern void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
-				uint64_t *blocked_readers, uint64_t *blocked_writers);
+extern void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
+			      uint64_t *blocked_readers, uint64_t *blocked_writers);
 
-void pipe_fase49_classify(void)
+void pipe_ipc_lifecycle_audit(void)
 {
 	uint64_t created = 0;
 	uint64_t destroyed = 0;
@@ -337,19 +329,20 @@ void pipe_fase49_classify(void)
 	uint64_t fd_destroyed = 0;
 	uint64_t blocked_readers = 0;
 	uint64_t blocked_writers = 0;
-	const char *cls;
+	int pipe_ok;
+	int fd_ok;
 
-	pipe_fase48_get_stats(&created, &destroyed);
-	fase48_fd_get_stats(&fd_created, &fd_destroyed, &blocked_readers,
-			    &blocked_writers);
+	pipe_stats_get(&created, &destroyed);
+	fd_slot_stats_get(&fd_created, &fd_destroyed, &blocked_readers,
+			  &blocked_writers);
 
-	if (created == destroyed)
-		cls = "PIPE_READY";
-	else
-		cls = "PIPE_REF_LEAK";
-	(void)cls;
-	(void)fd_created;
-	(void)fd_destroyed;
+	pipe_ok = (created == destroyed);
+	fd_ok = (fd_created == fd_destroyed);
+
+	ktm_event_emit4(KTM_EVENT_CHECKPOINT, KTM_SUBSYS_IPC,
+			pipe_ok ? 1ULL : 0ULL,
+			fd_ok ? 1ULL : 0ULL,
+			created, destroyed);
 	(void)blocked_readers;
 	(void)blocked_writers;
 }

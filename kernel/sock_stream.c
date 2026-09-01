@@ -14,6 +14,7 @@
 #include <ir0/errno.h>
 #include <ir0/kmem.h>
 #include <ir0/ktm/fault.h>
+#include <ir0/arch_cpu.h>
 #include <config.h>
 #include <string.h>
 
@@ -283,9 +284,14 @@ int sock_stream_is_slot(const void *ptr)
 
 void sock_stream_acquire(struct sock_stream *s)
 {
+	unsigned long irq_flags;
+
 	if (!s || !s->in_use || s->magic != SS_MAGIC)
 		return;
+
+	irq_flags = irq_save();
 	s->fd_refs++;
+	irq_restore(irq_flags);
 }
 
 struct sock_stream *sock_stream_create(int family)
@@ -313,14 +319,20 @@ struct sock_stream *sock_stream_create(int family)
 
 void sock_stream_release(struct sock_stream *s)
 {
+	unsigned long irq_flags;
+
 	if (!s || !s->in_use)
 		return;
+
+	irq_flags = irq_save();
 	if (s->fd_refs > 1)
 	{
 		s->fd_refs--;
+		irq_restore(irq_flags);
 		return;
 	}
 	s->fd_refs = 0;
+	irq_restore(irq_flags);
 #if CONFIG_ENABLE_NETWORKING
 	if (s->family == IR0_AF_INET && s->state == SS_LISTEN && s->port != 0)
 		tcp_wire_listen_unregister(s->port);
@@ -771,13 +783,18 @@ ssize_t sock_stream_send(struct sock_stream *s, const void *buf, size_t len)
 		return -EPIPE;
 	if (peer->shut_rd)
 		return -EPIPE;
-	for (i = 0; i < len; i++)
 	{
-		if (peer->count >= SS_BUF)
-			break;
-		peer->buf[peer->head] = src[i];
-		peer->head = (peer->head + 1) % SS_BUF;
-		peer->count++;
+		unsigned long irq_flags = irq_save();
+
+		for (i = 0; i < len; i++)
+		{
+			if (peer->count >= SS_BUF)
+				break;
+			peer->buf[peer->head] = src[i];
+			peer->head = (peer->head + 1) % SS_BUF;
+			peer->count++;
+		}
+		irq_restore(irq_flags);
 	}
 	if (i > 0)
 		poll_wake_check();
@@ -825,27 +842,32 @@ ssize_t sock_stream_recv_flags(struct sock_stream *s, void *buf, size_t len, int
 
 	if (s->shut_rd)
 		return 0;
-	tail = s->tail;
-	count = s->count;
-	for (i = 0; i < len; i++)
 	{
-		if (count == 0)
-			break;
-		dst[i] = s->buf[tail];
-		tail = (tail + 1) % SS_BUF;
-		count--;
+		unsigned long irq_flags = irq_save();
+
+		tail = s->tail;
+		count = s->count;
+		for (i = 0; i < len; i++)
+		{
+			if (count == 0)
+				break;
+			dst[i] = s->buf[tail];
+			tail = (tail + 1) % SS_BUF;
+			count--;
+		}
+		if (!peek && i > 0)
+		{
+			s->tail = tail;
+			s->count = count;
+		}
+		irq_restore(irq_flags);
 	}
 	if (i == 0 && (!s->peer || s->peer->shut_wr))
 		return 0;
 	if (i == 0)
 		return -EAGAIN; /* caller may block; MSG_DONTWAIT keeps -EAGAIN */
-	if (!peek)
-	{
-		s->tail = tail;
-		s->count = count;
-		if (i > 0)
-			poll_wake_check();
-	}
+	if (i > 0)
+		poll_wake_check();
 	return (ssize_t)i;
 }
 

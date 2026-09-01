@@ -947,7 +947,7 @@ static int prefix##_mkdir(const char *path, mode_t mode) { return simplefs_mkdir
 static int prefix##_create(const char *path, mode_t mode) { return simplefs_create_common(fsName, path, mode); } \
 static int prefix##_unlink(const char *path) { return simplefs_unlink_common(fsName, path); } \
 static int prefix##_rmdir(const char *path) { return simplefs_rmdir_common(fsName, path); } \
-static int prefix##_link(const char *oldpath __attribute__((unused)), const char *newpath __attribute__((unused))) { return -ENOSYS; } \
+static int __attribute__((unused)) prefix##_link(const char *oldpath __attribute__((unused)), const char *newpath __attribute__((unused))) { return -ENOSYS; } \
 static int prefix##_chown(const char *path, uid_t owner, gid_t group) { return simplefs_chown_common(fsName, path, owner, group); } \
 static int prefix##_chmod(const char *path, mode_t mode) { return simplefs_chmod_common(fsName, path, mode); } \
 static int prefix##_readdir(const char *path, struct vfs_dirent *entries, int max) { return simplefs_readdir_common(fsName, path, entries, max); } \

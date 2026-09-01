@@ -1026,6 +1026,7 @@ static void rtl8139_process_rx_packets(void)
                         merge_heap = (uint8_t *)kmalloc(length);
                         if (!merge_heap)
                         {
+                            rtl8139_dev.rx_dropped++;
                             LOG_WARNING_FMT("RTL8139", "RX wrap: kmalloc(%u) failed, skipping packet", (unsigned int)length);
                             merge_buf = NULL;
                         }
@@ -1143,6 +1144,7 @@ void rtl8139_handle_interrupt(void)
         if (isr & (RTL8139_INT_RXOVW | RTL8139_INT_FIFOOVW))
         {
             rtl8139_counters.rx_errors++;
+            rtl8139_dev.rx_fifo_errors++;
             LOG_WARNING_FMT("RTL8139", "RX overflow ISR=0x%x — draining ring",
                             (unsigned)isr);
         }

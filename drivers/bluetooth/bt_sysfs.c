@@ -156,8 +156,11 @@ static int bt_sysfs_neighbors_fill(char *buf, size_t count,
  * @buf: Output buffer
  * @count: Buffer size
  *
- * One line per session when we have ACL/L2CAP sessions; for now "none" (no sessions).
- * Enables "blue session" to show sessions via syscall-only read.
+ * The HCI core tracks inquiry results only: there is no ACL/L2CAP connection
+ * object to enumerate, so this node cannot report a session count. It reports
+ * the unsupported state instead of an empty or zeroed list, which would read as
+ * "the link layer exists and has no sessions". One line per session
+ * ("sess0 ADDRESS ...") once connection management lands in hci_core.
  *
  * Returns: Bytes written on success, negative error on failure
  */
@@ -165,10 +168,8 @@ int bt_sysfs_sessions_read(char *buf, size_t count)
 {
     if (!buf || count == 0)
         return -EINVAL;
-    /*
-     * No ACL/L2CAP sessions yet; when we have them, list sess0, sess1, etc.
-     */
-    int n = snprintf(buf, count, "none\n");
+
+    int n = snprintf(buf, count, "unsupported: no ACL/L2CAP session layer\n");
     if (n < 0)
         return -EINVAL;
     if ((size_t)n >= count)

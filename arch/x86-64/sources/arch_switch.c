@@ -59,7 +59,7 @@ static int arch_task_user_gprs_leak_kstack(const task_t *t)
 	       arch_va_in_kstack_window(t->arch.r15);
 }
 
-void arch_set_current_kernel_stack(struct process *p)
+void set_current_kernel_stack(struct process *p)
 {
 	process_t *proc = (process_t *)p;
 
@@ -71,7 +71,7 @@ void arch_set_current_kernel_stack(struct process *p)
 	user_rsp_save = proc->saved_user_rsp;
 }
 
-void arch_switch_save_user_rsp(struct process *prev)
+void switch_save_user_rsp(struct process *prev)
 {
 	process_t *proc = (process_t *)prev;
 
@@ -223,12 +223,12 @@ void arch_switch_to(task_t *prev, task_t *next)
      */
     if (prev_proc)
         prev_proc->saved_user_rsp = user_rsp_save;
-    arch_set_current_kernel_stack(next_proc);
+    set_current_kernel_stack(next_proc);
 
     /*
      * IA32_FS_BASE is per-CPU. Child execve / ARCH_SET_FS writes the MSR
      * while current==child; wait4/pipe kernel_ret and some user-iret
-     * resumes never hit syscall sysret's arch_restore_user_fs_base.
+     * resumes never hit syscall sysret's restore_user_fs_base.
      * Parent ash then ran with FS=0 and the next TLS store #PF'd at
      * 0xffffffffffffffe2 (TP + negative TCB offset). Match ARM64:
      * always install next's saved base before the context switch.
@@ -487,7 +487,7 @@ void arch_switch_to(task_t *prev, task_t *next)
     if (next && next_proc && next_proc->mode == USER_MODE &&
         KTM_FAULT_HIT("sched.class_b_arm_window"))
     {
-		arch_task_set_kernel_segments(next);
+		task_set_kernel_segments(next);
 		task_set_ip(next, IR0_USER_RIP_LO + 0x1000ULL);
         if (!process_rip_in_user_range(task_get_sp(next)))
             task_set_sp(next, 0x00007FFFFFF0ULL);

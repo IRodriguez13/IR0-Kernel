@@ -20,7 +20,7 @@
 
 extern void switch_context_arm64(task_t *prev, task_t *next);
 
-void arch_set_current_kernel_stack(struct process *p)
+void set_current_kernel_stack(struct process *p)
 {
 	process_t *proc = (process_t *)p;
 
@@ -34,7 +34,7 @@ void arch_set_current_kernel_stack(struct process *p)
 	__asm__ volatile("msr sp_el1, %0" :: "r"(proc->kstack_top) : "memory");
 }
 
-void arch_switch_save_user_rsp(struct process *prev)
+void switch_save_user_rsp(struct process *prev)
 {
 	process_t *proc = (process_t *)prev;
 	uint64_t sp_el0;
@@ -58,14 +58,14 @@ void arch_switch_to(task_t *prev, task_t *next)
 	next_proc = task_to_process(next);
 
 	if (prev_proc)
-		arch_switch_save_user_rsp(prev_proc);
+		switch_save_user_rsp(prev_proc);
 
 	if (next_proc)
 	{
 		if (task_mm_root(next) == 0 && process_pgd(next_proc))
 			task_set_mm_root(next,
 					 (uint64_t)(uintptr_t)process_pgd(next_proc));
-		arch_set_current_kernel_stack(next_proc);
+		set_current_kernel_stack(next_proc);
 		/*
 		 * Always program SP_EL0 — skipping when saved_user_rsp==0 left
 		 * a stale value from the previous task (Bugbot).
@@ -97,7 +97,7 @@ uint64_t get_fs_base(void)
 	return base;
 }
 
-void arch_restore_user_fs_base(void)
+void restore_user_fs_base(void)
 {
 	if (current_process)
 		set_fs_base(process_tls_get(current_process));

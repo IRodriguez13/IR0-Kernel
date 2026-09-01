@@ -640,6 +640,8 @@ static void fase39_dump_current_vmas(const char *tag)
 {
   struct mmap_region *r;
 
+  (void)tag;
+
   if (!DEBUG_MMAP_AUDIT)
     return;
   if (!current_process)

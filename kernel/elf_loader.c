@@ -114,71 +114,6 @@ typedef struct
 #define ELF_AT_RANDOM_BYTES 16
 #define AT_CLKTCK_VALUE 100
 
-/*
- * Read user-space bytes from @pml4 without switching CR3.
- * Returns 0 on success, -1 if any page is unmapped.
- */
-static int elf_read_user_region_in_directory(uint64_t *pml4, uintptr_t src,
-                                             void *dst, size_t n)
-{
-    uint8_t *d = (uint8_t *)dst;
-
-    if (!pml4 || !dst)
-        return -1;
-
-    while (n > 0)
-    {
-        uintptr_t page = src & ~0xFFFULL;
-        size_t off = (size_t)(src & 0xFFFULL);
-        size_t chunk = PAGE_SIZE_4KB - off;
-        uint64_t *pte;
-        uintptr_t phys;
-
-        if (chunk > n)
-            chunk = n;
-
-        pte = paging_get_pte(pml4, page);
-        if (!pte || !(*pte & PAGE_PRESENT))
-            return -1;
-
-        phys = (uintptr_t)(*pte & PAGE_PTE_PFN_MASK);
-        memcpy(d, (const void *)(phys + off), chunk);
-
-        src += chunk;
-        d += chunk;
-        n -= chunk;
-    }
-
-    return 0;
-}
-
-static int elf_read_user_u64(uint64_t *pml4, uintptr_t src, uint64_t *out)
-{
-    return elf_read_user_region_in_directory(pml4, src, out, sizeof(*out));
-}
-
-static int elf_read_user_cstr_in_directory(uint64_t *pml4, uintptr_t src,
-                                           char *dst, size_t dst_size)
-{
-    size_t i;
-    uint8_t c;
-
-    if (!dst || dst_size == 0)
-        return -1;
-
-    for (i = 0; i < dst_size - 1; i++)
-    {
-        if (elf_read_user_region_in_directory(pml4, src + i, &c, 1) != 0)
-            return -1;
-        dst[i] = (char)c;
-        if (c == '\0')
-            return 0;
-    }
-
-    dst[dst_size - 1] = '\0';
-    return 0;
-}
-
 static void elf_trace_argv_contract(process_t *proc, const char *image_path,
                                     const char *stage)
 {
@@ -213,7 +148,7 @@ static int validate_elf_header(const elf64_header_t *header)
 
     /* Check 64-bit ELF for this kernel's e_machine. */
     if (header->e_ident[4] != ELFCLASS64 ||
-        !arch_elf_machine_supported(header->e_machine))
+        !elf_machine_supported(header->e_machine))
     {
         return 0;
     }
@@ -515,7 +450,7 @@ static process_t *elf_create_process(elf64_header_t *header, const char *path)
     
     /* Set entry point (will be adjusted after segments are loaded) */
     task_set_ip(&process->task, header->e_entry);
-    arch_task_set_user_segments(&process->task);
+    task_set_user_segments(&process->task);
 
     /* Stack window is USER_STACK_TOP (spawn_user / process_set_stack_layout). */
 
@@ -545,16 +480,15 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
 {
     if (!process || process->mode != USER_MODE)
         return -1;
-    
+
+    (void)builder_tag;
+
     /* Count arguments (cap to ELF_ARG_MAX) */
     int argc = 0;
     if (argv)
     {
         while (argc < ELF_ARG_MAX && argv[argc])
             argc++;
-    }
-    for (int i = 0; i < argc && i < 8; i++)
-    {
     }
 
     /* Count environment variables (cap to ELF_ARG_MAX) */
@@ -611,6 +545,14 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
             kfree(envp_ptrs);
         return -1;
     }
+
+    /*
+     * A NULL entry inside argv/envp leaves its slot untouched by the copy
+     * loops below, and kmalloc does not zero: without this the user-visible
+     * argv[] would carry a stale kernel-heap qword as a string pointer.
+     */
+    memset(argv_ptrs, 0, (size_t)(argc + 1) * sizeof(uint64_t));
+    memset(envp_ptrs, 0, (size_t)(envc + 1) * sizeof(uint64_t));
 
     uint64_t stack_top = process_stack_start(process) + process_stack_size(process);
     uint64_t stack_base = stack_top - stack_size;
@@ -805,7 +747,7 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
     ktm_user_canary_install(pml4, stack_top, (uint32_t)process->task.pid);
 
     task_set_sp(&process->task, argc_slot);
-    arch_task_set_frame_pointer(&process->task, argc_slot);
+    task_set_frame_pointer(&process->task, argc_slot);
 
     /* SysV entry: arg0=argc, arg1=argv, arg2=envp (x86 rdi/rsi/rdx, ARM x0/x1/x2). */
     task_set_arg0(&process->task, (uint64_t)argc);
@@ -820,20 +762,6 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
     elf_trace_entry_stack_layout(process, header, at_phdr, at_base, "elf_setup_stack-final");
     
     return 0;
-}
-
-static uint64_t fase41_count_vmas(const process_t *proc)
-{
-    uint64_t count = 0;
-    const struct mmap_region *r;
-
-    if (!proc)
-        return 0;
-
-    for (r = process_mmap_list(proc); r; r = r->next)
-        count++;
-
-    return count;
 }
 
 /**
@@ -1215,8 +1143,6 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     size_t used_frames_before = 0;
     size_t total_frames_after = 0;
     size_t used_frames_after = 0;
-    uint64_t vmas_before = 0;
-    uint64_t vmas_after = 0;
     struct exec_setid setid;
 
     if (!proc || proc->mode != USER_MODE || !path)
@@ -1234,7 +1160,6 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     paging_ir0_mm_checkpoint("exec-before", (int32_t)proc->task.pid);
     process_fase44_list_checkpoint("exec-before");
     pmm_stats(&total_frames_before, &used_frames_before, NULL);
-    vmas_before = fase41_count_vmas(proc);
 
     klog_debug_fmt("ELF", "SERIAL: ELF: exec_replace_current: %s", path);
 
@@ -1409,7 +1334,7 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
 
     task_set_ip(&proc->task, header->e_entry);
     exec_commit_ctx.entry_rip = header->e_entry;
-    arch_task_set_user_segments(&proc->task);
+    task_set_user_segments(&proc->task);
     task_set_flags(&proc->task, ir0_rflags_sanitize_user(RFLAGS_IF));
 
     /*
@@ -1431,7 +1356,6 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
 
     kfree(file_data);
     pmm_stats(&total_frames_after, &used_frames_after, NULL);
-    vmas_after = fase41_count_vmas(proc);
     paging_ir0_mm_checkpoint("exec-after", (int32_t)proc->task.pid);
     process_fase44_list_checkpoint("exec-after");
 

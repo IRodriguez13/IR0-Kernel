@@ -12,7 +12,7 @@
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-#include "named_devnode.h"
+#include <ir0/named_devnode.h>
 #include <ir0/errno.h>
 #include <ir0/path.h>
 #include <ir0/types.h>

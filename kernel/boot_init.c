@@ -112,8 +112,8 @@ void boot_memory_serial(uint32_t multiboot_info)
 	{
 		char hv_vendor[16];
 
-		if (arch_hypervisor_present() &&
-		    arch_hypervisor_vendor(hv_vendor, sizeof(hv_vendor)) == 0)
+		if (hypervisor_present() &&
+		    hypervisor_vendor(hv_vendor, sizeof(hv_vendor)) == 0)
 		{
 			if (strncmp(hv_vendor, "TCGTCGTCGTCG", 12) == 0)
 				ir0_boot_info("HYPERVISOR",
@@ -207,7 +207,7 @@ void boot_drivers_rootfs(void)
 	vfs_init_root();
 	log_subsystem_ok("FILESYSTEM");
 
-	if (!arch_hypervisor_present())
+	if (!hypervisor_present())
 	{
 		stat_t st;
 		struct vfs_file *f = NULL;

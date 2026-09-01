@@ -368,13 +368,6 @@ tmpfs_inode_t *tmpfs_find_inode(const char *path)
     const char *rel_path = tmpfs_get_relative_path(path, tmpfs->mount_point);
     return tmpfs_lookup_inode(tmpfs, rel_path);
 }
-
-uint32_t tmpfs_get_inode_number(const char *path)
-{
-    tmpfs_inode_t *inode = tmpfs_find_inode(path);
-    return inode ? inode->ino : 0;
-}
-
 int tmpfs_stat(const char *path, stat_t *buf)
 {
     if (!path || !buf)

@@ -14,8 +14,8 @@
 
 #include "process_internal.h"
 #include <ir0/process_ctx_invariant.h>
-#include <ir0/arch_task_ops.h>
-#include <ir0/arch_syscall_frame.h>
+#include <ir0/task_ops.h>
+#include <ir0/syscall_frame.h>
 #include <ir0/ktm/event.h>
 
 static pid_t next_pid = 2;
@@ -153,14 +153,14 @@ void irq_save_user_frame(uint64_t *frame)
 	if (!p || p->mode != USER_MODE)
 		return;
 
-	if (!arch_irq_frame_is_user(frame))
+	if (!irq_frame_is_user(frame))
 		return;
 
 #if CONFIG_DEBUG_ISRABI
 	klog_debug_fmt("ISR", "[ISRABI][IRQ_SAVE] pid=%x src_int=%llx src_err=%llx src_rip=%llx src_cs=%llx src_rflags=%llx src_rsp=%llx src_ss=%llx", (unsigned)(current_process ? (uint32_t)current_process->task.pid : 0), (unsigned long long)(frame[0]), (unsigned long long)(frame[1]), (unsigned long long)(frame[2]), (unsigned long long)(frame[3]), (unsigned long long)(frame[4]), (unsigned long long)(frame[5]), (unsigned long long)(frame[6]));
 #endif
 
-	arch_task_save_irq_user_frame(&p->task, frame);
+	task_save_irq_user_frame(&p->task, frame);
 
 #if CONFIG_DEBUG_ISRABI
 	klog_debug_fmt("ISR", "[ISRABI][IRQ_SAVE] task_rip=%llx task_rsp=%llx task_cs=%llx task_ss=%llx task_rflags=%llx", (unsigned long long)(task_get_ip(&p->task)), (unsigned long long)(task_get_sp(&p->task)), (unsigned long long)((uint64_t)task_get_cs(&p->task)), (unsigned long long)((uint64_t)task_get_ss(&p->task)), (unsigned long long)(task_get_flags(&p->task)));
@@ -217,7 +217,7 @@ int process_validate_userspace_buffer(const void *buf, size_t size)
  */
 void process_capture_syscall_frame_at_entry(uint64_t *frame_base, uint64_t rip_hw)
 {
-	arch_process_capture_syscall_frame_at_entry(current_process, frame_base,
+	syscall_capture_frame_at_entry(current_process, frame_base,
 						    rip_hw);
 }
 
@@ -234,13 +234,13 @@ void process_sync_task_user_ip_from_syscall_frame(process_t *p)
 		return;
 
 	sf = &p->syscall_frame;
-	arch_task_sync_syscall_soft_mirror(&p->task, sf);
+	task_sync_syscall_soft_mirror(&p->task, sf);
 }
 
 void process_capture_syscall_frame(process_t *p)
 {
 	/*
-	 * Capture is at syscall entry (arch_process_capture_syscall_frame_at_entry).
+	 * Capture is at syscall entry (syscall_capture_frame_at_entry).
 	 * Dispatch still calls this; keep it as a documented no-op.
 	 */
 	(void)p;
@@ -255,12 +255,12 @@ void process_apply_syscall_frame_to_task(task_t *task, const syscall_user_frame_
 		return;
 
 	syscall_frame_to_arch(sf, &arch_sf);
-	arch_task_apply_syscall_frame(task, &arch_sf, rax);
+	task_apply_syscall_frame(task, &arch_sf, rax);
 }
 
 void process_syscall_restore_exit_regs(uint64_t *stack_r9_slot)
 {
-	arch_process_syscall_restore_exit_regs(current_process, stack_r9_slot);
+	syscall_restore_exit_regs(current_process, stack_r9_slot);
 }
 
 void process_arm_blocked_syscall_resume(process_t *p, uint64_t rax)
@@ -336,7 +336,7 @@ void process_reset_blocked_syscall_state(process_t *p)
 
 static void process_apply_kernel_ret_segments(process_t *p)
 {
-	arch_task_apply_kernel_segments(&p->task);
+	task_apply_kernel_segments(&p->task);
 }
 
 /*
@@ -405,12 +405,12 @@ void process_restore_user_task_segments(process_t *p)
 
 	p->want_kernel_ret = 0;
 	p->kernel_syscall_sleep = 0;
-	arch_task_apply_user_segments(&p->task);
+	task_apply_user_segments(&p->task);
 }
 
 
 void process_save_user_context_from_irq_frame(uint64_t *gpr_stack)
 {
-	arch_process_save_user_context_from_irq(gpr_stack);
+	syscall_save_user_context_from_irq(gpr_stack);
 }
 

@@ -22,6 +22,8 @@ void process_release_fds(process_t *p, const char *pipe_trace_op)
 	fd_entry_t *table;
 	int i;
 
+	(void)pipe_trace_op;
+
 	if (!p || !p->files)
 		return;
 
@@ -83,9 +85,7 @@ void process_release_fds(process_t *p, const char *pipe_trace_op)
 		{
 			pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)e->vfs_file;
 
-			if (bind->refs > 0)
-				bind->refs--;
-			if (bind->refs == 0)
+			if (pseudo_fd_bind_release(bind))
 			{
 				(void)pseudo_fs_release_ops(
 					(const pseudo_fs_ops_t *)bind->ops,

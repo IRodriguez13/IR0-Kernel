@@ -14,14 +14,15 @@
 #include <ir0/arch_port.h>
 #include <ir0/debug_runtime.h>
 #include <ir0/kmem.h>
+#include <ir0/ktm/event.h>
 #include <ir0/paging.h>
 #include <ir0/pipe.h>
 #include <ir0/pmm.h>
 #include <ir0/serial_io.h>
 #include <string.h>
 
-extern void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
-				uint64_t *blocked_readers, uint64_t *blocked_writers);
+extern void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
+			      uint64_t *blocked_readers, uint64_t *blocked_writers);
 
 #if IR0_DEBUG_PROC
 
@@ -414,8 +415,8 @@ void process_fase48_ipc_summary(const char *tag)
 	if (init)
 		fd_after = process_count_open_fds(init);
 
-	pipe_fase48_get_stats(&pipe_created, &pipe_destroyed);
-	fase48_fd_get_stats(&fd_created, &fd_destroyed, &blocked_readers,
+	pipe_stats_get(&pipe_created, &pipe_destroyed);
+	fd_slot_stats_get(&fd_created, &fd_destroyed, &blocked_readers,
 			    &blocked_writers);
 
 	if (!fase48_fd_baseline && init)
@@ -687,12 +688,43 @@ void process_fase44_live_summary(const char *tag)
 	(void)tag;
 }
 
-void fase_audit_note_proc_created(void) { fase43_proc_created++; }
-void fase_audit_note_proc_exited(void) { fase43_proc_exited++; }
-void fase_audit_note_proc_zombie(void) { fase43_proc_zombie++; }
-void fase_audit_note_proc_destroyed(void) { fase43_proc_destroyed++; }
-void fase_audit_note_reparent(void) { fase43_reparent_events++; }
-void fase_audit_note_reap_event(void) { fase43_reap_events++; }
+void fase_audit_note_proc_created(void)
+{
+	process_t *cur = process_get_current();
+
+	fase43_proc_created++;
+	ktm_event_emit4(KTM_EVENT_PROCESS_CREATE, KTM_SUBSYS_PROC,
+			cur ? (uint64_t)(uint32_t)cur->task.pid : 0ULL,
+			fase43_proc_created, 0ULL, 0ULL);
+}
+void fase_audit_note_proc_exited(void)
+{
+	fase43_proc_exited++;
+	ktm_event_emit4(KTM_EVENT_PROCESS_EXIT, KTM_SUBSYS_PROC,
+			(uint64_t)fase43_proc_exited, 0ULL, 0ULL, 0ULL);
+}
+void fase_audit_note_proc_zombie(void)
+{
+	fase43_proc_zombie++;
+	ktm_event_emit4(KTM_EVENT_PROCESS_EXIT, KTM_SUBSYS_PROC,
+			(uint64_t)fase43_proc_zombie, 1ULL, 0ULL, 0ULL);
+}
+void fase_audit_note_proc_destroyed(void)
+{
+	fase43_proc_destroyed++;
+	ktm_event_emit4(KTM_EVENT_PROCESS_REAP, KTM_SUBSYS_PROC,
+			(uint64_t)fase43_proc_destroyed, 0ULL, 0ULL, 0ULL);
+}
+void fase_audit_note_reparent(void)
+{
+	fase43_reparent_events++;
+}
+void fase_audit_note_reap_event(void)
+{
+	fase43_reap_events++;
+	ktm_event_emit4(KTM_EVENT_PROCESS_REAP, KTM_SUBSYS_PROC,
+			(uint64_t)fase43_reap_events, 1ULL, 0ULL, 0ULL);
+}
 void fase_audit_note_fork_rollback(void) { fase45_fork_rollback++; }
 void fase_audit_note_scheduled(void) { fase46_scheduled++; }
 

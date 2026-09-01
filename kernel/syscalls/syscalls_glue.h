@@ -47,7 +47,7 @@ static inline int fd_alloc_lowest(fd_entry_t *fd_table, int from)
 void ensure_devfs_init(void);
 int stdio_is_redirected(fd_entry_t *fd_table, int fd);
 int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read);
-void fase48_note_fd_created(void);
+void fd_slot_note_created(void);
 
 /* Resolve user path against dirfd (Linux openat/fstatat subset). */
 int ir0_resolve_path_at(int dirfd, const char *user_path, char *resolved,

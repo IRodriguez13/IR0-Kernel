@@ -15,17 +15,17 @@
 #include <ir0/arch_mm.h>
 #include <mm/paging.h>
 
-unsigned arch_mm_user_root_slots(void)
+unsigned mm_user_root_slots(void)
 {
 	return 256;
 }
 
-unsigned arch_mm_root_slots(void)
+unsigned mm_root_slots(void)
 {
 	return 512;
 }
 
-void arch_mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
+void mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
 {
 	unsigned i;
 	unsigned user_slots;
@@ -34,8 +34,8 @@ void arch_mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
 	if (!dst_root || !src_root)
 		return;
 
-	user_slots = arch_mm_user_root_slots();
-	total = arch_mm_root_slots();
+	user_slots = mm_user_root_slots();
+	total = mm_root_slots();
 	for (i = user_slots; i < total; i++)
 	{
 		if (src_root[i] & PAGE_PRESENT)

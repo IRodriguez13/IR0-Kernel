@@ -26,9 +26,11 @@ Checks:
 16) includes/ir0/*.h must not #include <arch/...> or <sched/...> (facade seal).
 17) process_t.page_directory must not be touched outside process.h /
     mm_struct.c — use process_pgd() / process_set_pgd() (mm->page_directory OK).
+18) kernel/lib I1–I2: selected syscall/MM/IPC helpers must not remain as .c under includes/ir0/.
 """
 
 from pathlib import Path
+import json
 import sys
 import re
 
@@ -768,7 +770,7 @@ def check_portable_no_isa_leak_literals():
                 if PORTABLE_CR2_RE.search(line):
                     errors.append(
                         f"[portable-no-cr2] {rel}:{idx}: use "
-                        f"arch_page_fault_decode(); no CR2 in portable code: "
+                        f"page_fault_decode(); no CR2 in portable code: "
                         f"{line.strip()}"
                     )
                 if PORTABLE_IRETQ_SYSRET_ASM_RE.search(line):
@@ -975,6 +977,186 @@ def check_syscall_frame_accessor():
     return errors
 
 
+def check_subsystems_json_paths():
+    """Fail if subsystems.json names sources or subsystems that do not exist.
+
+    The Kconfig generator only warns on a stale path and then emits its object
+    anyway, so rot here surfaced as a link error or as a menu entry that builds
+    nothing. Seven paths had already gone stale before this check existed.
+    """
+    errors = []
+    manifest = ROOT / "scripts" / "kconfig" / "subsystems.json"
+    if not manifest.is_file():
+        return errors
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [f"[subsystems-json] {manifest}: unreadable: {exc}"]
+
+    subsystems = data.get("subsystems", {})
+    for sid, entry in subsystems.items():
+        for arch, files in (entry.get("files") or {}).items():
+            for rel in files:
+                if not (ROOT / rel).is_file():
+                    errors.append(
+                        f"[subsystems-json] {sid}[{arch}]: missing source {rel}"
+                    )
+        for dep in entry.get("dependencies") or []:
+            if dep not in subsystems:
+                errors.append(
+                    f"[subsystems-json] {sid}: depends on undefined subsystem {dep}"
+                )
+
+    # Profiles and the layer diagram may not offer a subsystem that is gone.
+    for pid, profile in (data.get("profiles") or {}).items():
+        for sid in profile.get("subsystems") or []:
+            if sid not in subsystems:
+                errors.append(
+                    f"[subsystems-json] profile {pid}: undefined subsystem {sid}"
+                )
+    for layer in (data.get("architecture") or {}).get("layers") or []:
+        for sid in layer.get("subsystems") or []:
+            if sid not in subsystems:
+                errors.append(
+                    f"[subsystems-json] layer {layer.get('name')}: "
+                    f"undefined subsystem {sid}"
+                )
+    return errors
+
+
+KERNEL_LIB_I1_SOURCES = (
+    "open_flags.c",
+    "stat_user.c",
+    "path_user.c",
+    "utimens.c",
+    "exec_read_trace.c",
+    "mm_port.c",
+    "pipe.c",
+    "copy_user.c",
+    "oops.c",
+    "signals.c",
+    "named_fifo.c",
+)
+
+
+def check_includes_ir0_no_c_sources():
+    """includes/ir0/ must not host .c implementations (kernel/lib/ only)."""
+    errors = []
+    inc = ROOT / "includes" / "ir0"
+    if not inc.is_dir():
+        return errors
+    for fpath in inc.rglob("*.c"):
+        errors.append(
+            f"[includes-migration] {fpath.relative_to(ROOT)}: "
+            f"move implementation to kernel/lib/ or subsystem tree"
+        )
+    return errors
+
+
+ARCH_PUBLIC_CALL_RE = re.compile(r"\barch_[a-z_][a-z0-9_]*\s*\(")
+PORTABLE_ARCH_CALL_ALLOW = {
+    "sched/switch/arch_context_switch.c": {
+        "arch_switch_to",
+        "arch_report_bad_kernel_ret_rip",
+    },
+}
+
+
+def check_portable_no_arch_prefix_calls():
+    """Portable code must not call arch_*(); use simple facades (PORT-2..4)."""
+    errors = []
+    trees = list(PORTABLE_PORT1_TREES) + [ROOT / "kernel" / "lib", ROOT / "interrupt"]
+    for base in trees:
+        if not base.is_dir():
+            continue
+        for fpath in iter_c_files(base):
+            try:
+                rel = fpath.relative_to(ROOT)
+                rel_s = str(rel).replace("\\", "/")
+            except ValueError:
+                continue
+            allow = PORTABLE_ARCH_CALL_ALLOW.get(rel_s, set())
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                for m in ARCH_PUBLIC_CALL_RE.finditer(line):
+                    name = m.group(0).split("(")[0].strip()
+                    if name in allow:
+                        continue
+                    errors.append(
+                        f"[portable-no-arch-call] {rel_s}:{idx}: "
+                        f"use simple facade, not {name}()"
+                    )
+    return errors
+
+
+def check_kernel_lib_i1_migration():
+    """kernel/lib holds migrated facade implementations; none left under includes/ir0/."""
+    errors = []
+    lib_dir = ROOT / "kernel" / "lib"
+    inc_dir = ROOT / "includes" / "ir0"
+    if not lib_dir.is_dir():
+        errors.append("[includes-migration] missing kernel/lib/")
+        return errors
+    for fpath in sorted(lib_dir.glob("*.c")):
+        name = fpath.name
+        if (inc_dir / name).is_file():
+            errors.append(
+                f"[includes-migration] duplicate {inc_dir / name}; "
+                f"remove includes/ir0 copy"
+            )
+    return errors
+
+
+ARCH_MM_LEGACY_RE = re.compile(
+    r"\barch_mm_(?:user_root_slots|root_slots|copy_kernel_half)\s*\("
+)
+ARCH_PF_LEGACY_RE = re.compile(
+    r"\barch_page_fault_(?:decode|info)\b|\bstruct arch_page_fault_info\b"
+)
+PORTABLE_PORT1_TREES = [
+    ROOT / "mm",
+    ROOT / "kernel" / "process",
+    ROOT / "fs",
+    ROOT / "net",
+    ROOT / "sched",
+]
+
+
+def check_portable_port1_no_legacy_arch_mm():
+    """PORT-1: portable code uses mm_* / page_fault_* facades, not arch_mm_* / arch_page_fault_*."""
+    errors = []
+    for base in PORTABLE_PORT1_TREES:
+        if not base.is_dir():
+            continue
+        for fpath in iter_c_files(base):
+            try:
+                rel = fpath.relative_to(ROOT)
+            except ValueError:
+                continue
+            try:
+                text = fpath.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            if ARCH_MM_LEGACY_RE.search(text):
+                errors.append(
+                    f"[portable-port1-mm] {rel}: use mm_user_root_slots / "
+                    f"mm_copy_kernel_half (arch_mm.h)"
+                )
+            if ARCH_PF_LEGACY_RE.search(text):
+                errors.append(
+                    f"[portable-port1-pf] {rel}: use page_fault_decode / "
+                    f"struct page_fault_info (arch_page_fault.h)"
+                )
+    return errors
+
+
 def main():
     errors = []
     errors.extend(check_forbidden_includes())
@@ -1003,6 +1185,11 @@ def main():
     errors.extend(check_process_pgd_accessor())
     errors.extend(check_syscall_frame_accessor())
     errors.extend(check_asm_offsets_sync())
+    errors.extend(check_subsystems_json_paths())
+    errors.extend(check_kernel_lib_i1_migration())
+    errors.extend(check_includes_ir0_no_c_sources())
+    errors.extend(check_portable_port1_no_legacy_arch_mm())
+    errors.extend(check_portable_no_arch_prefix_calls())
 
     if errors:
         print("[arch-guard] FAILED")

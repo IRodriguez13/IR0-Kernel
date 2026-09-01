@@ -24,7 +24,7 @@ static void arm64_copy_exc_gprs(arch_syscall_frame_t *sf, const uint64_t *frame)
 	memcpy(&sf->x0, frame, 31 * sizeof(uint64_t));
 }
 
-void arch_process_capture_syscall_frame_at_entry(struct process *p,
+void syscall_capture_frame_at_entry(struct process *p,
 						 uint64_t *frame_base,
 						 uint64_t rip_hw)
 {
@@ -52,7 +52,7 @@ void arch_process_capture_syscall_frame_at_entry(struct process *p,
 	process_sync_task_user_ip_from_syscall_frame(p);
 }
 
-void arch_process_syscall_restore_exit_regs(struct process *p,
+void syscall_restore_exit_regs(struct process *p,
 					    uint64_t *stack_r9_slot)
 {
 	const arch_syscall_frame_t *sf;
@@ -68,7 +68,7 @@ void arch_process_syscall_restore_exit_regs(struct process *p,
 	__asm__ volatile("msr sp_el0, %0" :: "r"(sf->sp) : "memory");
 }
 
-int arch_irq_frame_is_user(const uint64_t *iretq_frame)
+int irq_frame_is_user(const uint64_t *iretq_frame)
 {
 	uint64_t spsr;
 
@@ -81,24 +81,13 @@ int arch_irq_frame_is_user(const uint64_t *iretq_frame)
 	return ((spsr & 0xfu) == 0u) ? 1 : 0;
 }
 
-void arch_process_save_user_context_from_irq(uint64_t *gpr_stack)
+void syscall_save_user_context_from_irq(uint64_t *gpr_stack)
 {
 	/*
 	 * vectors.S exc_entry_frame: x0 at [0] … x30 at [30]. Same pointer
-	 * shape as irq_save_user_frame / arch_task_save_irq_user_frame.
+	 * shape as irq_save_user_frame / task_save_irq_user_frame.
 	 */
 	if (!gpr_stack)
 		return;
 	irq_save_user_frame(gpr_stack);
-}
-
-int arch_task_setup_kernel_stack(task_t *task, void *stack_base,
-				 size_t stack_size, void (*entry)(void *))
-{
-	if (!task || !stack_base || !entry || stack_size < 64)
-		return -EINVAL;
-
-	task_set_sp(task, (uint64_t)((uintptr_t)stack_base + stack_size));
-	task_set_ip(task, (uint64_t)(uintptr_t)entry);
-	return 0;
 }

@@ -17,10 +17,11 @@
 #include <ir0/paging.h>
 #include <ir0/pmm.h>
 #include <ir0/fcntl.h>
+#include <ir0/arch_cpu.h>
 #include <string.h>
 
 extern fd_entry_t *get_process_fd_table(void);
-extern void fase48_note_fd_created(void);
+extern void fd_slot_note_created(void);
 
 #define MEMFD_MAX 16
 #define MEMFD_MAX_PAGES 1024
@@ -56,8 +57,14 @@ int ir0_memfd_is(const void *ptr)
 
 void ir0_memfd_acquire(struct ir0_memfd *m)
 {
-	if (m && ir0_memfd_is(m))
-		m->refs++;
+	unsigned long irq_flags;
+
+	if (!m || !ir0_memfd_is(m))
+		return;
+
+	irq_flags = irq_save();
+	m->refs++;
+	irq_restore(irq_flags);
 }
 
 static void memfd_free_frames(struct ir0_memfd *m)
@@ -79,11 +86,19 @@ static void memfd_free_frames(struct ir0_memfd *m)
 
 void ir0_memfd_release(struct ir0_memfd *m)
 {
+	unsigned long irq_flags;
+	int last;
+
 	if (!m || !ir0_memfd_is(m))
 		return;
+
+	irq_flags = irq_save();
 	if (m->refs > 0)
 		m->refs--;
-	if (m->refs > 0)
+	last = (m->refs == 0);
+	irq_restore(irq_flags);
+
+	if (!last)
 		return;
 	memfd_free_frames(m);
 	memset(m, 0, sizeof(*m));
@@ -237,7 +252,7 @@ int ir0_memfd_install_fd(struct ir0_memfd *m, int open_flags, int cloexec)
 	tab[fd].flags = open_flags;
 	if (cloexec)
 		tab[fd].fd_flags = FD_CLOEXEC;
-	fase48_note_fd_created();
+	fd_slot_note_created();
 	return fd;
 }
 

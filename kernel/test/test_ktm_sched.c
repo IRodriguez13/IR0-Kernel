@@ -44,42 +44,12 @@ void ktest_process_reset_blocked_syscall_state(void)
 	KTEST_END();
 }
 
-void ktest_pause_eintr(void)
-{
-	uint32_t saved_pending;
-
-	KTEST_BEGIN("pause_eintr");
-
-	KASSERT(current_process != NULL);
-
-	saved_pending = current_process->signal_pending;
-	current_process->signal_pending = (1U << SIGINT);
-
-	KASSERT_EQ(sys_pause(), -EINTR);
-
-	current_process->signal_pending = saved_pending;
-
-	KTEST_END();
-}
-
-void ktest_poll_resume_invariant(void)
-{
-	process_t p;
-
-	KTEST_BEGIN("poll_resume_invariant");
-
-	memset(&p, 0, sizeof(p));
-	p.poll_resume_via_arch = 1;
-	p.poll_waiter = (void *)(uintptr_t)0x1;
-	p.irq_frame_saved = 1;
-	KASSERT(p.poll_waiter != NULL);
-	KASSERT(!p.poll_resume_via_arch || p.poll_waiter != NULL);
-
-	memset(&p, 0, sizeof(p));
-	p.irq_frame_saved = 1;
-	p.poll_waiter = NULL;
-	p.poll_resume_via_arch = 0;
-	KASSERT(!p.poll_resume_via_arch || p.poll_waiter != NULL);
-
-	KTEST_END();
-}
+/*
+ * pause(2) returning -EINTR is deliberately not covered in-kernel. Posting a
+ * pending signal and calling sys_pause() from the ktest process does reach the
+ * interrupt path, but that path then runs handle_signals(), and every signal
+ * that satisfies the predicate without a userspace handler has a default
+ * action of terminate: the runner process dies mid-suite instead of the call
+ * returning. Covering this needs a userspace smoke that installs a handler
+ * first, the way BusyBox does.
+ */

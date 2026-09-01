@@ -135,6 +135,31 @@ int ir0_console_set_fg_pgid(int32_t pgid)
 	return 0;
 }
 
+int ir0_console_ioctl_set_ctty(void)
+{
+	int32_t pgid;
+
+	if (!current_process)
+		return -ESRCH;
+
+	/*
+	 * Linux TIOCSCTTY requires the caller to be a session leader; the
+	 * console is the only tty of the boot session, so binding it means
+	 * adopting the caller's process group as foreground.
+	 *
+	 * ARCH_DEBT: the console keeps no per-session ctty state, so the
+	 * "already controlling terminal of another session" case (-EPERM
+	 * without the force argument) cannot be detected yet.
+	 */
+	if (current_process->sid != (pid_t)current_process->task.pid)
+		return -EPERM;
+
+	pgid = current_process->pgid > 0 ? (int32_t)current_process->pgid
+					: (int32_t)current_process->task.pid;
+	(void)ir0_console_set_fg_pgid(pgid);
+	return 0;
+}
+
 int32_t ir0_console_get_fg_pgid(void)
 {
 	if (console_fg_pgid > 0)
@@ -725,6 +750,17 @@ int tty_ioctl_termios_kernel(uint64_t request, struct ir0_termios *ktermios)
 		int was_icanon = tty_icanon_on();
 		int now_icanon;
 
+		/*
+		 * Leaving raw: the kbd ring is the raw LD readq. Drain it before
+		 * committing ICANON so tty_flush_input() (which only clears the
+		 * ring while !ICANON) does not leave stale ESC/NL for the next
+		 * raw session. Linux flushes the LD buffer, not i8042, on the
+		 * equivalent termios path.
+		 */
+		now_icanon = (ktermios->c_lflag & IR0_LFLAG_ICANON) ? 1 : 0;
+		if (!was_icanon && now_icanon)
+			input_kbd_clear();
+
 		tty_termios = *ktermios;
 		/*
 		 * Do NOT force ICANON when VMIN==0: nano and other editors use
@@ -737,7 +773,7 @@ int tty_ioctl_termios_kernel(uint64_t request, struct ir0_termios *ktermios)
 			tty_termios.c_iflag |= IR0_IFLAG_ICRNL;
 		tty_termios_ready = 1;
 		/*
-		 * Mode flip or TCSETSF: drop pending input so raw↔cooked does
+		 * Mode flip or TCSETSF: drop pending LD input so raw↔cooked does
 		 * not replay stale NL/ESC bytes (empty-prompt storms).
 		 */
 		if (request == IR0_CONSOLE_TCSETSF || was_icanon != now_icanon)
@@ -760,7 +796,14 @@ int tty_input_bytes_available(void)
 
 void tty_flush_input(void)
 {
-	input_kbd_clear();
+	/*
+	 * Line discipline only. The keyboard ring is the raw (!ICANON) readq;
+	 * in cooked mode it is not filled and must not be reset from termios
+	 * (TCFLSH/TCSETSF) — that races the IRQ1 producer (login garbage).
+	 * Linux n_tty_flush_buffer does not empty i8042.
+	 */
+	if (!tty_icanon_on())
+		input_kbd_clear();
 	canon_line_len = 0;
 	canon_readq_len = 0;
 	canon_readq_pos = 0;

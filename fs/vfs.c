@@ -13,6 +13,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include "vfs.h"
+#include <ir0/arch_cpu.h>
 #if CONFIG_ENABLE_FS_MINIX
 #include "minix_fs.h"
 #endif
@@ -1044,23 +1045,36 @@ int vfs_pwrite(struct vfs_file *f, const char *buf, size_t count, off_t offset)
 
 int vfs_close(struct vfs_file *f)
 {
-    if (!f)
-        return -EBADF;
-    if (f->ref_count > 0)
-        f->ref_count--;
-    if (f->ref_count <= 0) {
-        /* Last reference to the description: its flock(2) lock dies with it. */
-        ir0_flock_release_file(f);
-        kfree(f);
-    }
-    return 0;
+	unsigned long irq_flags;
+	int last;
+
+	if (!f)
+		return -EBADF;
+
+	irq_flags = irq_save();
+	if (f->ref_count > 0)
+		f->ref_count--;
+	last = (f->ref_count <= 0);
+	irq_restore(irq_flags);
+
+	if (!last)
+		return 0;
+	/* Last reference to the description: its flock(2) lock dies with it. */
+	ir0_flock_release_file(f);
+	kfree(f);
+	return 0;
 }
 
 void vfs_file_acquire(struct vfs_file *f)
 {
-    if (!f)
-        return;
-    f->ref_count++;
+	unsigned long irq_flags;
+
+	if (!f)
+		return;
+
+	irq_flags = irq_save();
+	f->ref_count++;
+	irq_restore(irq_flags);
 }
 
 off_t vfs_lseek(struct vfs_file *f, off_t offset, int whence)

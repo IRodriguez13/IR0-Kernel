@@ -347,7 +347,6 @@ void process_wait_wake_blocked_parent(process_t *parent, process_t *child)
 {
 	int status_val;
 	int *status_ptr;
-	int copy_ret;
 
 	if (!parent || !child || !parent->wait_blocked)
 		return;
@@ -376,14 +375,13 @@ void process_wait_wake_blocked_parent(process_t *parent, process_t *child)
 	if (!status_ptr)
 		status_ptr = (int *)(uintptr_t)process_syscall_arg(parent, 1);
 
-	copy_ret = -1;
 	if (status_ptr && process_pgd(parent) &&
 	    process_validate_userspace_buffer(status_ptr, sizeof(int)) == 0)
 	{
-		copy_ret = copy_to_user_region_in_directory(process_pgd(parent),
-							    (uintptr_t)status_ptr,
-							    &status_val,
-							    sizeof(int));
+		(void)copy_to_user_region_in_directory(process_pgd(parent),
+						       (uintptr_t)status_ptr,
+						       &status_val,
+						       sizeof(int));
 	}
 
 #if IR0_DEBUG_PROC

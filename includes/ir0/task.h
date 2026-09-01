@@ -98,13 +98,3 @@ _Static_assert(offsetof(task_t, arch.ss) == IR0_TASK_ARCH_SS_OFFSET,
 #define task_is_running(t) ((t)->state == TASK_RUNNING)
 #define task_is_blocked(t) ((t)->state == TASK_BLOCKED)
 #define task_is_terminated(t) ((t)->state == TASK_TERMINATED)
-
-task_t *create_task(void (*entry)(void *), void *arg, uint8_t priority, int8_t nice);
-void destroy_task(task_t *task);
-void task_get_info(task_t *task);
-void create_test_tasks(void);
-
-extern task_t *current_running_task;
-
-task_t *get_task_list(void);
-pid_t get_task_count(void);

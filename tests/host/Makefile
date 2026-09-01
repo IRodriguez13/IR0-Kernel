@@ -77,16 +77,16 @@ host_fase48_stub.o: host_fase48_stub.c
 host_sysfs_net_stub.o: host_sysfs_net_stub.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
-host_named_fifo.o: $(KERNEL_ROOT)/includes/ir0/named_fifo.c
+host_named_fifo.o: $(KERNEL_ROOT)/kernel/lib/named_fifo.c
 	$(CC) $(KERNEL_CFLAGS) -DTEST_HOST -DCONFIG_DEBUG_FASE50=0 -c -o $@ $<
 
 host_path.o: $(KERNEL_ROOT)/fs/path.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
-host_pipe.o: $(KERNEL_ROOT)/includes/ir0/pipe.c
+host_pipe.o: $(KERNEL_ROOT)/kernel/lib/pipe.c
 	$(CC) $(KERNEL_CFLAGS) -DCONFIG_DEBUG_FASE50=0 -c -o $@ $<
 
-host_blockdev.o: $(KERNEL_ROOT)/includes/ir0/blockdev.c
+host_blockdev.o: $(KERNEL_ROOT)/kernel/lib/blockdev.c
 	$(CC) $(KERNEL_CFLAGS) -DTEST_HOST -c -o $@ $<
 
 host_arch_irq_stub.o: host_arch_irq_stub.c
@@ -95,13 +95,13 @@ host_arch_irq_stub.o: host_arch_irq_stub.c
 host_arch_mm_stub.o: host_arch_mm_stub.c
 	$(CC) $(BASE_CFLAGS) -c -o $@ $<
 
-host_ps2_set1.o: $(KERNEL_ROOT)/includes/ir0/ps2_set1.c
+host_ps2_set1.o: $(KERNEL_ROOT)/kernel/lib/ps2_set1.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
-host_ps2_mouse_pkt.o: $(KERNEL_ROOT)/includes/ir0/ps2_mouse_pkt.c
+host_ps2_mouse_pkt.o: $(KERNEL_ROOT)/kernel/lib/ps2_mouse_pkt.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
-host_rtc_calendar.o: $(KERNEL_ROOT)/includes/ir0/rtc_calendar.c
+host_rtc_calendar.o: $(KERNEL_ROOT)/kernel/lib/rtc_calendar.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 host_matrix_capture.o: $(IR0_USERSPACE_ROOT)/smoke/matrix_capture.c

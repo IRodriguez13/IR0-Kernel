@@ -325,7 +325,6 @@ static int open_named_fifo_fd(const char *path, int ir0_flags)
   int accmode;
   int end;
   int fd = -1;
-  int i;
 
   pipe = named_fifo_lookup(path);
   if (!pipe)
@@ -360,7 +359,7 @@ static int open_named_fifo_fd(const char *path, int ir0_flags)
   fd_table[fd].is_socket = false;
 
   pipe_acquire_end(pipe, end);
-  fase48_note_fd_created();
+  fd_slot_note_created();
   return fd;
 }
 
@@ -530,7 +529,7 @@ int64_t sys_write(int fd, const void *buf, size_t count)
 	process_fase48_ipc_summary("fase48-final");
       if (current_process->task.pid == 1 && copy_size >= 11 &&
 	  kernel_buf[0] == 'F' && !memcmp(kernel_buf, "FASE49_PIPE", 11))
-	pipe_fase49_classify();
+	pipe_ipc_lifecycle_audit();
       return (int64_t)copy_size;
     }
     return -EBADF;
@@ -633,8 +632,27 @@ int64_t sys_write(int fd, const void *buf, size_t count)
 	handle_signals();
         return -EPIPE;
       }
-      if (pipe_wait(current_process, pipe, 0) != 0)
-        return -EAGAIN;
+      if (signals_pause_should_interrupt(current_process))
+      {
+	handle_signals();
+	return -EINTR;
+      }
+      {
+	int wait_ret = pipe_wait(current_process, pipe, 0);
+
+	if (wait_ret == -EINTR)
+	{
+	  handle_signals();
+	  return -EINTR;
+	}
+	if (wait_ret != 0)
+	  return -EAGAIN;
+      }
+      if (signals_pause_should_interrupt(current_process))
+      {
+	handle_signals();
+	return -EINTR;
+      }
     }
   }
 
@@ -906,8 +924,27 @@ int64_t sys_read(int fd, void *buf, size_t count)
        * cases together, as Linux pipe_read does under the pipe mutex —
        * buffered data first, EOF only on an empty pipe with no writers.
        */
-      if (pipe_wait(current_process, pipe, 1) != 0)
-        return -EAGAIN;
+      if (signals_pause_should_interrupt(current_process))
+      {
+	handle_signals();
+	return -EINTR;
+      }
+      {
+	int wait_ret = pipe_wait(current_process, pipe, 1);
+
+	if (wait_ret == -EINTR)
+	{
+	  handle_signals();
+	  return -EINTR;
+	}
+	if (wait_ret != 0)
+	  return -EAGAIN;
+      }
+      if (signals_pause_should_interrupt(current_process))
+      {
+	handle_signals();
+	return -EINTR;
+      }
     }
   }
 
@@ -1060,6 +1097,9 @@ static int64_t sys_open_vfs_resolved(char *path_to_use, int ir0_flags,
   int fd;
   struct vfs_file *vfs_file;
   int ret;
+
+  (void)linux_open_flags;
+  (void)dirfd_dbg;
 
   if (!path_to_use || path_to_use[0] != '/')
     return -EINVAL;
@@ -1249,7 +1289,7 @@ static int64_t sys_open_vfs_resolved(char *path_to_use, int ir0_flags,
   fd_table[fd].is_epoll = false;
   fd_table[fd].pipe_end = -1;
   fd_table[fd].dev_device_id = 0;
-  fase48_note_fd_created();
+  fd_slot_note_created();
 
   fase50c_log_open_result(path_to_use, (int64_t)fd, 8);
   return fd;
@@ -1299,7 +1339,7 @@ static int64_t pseudo_bind_dir_fd(const char *path, int ir0_flags)
   fd_table[fd].is_pseudo = false;
   fd_table[fd].pipe_end = -1;
   fd_table[fd].dev_device_id = 0;
-  fase48_note_fd_created();
+  fd_slot_note_created();
   fase50c_log_open_result(path, (int64_t)fd, 5);
   return fd;
 }
@@ -1359,7 +1399,7 @@ static int64_t pseudo_bind_file_fd(const char *path, int ir0_flags)
   fd_table[fd].is_pseudo = true;
   fd_table[fd].pipe_end = -1;
   fd_table[fd].dev_device_id = 0;
-  fase48_note_fd_created();
+  fd_slot_note_created();
   fase50c_log_open_result(path, (int64_t)fd, 1);
   return fd;
 }

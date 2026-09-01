@@ -9,8 +9,8 @@
  *              while real userspace (USER_MODE) gets proper address checking
  */
 
-#include "copy_user.h"
-#include <kernel/process.h>
+#include <ir0/copy_user.h>
+#include "process.h"
 #include <mm/paging.h>
 #include <string.h>
 #include <config.h>
@@ -78,9 +78,10 @@ int is_user_address_checked(const void *addr, size_t size, int check_mapped)
 
 int is_user_address(const void *addr, size_t size)
 {
-    /* For now, only check range (faster)
-     * Page faults will handle unmapped pages
-     * In production, you might want to enable full checking
+    /*
+     * Fast range check only; unmapped pages fault on copy. Callers that must
+     * reject unmapped user pointers before touching page tables (e.g. exec
+     * argv/envp walks) use is_user_address_checked(addr, size, 1).
      */
     return is_user_address_checked(addr, size, 0);
 }

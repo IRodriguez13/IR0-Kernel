@@ -208,13 +208,13 @@ uint64_t get_fs_base(void)
 }
 
 /*
- * arch_restore_user_fs_base - Re-install TLS FS base before returning to ring 3.
+ * restore_user_fs_base - Re-install TLS FS base before returning to ring 3.
  *
  * Sysret/ISR paths historically only reloaded DS/ES. Anything that clobbers
  * IA32_FS_BASE (or a context switch that restored fs_base=0) left glibc with
  * FS=0 → __ctype_b_loc returns -0x48 → SEGV. Always reload from process_t.
  */
-void arch_restore_user_fs_base(void)
+void restore_user_fs_base(void)
 {
 	if (current_process)
 		set_fs_base(process_tls_get(current_process));

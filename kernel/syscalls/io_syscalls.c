@@ -141,14 +141,6 @@ int fd_can_read_for(process_t *proc, int fd)
 }
 
 /**
- * fd_can_read - Comprueba si el fd tiene datos para leer (sin bloquear).
- */
-static int fd_can_read(int fd)
-{
-  return fd_can_read_for(current_process, fd);
-}
-
-/**
  * fd_can_write - Comprueba si se puede escribir en el fd.
  */
 static int fd_can_write(int fd)
@@ -726,34 +718,6 @@ static uint64_t fase48_fd_created;
 static uint64_t fase48_fd_destroyed;
 static uint64_t fase48_blocked_readers;
 static uint64_t fase48_blocked_writers;
-void fase50b_dump_bytes(const char *label, const void *buf, size_t n)
-{
-#if CONFIG_DEBUG_FASE50
-	const uint8_t *b = (const uint8_t *)buf;
-	size_t i;
-
-	klog_debug_fmt("KERN", "%s n=%llx hex=", label ? label : "[IR0DBG50B][BYTES]", (unsigned long long)((uint64_t)n));
-	for (i = 0; i < n && i < 32; i++)
-	{
-		if (i > 0)
-			klog_debug_fmt("KERN", " %llx", (unsigned long long)((uint64_t)b[i]));
-	}
-	klog_debug("KERN", " ascii=");
-	for (i = 0; i < n && i < 32; i++)
-	{
-		char c = (char)b[i];
-
-		if (c >= 32 && c <= 126)
-			serial_putchar(c);
-		else
-			klog_debug("KERN", ".");
-	}
-#else
-	(void)label;
-	(void)buf;
-	(void)n;
-#endif
-}
 
 #if CONFIG_DEBUG_FASE50
 static int fase50b_peek_user(uint64_t *pml4, uintptr_t user_addr,
@@ -784,8 +748,8 @@ static int fase50b_peek_user(uint64_t *pml4, uintptr_t user_addr,
 #else
 /* Staged pipe wake removed; peek helper only used under DEBUG_FASE50. */
 #endif
-void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
-			 uint64_t *blocked_readers, uint64_t *blocked_writers)
+void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
+		       uint64_t *blocked_readers, uint64_t *blocked_writers)
 {
 	if (created)
 		*created = fase48_fd_created;
@@ -797,14 +761,14 @@ void fase48_fd_get_stats(uint64_t *created, uint64_t *destroyed,
 		*blocked_writers = fase48_blocked_writers;
 }
 
-void fase48_note_fd_created(void)
+void fd_slot_note_created(void)
 {
 #if CONFIG_DEBUG_FASE50
 	fase48_fd_created++;
 #endif
 }
 
-void fase48_note_fd_destroyed(void)
+void fd_slot_note_destroyed(void)
 {
 #if CONFIG_DEBUG_FASE50
 	fase48_fd_destroyed++;
@@ -838,7 +802,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 	else
 		fase48_blocked_writers++;
 	if (waiting_read)
-		pipe_fase49_note_read_sleep(pipe);
+		pipe_ktm_note_read_sleep(pipe);
 #if CONFIG_DEBUG_FASE50
 	if (proc->mode == USER_MODE && waiting_read)
 		klog_debug_fmt("PIPE", "[IR0DBG50B][READ_BLOCK] pid=%x fd=%llx rsi=%llx rdx=%llx pipe_id=%llx", (unsigned)((uint32_t)proc->task.pid), (unsigned long long)(process_syscall_arg(proc, 0)), (unsigned long long)(process_syscall_arg(proc, 1)), (unsigned long long)(process_syscall_arg(proc, 2)), (unsigned long long)(pipe ? pipe->pipe_id : 0));
@@ -866,6 +830,20 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		/* prepare_to_wait: TASK_INTERRUPTIBLE before condition check */
 		process_set_sched_state(proc, PROCESS_BLOCKED);
 
+		if (signals_pause_should_interrupt(proc))
+		{
+			process_set_sched_state(proc, PROCESS_READY);
+			if (proc->mode == USER_MODE)
+				process_restore_user_task_segments(proc);
+			if (pipe_waiters[slot].proc == proc)
+			{
+				pipe_waiters[slot].proc = NULL;
+				pipe_waiters[slot].pipe = NULL;
+				pipe_waiters[slot].waiting_read = 0;
+			}
+			return -EINTR;
+		}
+
 		if (waiting_read)
 		{
 			if (pipe->count > 0 || pipe->writers <= 0)
@@ -890,6 +868,20 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		enable_interrupts();
 		sched_schedule_next();
 
+		if (signals_pause_should_interrupt(proc))
+		{
+			process_set_sched_state(proc, PROCESS_READY);
+			if (proc->mode == USER_MODE)
+				process_restore_user_task_segments(proc);
+			if (pipe_waiters[slot].proc == proc)
+			{
+				pipe_waiters[slot].proc = NULL;
+				pipe_waiters[slot].pipe = NULL;
+				pipe_waiters[slot].waiting_read = 0;
+			}
+			return -EINTR;
+		}
+
 		if (proc->state != PROCESS_BLOCKED)
 			break;
 	}
@@ -898,7 +890,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		process_restore_user_task_segments(proc);
 
 	if (waiting_read)
-		pipe_fase49_note_read_wake(pipe);
+		pipe_ktm_note_read_wake(pipe);
 	if (pipe_waiters[slot].proc == proc)
 	{
 		pipe_waiters[slot].proc = NULL;
@@ -927,7 +919,7 @@ void pipe_wake_all(pipe_t *pipe)
 		{
 			if (pipe->count > 0 || pipe->writers <= 0)
 			{
-				pipe_fase49_note_read_wake(pipe);
+				pipe_ktm_note_read_wake(pipe);
 				/*
 				 * In-syscall resume only (matches tty wake). Do not
 				 * stage a user read here — conflicts with kernel sleep.
@@ -949,7 +941,7 @@ void pipe_wake_all(pipe_t *pipe)
 		{
 			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
 			{
-				pipe_fase49_note_write_wake(pipe);
+				pipe_ktm_note_write_wake(pipe);
 				proc = w->proc;
 				if (proc->mode == USER_MODE)
 					proc->irq_frame_saved = 0;
@@ -981,7 +973,7 @@ void pipe_wake_check(void)
 		{
 			if (pipe->count > 0 || pipe->writers <= 0)
 			{
-				pipe_fase49_note_read_wake(pipe);
+				pipe_ktm_note_read_wake(pipe);
 				proc = w->proc;
 				if (proc->mode == USER_MODE)
 					proc->irq_frame_saved = 0;
@@ -996,7 +988,7 @@ void pipe_wake_check(void)
 		{
 			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
 			{
-				pipe_fase49_note_write_wake(pipe);
+				pipe_ktm_note_write_wake(pipe);
 				proc = w->proc;
 				if (proc->mode == USER_MODE)
 					proc->irq_frame_saved = 0;
@@ -1107,7 +1099,7 @@ int64_t sys_ioctl(int fd, uint64_t request, void *arg)
     if (request == IR0_CONSOLE_TIOCSWINSZ)
       return ir0_console_ioctl_winsize_set(arg);
     if (request == IR0_TIOCSCTTY)
-      return 0;
+      return ir0_console_ioctl_set_ctty();
     if (request == IR0_TIOCSPGRP)
     {
       pid_t pg;
@@ -1189,9 +1181,7 @@ int64_t sys_close(int fd)
     {
       pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)fd_table[fd].vfs_file;
 
-      if (bind->refs > 0)
-	bind->refs--;
-      if (bind->refs == 0)
+      if (pseudo_fd_bind_release(bind))
       {
 	(void)pseudo_fs_release_ops((const pseudo_fs_ops_t *)bind->ops,
 				    bind->ctx, bind->dynamic);
@@ -1249,8 +1239,6 @@ int64_t sys_close(int fd)
     {
       pipe_t *pipe = (pipe_t *)fd_table[fd].vfs_file;
 
-      pipe_fase49_fd_trace((uint32_t)current_process->task.pid, fd, pipe,
-			   fd_table[fd].pipe_end, pipe->fd_refs, "CLOSE");
       /* pipe_close_end wakes waiters then frees on last ref. */
       pipe_close_end(pipe, fd_table[fd].pipe_end);
       fd_table[fd].vfs_file = NULL;
@@ -1309,7 +1297,7 @@ int64_t sys_close(int fd)
     fd_table[fd].flags = 0;
     fd_table[fd].fd_flags = 0;
     fd_table[fd].offset = 0;
-    fase48_note_fd_destroyed();
+    fd_slot_note_destroyed();
   }
 
   return 0;
@@ -1447,9 +1435,7 @@ int64_t sys_dup2(int oldfd, int newfd)
     {
       pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)fd_table[newfd].vfs_file;
 
-      if (bind->refs > 0)
-	bind->refs--;
-      if (bind->refs == 0)
+      if (pseudo_fd_bind_release(bind))
       {
 	(void)pseudo_fs_release_ops((const pseudo_fs_ops_t *)bind->ops,
 				    bind->ctx, bind->dynamic);
@@ -1501,7 +1487,7 @@ int64_t sys_dup2(int oldfd, int newfd)
     fd_table[newfd].is_eventfd = false;
     fd_table[newfd].is_timerfd = false;
     fd_table[newfd].dev_device_id = 0;
-    fase48_note_fd_destroyed();
+    fd_slot_note_destroyed();
   }
 
   fd_table[newfd].in_use = true;
@@ -1553,7 +1539,7 @@ int64_t sys_dup2(int oldfd, int newfd)
   {
     pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)fd_table[oldfd].vfs_file;
 
-    bind->refs++;
+    pseudo_fd_bind_acquire(bind);
     fd_table[newfd].vfs_file = bind;
   }
   else if (fd_table[oldfd].is_memfd && fd_table[oldfd].vfs_file)
@@ -1597,15 +1583,7 @@ int64_t sys_dup2(int oldfd, int newfd)
     fd_table[newfd].vfs_file = NULL;
   }
 
-  if (fd_table[newfd].is_pipe && fd_table[newfd].vfs_file)
-  {
-    pipe_t *pip = (pipe_t *)fd_table[newfd].vfs_file;
-
-    pipe_fase49_fd_trace((uint32_t)current_process->task.pid, newfd, pip,
-			 fd_table[newfd].pipe_end, pip->fd_refs, "DUP2");
-  }
-
-  fase48_note_fd_created();
+  fd_slot_note_created();
   return newfd;
 }
 int64_t sys_fcntl(int fd, int cmd, unsigned long arg)
@@ -1749,8 +1727,8 @@ static int64_t sys_pipe_install(int pipefd[2], int flags)
   pipe_acquire_end(pipe, 0);
   pipe_acquire_end(pipe, 1);
 
-  fase48_note_fd_created();
-  fase48_note_fd_created();
+  fd_slot_note_created();
+  fd_slot_note_created();
 
   {
     int kfd[2];
@@ -1771,8 +1749,8 @@ static int64_t sys_pipe_install(int pipefd[2], int flags)
       fd_table[write_fd].pipe_end = -1;
       pipe_close_end(pip, 0);
       pipe_close_end(pip, 1);
-      fase48_note_fd_destroyed();
-      fase48_note_fd_destroyed();
+      fd_slot_note_destroyed();
+      fd_slot_note_destroyed();
       return -EFAULT;
     }
   }

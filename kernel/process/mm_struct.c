@@ -32,25 +32,38 @@ mm_struct_t *mm_create(void)
 
 mm_struct_t *mm_get(mm_struct_t *mm)
 {
+	uint64_t irq_flags;
+
 	if (!mm)
 		return NULL;
+
+	irq_flags = process_irq_save();
 	mm->refcount++;
+	process_irq_restore(irq_flags);
 	return mm;
 }
 
 void mm_put(mm_struct_t *mm)
 {
+	uint64_t irq_flags;
+	int last;
+
 	if (!mm)
 		return;
 
+	irq_flags = process_irq_save();
 	if (mm->refcount <= 0)
 	{
+		process_irq_restore(irq_flags);
 		panic("mm_put: refcount underflow");
 		return;
 	}
 
 	mm->refcount--;
-	if (mm->refcount > 0)
+	last = (mm->refcount == 0);
+	process_irq_restore(irq_flags);
+
+	if (!last)
 		return;
 
 	if (mm->page_directory && mm->owns_tables)

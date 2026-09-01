@@ -35,25 +35,38 @@ files_struct_t *files_create(void)
 
 files_struct_t *files_get(files_struct_t *f)
 {
+	uint64_t irq_flags;
+
 	if (!f)
 		return NULL;
+
+	irq_flags = process_irq_save();
 	f->refcount++;
+	process_irq_restore(irq_flags);
 	return f;
 }
 
 void files_put(files_struct_t *f)
 {
+	uint64_t irq_flags;
+	int last;
+
 	if (!f)
 		return;
 
+	irq_flags = process_irq_save();
 	if (f->refcount <= 0)
 	{
+		process_irq_restore(irq_flags);
 		panic("files_put: refcount underflow");
 		return;
 	}
 
 	f->refcount--;
-	if (f->refcount > 0)
+	last = (f->refcount == 0);
+	process_irq_restore(irq_flags);
+
+	if (!last)
 		return;
 
 	kfree(f);
@@ -105,7 +118,7 @@ static int process_files_acquire_entries(files_struct_t *f)
 		{
 			pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)e->vfs_file;
 
-			bind->refs++;
+			pseudo_fd_bind_acquire(bind);
 		}
 		else if (e->is_epoll)
 		{

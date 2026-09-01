@@ -63,7 +63,7 @@ int __attribute__((weak)) signals_should_handle_on_run(process_t *p)
 	return 0;
 }
 
-void __attribute__((weak)) arch_set_current_kernel_stack(process_t *p)
+void __attribute__((weak)) set_current_kernel_stack(process_t *p)
 {
 	(void)p;
 }
@@ -134,7 +134,7 @@ void __attribute__((weak)) sched_context_switch_to(process_t *next)
 	if (first)
 	{
 		first = 0;
-		arch_set_current_kernel_stack(next);
+		set_current_kernel_stack(next);
 		first_switch_to(next);
 		panic("Returned from first context switch");
 	}

@@ -3,7 +3,7 @@
  * IR0 Kernel — Block device registry and I/O facade.
  */
 
-#include "blockdev.h"
+#include <ir0/blockdev.h>
 #include <ir0/errno.h>
 #include <ir0/ktm/klog.h>
 #include <string.h>

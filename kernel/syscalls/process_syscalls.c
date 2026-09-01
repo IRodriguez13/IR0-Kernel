@@ -25,7 +25,7 @@
 #include <ir0/clock.h>
 #include <ir0/debug_runtime.h>
 #include <ir0/ktm/klog.h>
-#include <ir0/arch_task_ops.h>
+#include <ir0/task_ops.h>
 #include <string.h>
 
 #include <ir0/oops.h>
@@ -900,11 +900,6 @@ int64_t sys_setpgid(pid_t pid, pid_t pgid)
 	return 0;
 }
 
-static uint64_t fase50_count_open_fds_local(process_t *p)
-{
-	(void)p;
-	return 0;
-}
 static void fase50_trace_syscall_proc(const char *stage, process_t *p)
 {
 	(void)stage;
@@ -936,6 +931,8 @@ int64_t sys_exit_group(int exit_code)
 
 int64_t sys_reboot(int magic1, int magic2, unsigned int cmd, void *arg)
 {
+	int ret;
+
 	(void)arg;
 
 	if (!ir0_cred_is_root())
@@ -980,7 +977,14 @@ int64_t sys_reboot(int magic1, int magic2, unsigned int cmd, void *arg)
 		kernel_system_shutdown(IR0_SYSTEM_REBOOT);
 		break;
 	case LINUX_REBOOT_CMD_SW_SUSPEND:
-		(void)ir0_acpi_pm_try_suspend();
+		/*
+		 * Linux fails this op with -EINVAL when hibernation support is
+		 * absent; here the ACPI layer decides, so surface its result
+		 * instead of claiming an unconditional suspend.
+		 */
+		ret = ir0_acpi_pm_try_suspend();
+		if (ret < 0)
+			return ret;
 		return 0;
 	default:
 		return -EINVAL;
@@ -1134,7 +1138,6 @@ int64_t sys_exec(const char *pathname,
                  char *const argv[],
                  char *const envp[])
 {
-  int exec_argv_slots_seen = 0;
 #if CONFIG_DEBUG_FASE50
   klog_debug("KERN", "SERIAL: sys_exec called\n");
 #endif
@@ -1209,8 +1212,6 @@ int64_t sys_exec(const char *pathname,
       }
       if (user_ptr == NULL)
         break;  /* end of vector */
-      exec_argv_slots_seen = i + 1;
-
       /* Validate string start is mapped (first byte covers its starting page). */
       if (!is_user_address_checked(user_ptr, 1, 1))
       {
@@ -1784,7 +1785,7 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
     restore_ctx = ctx;
   }
 
-  arch_task_load_sigcontext(&current_process->task, restore_ctx);
+  task_load_sigcontext(&current_process->task, restore_ctx);
 
   if (current_process->saved_context)
   {
@@ -1801,7 +1802,7 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
   current_process->coop_resched_resume = 0;
   current_process->want_kernel_ret = 0;
   current_process->signal_enter_pending = 0;
-  arch_restore_user_fs_base();
+  restore_user_fs_base();
   switch_to_user_task(&current_process->task);
   return 0;
 }

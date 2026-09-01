@@ -20,7 +20,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <ir0/task.h>
-#include <ir0/arch_syscall_frame.h>
+#include <ir0/syscall_frame.h>
 #include <ir0/signals.h>
 #include <ir0/types.h>
 #include <ir0/fd_types.h>
@@ -50,6 +50,9 @@ typedef struct pseudo_fd_bind
 	int refs;
 	int dynamic;
 } pseudo_fd_bind_t;
+
+void pseudo_fd_bind_acquire(pseudo_fd_bind_t *bind);
+int pseudo_fd_bind_release(pseudo_fd_bind_t *bind);
 
 /* Process execution mode */
 typedef enum
@@ -462,46 +465,46 @@ static inline void process_tls_set(process_t *p, uint64_t tls)
 /* Opaque syscall-frame accessors — ISA decode lives in arch_syscall_frame_*.h. */
 static inline uint64_t process_syscall_ip(const process_t *p)
 {
-	return p ? arch_syscall_frame_ip(&p->syscall_frame) : 0;
+	return p ? syscall_frame_ip(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_sp(const process_t *p)
 {
-	return p ? arch_syscall_frame_sp(&p->syscall_frame) : 0;
+	return p ? syscall_frame_sp(&p->syscall_frame) : 0;
 }
 
 static inline uint64_t process_syscall_flags(const process_t *p)
 {
-	return p ? arch_syscall_frame_flags(&p->syscall_frame) : 0;
+	return p ? syscall_frame_flags(&p->syscall_frame) : 0;
 }
 
 static inline void process_syscall_set_ip(process_t *p, uint64_t ip)
 {
 	if (p)
-		arch_syscall_frame_set_ip(&p->syscall_frame, ip);
+		syscall_frame_set_ip(&p->syscall_frame, ip);
 }
 
 static inline void process_syscall_set_sp(process_t *p, uint64_t sp)
 {
 	if (p)
-		arch_syscall_frame_set_sp(&p->syscall_frame, sp);
+		syscall_frame_set_sp(&p->syscall_frame, sp);
 }
 
 static inline void process_syscall_set_flags(process_t *p, uint64_t flags)
 {
 	if (p)
-		arch_syscall_frame_set_flags(&p->syscall_frame, flags);
+		syscall_frame_set_flags(&p->syscall_frame, flags);
 }
 
 static inline uint64_t process_syscall_arg(const process_t *p, unsigned n)
 {
-	return p ? arch_syscall_frame_arg(&p->syscall_frame, n) : 0;
+	return p ? syscall_frame_arg(&p->syscall_frame, n) : 0;
 }
 
 static inline void process_syscall_set_arg(process_t *p, unsigned n, uint64_t v)
 {
 	if (p)
-		arch_syscall_frame_set_arg(&p->syscall_frame, n, v);
+		syscall_frame_set_arg(&p->syscall_frame, n, v);
 }
 
 void process_capture_syscall_frame(process_t *p);
@@ -681,6 +684,14 @@ void process_unmap_user_address_space(process_t *p);
 int process_remove_from_list(process_t *target);
 
 uint64_t *process_pt_child(uint64_t *table, size_t index);
+
+/*
+ * Count present 4 KiB-equivalent user leaf pages under @p's page tables.
+ * Used for /proc/[pid]/stat rss (Linux reports pages, not bytes). Read-only
+ * walk; 2 MiB huge leaves count as 512 pages each.
+ */
+uint64_t process_count_resident_user_pages(const process_t *p);
+
 void process_fase50_trace_proc(const char *stage, process_t *p);
 
 #include "debug/fase_audit.h"

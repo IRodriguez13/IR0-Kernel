@@ -15,6 +15,7 @@
 #include <ktm.h>
 #include <ir0/process.h>
 #include <ir0/ktm/klog.h>
+#include <string.h>
 
 #define USER_RIP_LO    0x00400000ULL
 #define USER_RIP_HI    0x00007FFFFFFFFFFFULL

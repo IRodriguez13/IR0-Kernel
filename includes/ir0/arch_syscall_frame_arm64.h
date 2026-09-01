@@ -20,7 +20,7 @@
 /*
  * Snapshot of EL0 GPRs + exception return state at SVC entry.
  * Layout matches vectors.S exc_entry_frame (x0@0 … x30@240) plus ELR/SPSR/SP.
- * Portable code must use arch_syscall_frame_ip/sp/flags/arg.
+ * Portable code must use syscall_frame_ip/sp/flags/arg.
  *
  * Linux AAPCS64 syscall ABI: number in x8, args x0–x5, retval in x0.
  */
@@ -67,34 +67,34 @@ _Static_assert(offsetof(arch_syscall_frame_t, x30) == 30 * sizeof(uint64_t),
 _Static_assert(offsetof(arch_syscall_frame_t, sp) == 31 * sizeof(uint64_t),
 	       "sp follows x30");
 
-static inline uint64_t arch_syscall_frame_ip(const arch_syscall_frame_t *sf)
+static inline uint64_t syscall_frame_ip(const arch_syscall_frame_t *sf)
 {
 	return sf ? sf->elr : 0;
 }
 
-static inline uint64_t arch_syscall_frame_sp(const arch_syscall_frame_t *sf)
+static inline uint64_t syscall_frame_sp(const arch_syscall_frame_t *sf)
 {
 	return sf ? sf->sp : 0;
 }
 
-static inline uint64_t arch_syscall_frame_flags(const arch_syscall_frame_t *sf)
+static inline uint64_t syscall_frame_flags(const arch_syscall_frame_t *sf)
 {
 	return sf ? sf->spsr : 0;
 }
 
-static inline void arch_syscall_frame_set_ip(arch_syscall_frame_t *sf, uint64_t ip)
+static inline void syscall_frame_set_ip(arch_syscall_frame_t *sf, uint64_t ip)
 {
 	if (sf)
 		sf->elr = ip;
 }
 
-static inline void arch_syscall_frame_set_sp(arch_syscall_frame_t *sf, uint64_t sp)
+static inline void syscall_frame_set_sp(arch_syscall_frame_t *sf, uint64_t sp)
 {
 	if (sf)
 		sf->sp = sp;
 }
 
-static inline void arch_syscall_frame_set_flags(arch_syscall_frame_t *sf,
+static inline void syscall_frame_set_flags(arch_syscall_frame_t *sf,
 						uint64_t flags)
 {
 	if (sf)
@@ -102,7 +102,7 @@ static inline void arch_syscall_frame_set_flags(arch_syscall_frame_t *sf,
 }
 
 /* Linux AArch64 syscall ABI: args x0–x5. */
-static inline uint64_t arch_syscall_frame_arg(const arch_syscall_frame_t *sf,
+static inline uint64_t syscall_frame_arg(const arch_syscall_frame_t *sf,
 					      unsigned n)
 {
 	if (!sf)
@@ -126,7 +126,7 @@ static inline uint64_t arch_syscall_frame_arg(const arch_syscall_frame_t *sf,
 	}
 }
 
-static inline void arch_syscall_frame_set_arg(arch_syscall_frame_t *sf,
+static inline void syscall_frame_set_arg(arch_syscall_frame_t *sf,
 					      unsigned n, uint64_t v)
 {
 	if (!sf)

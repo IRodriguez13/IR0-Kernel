@@ -16,7 +16,7 @@
 #include <config.h>
 
 #if CONFIG_ENABLE_SOUND
-#include <drivers/audio/sound_blaster.h>
+#include <ir0/sound_blaster.h>
 #endif
 
 bool audio_backend_is_available(void)

@@ -72,6 +72,10 @@
 static int g_registry_ready = 0;
 static int g_bootstrap_done = 0;
 
+#if CONFIG_ENABLE_STORAGE_ATA_BLOCK && CONFIG_INIT_STORAGE_ATA_BLOCK
+void ata_block_register(void);
+#endif
+
 static int boot_init_ps2_controller(void)
 {
 #if CONFIG_INIT_PS2_CONTROLLER

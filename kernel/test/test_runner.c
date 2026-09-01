@@ -64,6 +64,7 @@ static void (*const ktest_functions[])(void) = {
 	ktest_brk_post_exec,
 	ktest_brk_linux_fail_returns_current,
 	ktest_tty_canon_read_immediate,
+	ktest_process_reset_blocked_syscall_state,
 	/*
 	 * tty_canon_block_wake: needs cooperative schedule from a real
 	 * timer/IRQ context; from kmain+holder it can spin forever.
@@ -114,6 +115,7 @@ static const char *const ktest_names[] = {
 	"brk_post_exec",
 	"brk_linux_fail_returns_current",
 	"tty_canon_read_immediate",
+	"process_reset_blocked_syscall_state",
 	NULL
 };
 
@@ -163,6 +165,7 @@ static const int ktest_needs_process[] = {
 	1,  /* brk_post_exec */
 	1,  /* brk_linux_fail_returns_current */
 	1,  /* tty_canon_read_immediate */
+	0,  /* process_reset_blocked_syscall_state */
 };
 
 static void ktest_print_decimal(uint32_t n)

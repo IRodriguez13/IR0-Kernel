@@ -17,7 +17,7 @@
 #include <ir0/arch_cpu.h>
 #include <ir0/errno.h>
 
-int arch_fork_prepare_parent_return(struct process *parent, pid_t child_pid)
+int fork_prepare_parent_return(struct process *parent, pid_t child_pid)
 {
 	if (!parent)
 		return 0;
@@ -39,7 +39,7 @@ int arch_fork_prepare_parent_return(struct process *parent, pid_t child_pid)
 	return 0;
 }
 
-int arch_fork_prepare_child_return(struct process *child, struct process *parent)
+int fork_prepare_child_return(struct process *child, struct process *parent)
 {
 	if (!child)
 		return 0;
@@ -55,7 +55,7 @@ int arch_fork_prepare_child_return(struct process *child, struct process *parent
 	return 0;
 }
 
-int arch_process_set_tls(struct process *proc, uint64_t tls)
+int process_set_tls(struct process *proc, uint64_t tls)
 {
 	if (!proc)
 		return -EINVAL;

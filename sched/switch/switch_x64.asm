@@ -365,7 +365,8 @@ switch_to_user_task_asm:
     push rsi
     push r10
     lea rsi, [rel fork_restore_audit]
-    mov qword [rsi + FRA_magic], 0xF010CAFE
+    mov eax, 0xF010CAFE
+    mov [rsi + FRA_magic], rax
     mov [rsi + FRA_task_ptr], r11
     lea r10, [r11 + 0x00]
     mov [rsi + FRA_rax_slot_addr], r10

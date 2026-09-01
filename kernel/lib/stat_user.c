@@ -12,7 +12,7 @@
 
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-#include "stat_user.h"
+#include <ir0/stat_user.h>
 #include <ir0/copy_user.h>
 #include <string.h>
 

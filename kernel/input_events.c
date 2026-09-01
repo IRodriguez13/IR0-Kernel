@@ -20,6 +20,7 @@
 #include <ir0/time.h>
 #include <ir0/clock.h>
 #include <ir0/console.h>
+#include <ir0/input_backend.h>
 #include <string.h>
 #include <ir0/arch_port.h>
 
@@ -58,7 +59,15 @@ void input_events_reader_close(void)
 	do_flush = (events_readers == 0);
 	input_events_irq_restore(irq_flags);
 	if (do_flush)
+	{
+		/*
+		 * Last /dev/events0 reader: drop cooked LD state and any raw
+		 * ASCII that may have landed while divert was ending. Flush
+		 * alone no longer clears the kbd ring under ICANON.
+		 */
 		ir0_console_flush_input();
+		input_kbd_clear();
+	}
 }
 
 int input_events_readers_active(void)

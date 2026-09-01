@@ -196,13 +196,6 @@
     panicex("Reached unreachable code in " context, PANIC_KERNEL_BUG, \
            __FILE__, __LINE__, __func__)
 
-/**
- * TODO_IMPLEMENT - Marks unimplemented functionality
- */
-#define TODO_IMPLEMENT(feature) \
-    panicex("Unimplemented feature: " feature, PANIC_KERNEL_BUG, \
-           __FILE__, __LINE__, __func__)
-
 // SUBSYSTEM-SPECIFIC MACROS
 
 /**

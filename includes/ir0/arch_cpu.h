@@ -204,13 +204,13 @@ int get_cpu_feature_bits(uint32_t *out_edx, uint32_t *out_ecx);
 /**
  * Hypervisor present (x86: CPUID.1 ECX bit 31). Bare metal → false.
  */
-int arch_hypervisor_present(void);
+int hypervisor_present(void);
 
 /**
  * Copy hypervisor vendor from CPUID 0x40000000 (12 chars + NUL).
  * Returns 0 if present with vendor; -1 if bare metal / unavailable.
  */
-int arch_hypervisor_vendor(char *buf, size_t n);
+int hypervisor_vendor(char *buf, size_t n);
 
 /**
  * Get CLFLUSH line size in bytes (from CPUID.1)
@@ -244,7 +244,7 @@ void first_switch_to(struct process *next);
 void set_fs_base(uint64_t base);
 
 /* Re-apply current_process TLS before returning to userspace. */
-void arch_restore_user_fs_base(void);
+void restore_user_fs_base(void);
 
 /*
  * set_tls - Portable TLS base install (x86: FS base; ARM64: TPIDR_EL0).

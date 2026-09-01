@@ -456,7 +456,8 @@ void ipc_channel_unref(ipc_channel_t *channel)
         ipc_channel_destroy(channel);
 }
 
-/* Simple spinlock (busy-wait for now) */
+/* Simple spinlock (busy-wait for now) — unused; channel I/O uses ipc_irq_save. */
+#if 0
 static void ipc_lock(ipc_channel_t *channel)
 {
     if (!channel)
@@ -471,9 +472,13 @@ static void ipc_unlock(ipc_channel_t *channel)
         return;
     __sync_lock_release(&channel->lock);
 }
+#endif
 
 ssize_t ipc_channel_read(ipc_channel_t *channel, void *buf, size_t count)
 {
+    size_t bytes_read = 0;
+    uint64_t irq_flags;
+
     if (!channel || !buf || count == 0)
         return -1;
 
@@ -482,26 +487,29 @@ ssize_t ipc_channel_read(ipc_channel_t *channel, void *buf, size_t count)
 
     channel->readers++;
 
-    /* Wait until data is available */
-    while (ring_buffer_empty(&channel->rb)) {
-        wait_queue_add(&channel->read_queue, current_process);
-        
-        sched_schedule_next();
-        
-        /* Check if we were woken up with data */
-        if (!ring_buffer_empty(&channel->rb))
-            break;
-    }
+    for (;;)
+    {
+        irq_flags = ipc_irq_save();
 
-    /* Lock and read */
-    ipc_lock(channel);
-    
-    size_t bytes_read = ring_buffer_read(&channel->rb, buf, count);
-    
-    /* Signal writers that space is available */
-    semaphore_up(&channel->sem_write);
-    
-    ipc_unlock(channel);
+        if (!ring_buffer_empty(&channel->rb))
+        {
+            bytes_read = ring_buffer_read(&channel->rb, buf, count);
+            ipc_irq_restore(irq_flags);
+            if (bytes_read > 0)
+                wait_queue_wake_one(&channel->write_queue);
+            break;
+        }
+
+        if (channel->writers <= 0)
+        {
+            ipc_irq_restore(irq_flags);
+            break;
+        }
+
+        ipc_irq_restore(irq_flags);
+        wait_queue_add(&channel->read_queue, current_process);
+        sched_schedule_next();
+    }
 
     channel->readers--;
 
@@ -510,6 +518,9 @@ ssize_t ipc_channel_read(ipc_channel_t *channel, void *buf, size_t count)
 
 ssize_t ipc_channel_write(ipc_channel_t *channel, const void *buf, size_t count)
 {
+    size_t bytes_written = 0;
+    uint64_t irq_flags;
+
     if (!channel || !buf || count == 0)
         return -1;
 
@@ -518,26 +529,29 @@ ssize_t ipc_channel_write(ipc_channel_t *channel, const void *buf, size_t count)
 
     channel->writers++;
 
-    /* Wait until space is available */
-    while (ring_buffer_full(&channel->rb)) {
-        wait_queue_add(&channel->write_queue, current_process);
-        
-        sched_schedule_next();
-        
-        /* Check if we were woken up with space */
-        if (!ring_buffer_full(&channel->rb))
-            break;
-    }
+    for (;;)
+    {
+        irq_flags = ipc_irq_save();
 
-    /* Lock and write */
-    ipc_lock(channel);
-    
-    size_t bytes_written = ring_buffer_write(&channel->rb, buf, count);
-    
-    /* Signal readers that data is available */
-    semaphore_up(&channel->sem_read);
-    
-    ipc_unlock(channel);
+        if (!ring_buffer_full(&channel->rb))
+        {
+            bytes_written = ring_buffer_write(&channel->rb, buf, count);
+            ipc_irq_restore(irq_flags);
+            if (bytes_written > 0)
+                wait_queue_wake_one(&channel->read_queue);
+            break;
+        }
+
+        if (channel->readers <= 0)
+        {
+            ipc_irq_restore(irq_flags);
+            break;
+        }
+
+        ipc_irq_restore(irq_flags);
+        wait_queue_add(&channel->write_queue, current_process);
+        sched_schedule_next();
+    }
 
     channel->writers--;
 

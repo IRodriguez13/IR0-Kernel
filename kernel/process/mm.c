@@ -13,7 +13,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include "process_internal.h"
-#include <ir0/arch_mm.h>
+#include <ir0/mm.h>
 
 static bool process_va_ranges_overlap(uintptr_t a_start, size_t a_len,
 				      uintptr_t b_start, size_t b_len)
@@ -65,6 +65,71 @@ uint64_t *process_pt_child(uint64_t *table, size_t index)
 	return (uint64_t *)(table[index] & PAGE_FRAME_MASK);
 }
 
+uint64_t process_count_resident_user_pages(const process_t *p)
+{
+	size_t i4;
+	size_t i3;
+	size_t i2;
+	size_t i1;
+	uint64_t count = 0;
+	uint64_t *pml4;
+
+	if (!p || !process_pgd(p))
+		return 0;
+
+	pml4 = process_pgd(p);
+	for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
+	{
+		uint64_t *pdpt = process_pt_child(pml4, i4);
+
+		if (!pdpt)
+			continue;
+
+		for (i3 = 0; i3 < 512; i3++)
+		{
+			uint64_t *pd = process_pt_child(pdpt, i3);
+			uint64_t pdpt_ent;
+
+			if (!pd)
+			{
+				pdpt_ent = pdpt[i3];
+				if ((pdpt_ent & PAGE_PRESENT) && (pdpt_ent & PAGE_USER) &&
+				    (pdpt_ent & PAGE_SIZE_2MB_FLAG))
+					count += 512;
+				continue;
+			}
+
+			for (i2 = 0; i2 < 512; i2++)
+			{
+				uint64_t pd_ent = pd[i2];
+				uint64_t *pt;
+
+				if (!(pd_ent & PAGE_PRESENT))
+					continue;
+				if ((pd_ent & PAGE_USER) && (pd_ent & PAGE_SIZE_2MB_FLAG))
+				{
+					count += 512;
+					continue;
+				}
+
+				pt = process_pt_child(pd, i2);
+				if (!pt)
+					continue;
+
+				for (i1 = 0; i1 < 512; i1++)
+				{
+					uint64_t ent = pt[i1];
+
+					if ((ent & PAGE_PRESENT) && (ent & PAGE_USER))
+						count++;
+				}
+			}
+		}
+	}
+
+	return count;
+}
+
 /*
  * Drop every present PAGE_USER mapping under PML4 indices 0..255 so PMM
  * frames are returned and the address space can be discarded safely while
@@ -81,7 +146,7 @@ void process_unmap_user_pages_all(uint64_t *pml4,
 	if (!pml4)
 		return;
 
-	for (i4 = 0; i4 < (size_t)arch_mm_user_root_slots(); i4++)
+	for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
 	{
 		uint64_t *pdpt = process_pt_child(pml4, i4);
 
@@ -258,9 +323,9 @@ uint64_t create_process_page_directory(void)
 
 	/*
 	 * Copy kernel half of the root table only (user half stays empty).
-	 * Slot counts are ISA-private (arch_mm_copy_kernel_half).
+	 * Slot counts are ISA-private (mm_copy_kernel_half).
 	 */
-	arch_mm_copy_kernel_half(pml4, kernel_pml4);
+	mm_copy_kernel_half(pml4, kernel_pml4);
 
 	/*
 	 * Map kernel low memory with 4 KiB supervisor pages so timer IRQ (TSS

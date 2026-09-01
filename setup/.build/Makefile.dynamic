@@ -47,14 +47,13 @@ OBJS += interrupt/arch/isr_handlers.o
 OBJS += interrupt/arch/keyboard.o
 OBJS += interrupt/arch/x86-64/isr_stubs_64.o
 
-# Subsystem: LIBRARIES (8 files)
-OBJS += includes/ir0/vga.o
-OBJS += includes/ir0/logging.o
-OBJS += includes/ir0/validation.o
-OBJS += includes/ir0/oops.o
-OBJS += includes/ir0/signals.o
-OBJS += includes/ir0/pipe.o
-OBJS += includes/ir0/copy_user.o
+# Subsystem: LIBRARIES (7 files)
+OBJS += kernel/lib/vga.o
+OBJS += kernel/lib/logging.o
+OBJS += kernel/lib/oops.o
+OBJS += kernel/lib/signals.o
+OBJS += kernel/lib/pipe.o
+OBJS += kernel/lib/copy_user.o
 OBJS += includes/string.o
 
 # Subsystem: DISK (1 files)
@@ -69,17 +68,17 @@ OBJS += drivers/serial/serial.o
 # Subsystem: VIDEO (3 files)
 OBJS += drivers/video/vbe.o
 OBJS += drivers/video/typewriter.o
-OBJS += includes/ir0/vga.o
+OBJS += kernel/lib/vga.o
 
 # Subsystem: PS2_KEYBOARD (2 files)
 OBJS += interrupt/arch/keyboard.o
 OBJS += drivers/IO/ps2.o
 
 # Subsystem: MEMORY (4 files)
-OBJS += includes/ir0/memory/allocator.o
-OBJS += includes/ir0/memory/paging.o
-OBJS += includes/ir0/memory/kmem.o
-OBJS += includes/ir0/memory/pmm.o
+OBJS += mm/allocator.o
+OBJS += mm/paging.o
+OBJS += mm/kmem.o
+OBJS += mm/pmm.o
 
 # Subsystem: DMA (1 files)
 OBJS += drivers/dma/dma.o
@@ -88,7 +87,6 @@ OBJS += drivers/dma/dma.o
 OBJS += kernel/main.o
 OBJS += kernel/init.o
 OBJS += kernel/process.o
-OBJS += kernel/task.o
 OBJS += kernel/syscalls.o
 OBJS += kernel/elf_loader.o
 OBJS += kernel/user.o

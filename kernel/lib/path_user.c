@@ -3,8 +3,8 @@
  * IR0 Kernel — userspace path copy + resolve for syscall facades.
  */
 
-#include "path_user.h"
-#include "copy_user.h"
+#include <ir0/path_user.h>
+#include <ir0/copy_user.h>
 #include <ir0/path.h>
 #include <ir0/errno.h>
 #include <ir0/utimens.h>

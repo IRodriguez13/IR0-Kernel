@@ -301,7 +301,7 @@ uint32_t get_cpu_clflush_size(void)
 #endif
 }
 
-int arch_hypervisor_present(void)
+int hypervisor_present(void)
 {
 #if defined(__x86_64__) || defined(__i386__)
 	static int cached;
@@ -327,7 +327,7 @@ int arch_hypervisor_present(void)
 #endif
 }
 
-int arch_hypervisor_vendor(char *buf, size_t n)
+int hypervisor_vendor(char *buf, size_t n)
 {
 #if defined(__x86_64__) || defined(__i386__)
 	uint32_t eax, ebx, ecx, edx;
@@ -335,7 +335,7 @@ int arch_hypervisor_vendor(char *buf, size_t n)
 
 	if (!buf || n < 13)
 		return -1;
-	if (!arch_hypervisor_present())
+	if (!hypervisor_present())
 	{
 		buf[0] = '\0';
 		return -1;

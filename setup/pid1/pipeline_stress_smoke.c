@@ -394,8 +394,18 @@ static int test_writer_head_direct(const char *tag, char *const wargv[],
 	}
 
 	close(fds[1]);
-	while (got < want_bytes && (n = read(fds[0], buf, sizeof(buf))) > 0)
-		got += (int)n;
+	while (got < want_bytes)
+	{
+		n = read(fds[0], buf, sizeof(buf));
+		if (n > 0)
+		{
+			got += (int)n;
+			continue;
+		}
+		if (n < 0 && errno == EINTR)
+			continue;
+		break;
+	}
 	close(fds[0]);
 
 	for (;;)
@@ -786,7 +796,7 @@ int main(void)
 	if (require_ash("echo_cat", "echo pipeok | cat") != 0)
 		fail("echo_cat");
 	/* Hard: identity→anon zero + pipe_wait prepare_to_wait (Linux-like). */
-	if (require_ash("echo_cat_head", "echo pipeok | cat | head") != 0)
+	if (require_ash("echo_cat_head", "echo pipeok | cat -u | head") != 0)
 		fail("echo_cat_head");
 
 	/*
@@ -794,9 +804,12 @@ int main(void)
 	 * sessions (musl FILE* corrupted, write into .rodata). Kept soft so the
 	 * gate reports the state instead of hiding it.
 	 */
-	try_ash("ash_hexdump_head", "hexdump -C /bin/busybox | head -n 3");
+	try_ash("ash_hexdump_head", "hexdump -C /bin/busybox | cat -u | head -n 3");
 	try_ash("ash_pipe_4stage", "echo pipeok | cat | cat | head");
 	try_ash("ash_bigcat_head", "cat /bin/busybox | head -n 1");
+	/* Session soak: ash SIGSEGV after head completes (pipeline teardown). */
+	if (require_ash("ash_ls_proc_head", "ls /proc | head") != 0)
+		fail("ash_ls_proc_head");
 
 	if (test_hexdump_head_direct() != 0)
 		fail("hexdump_head_direct");

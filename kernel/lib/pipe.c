@@ -8,8 +8,8 @@
  */
 
 #include <ir0/pipe.h>
+#include <ir0/spinlock.h>
 #include <ir0/kmem.h>
-#include <ir0/arch_cpu.h>
 #include <ir0/errno.h>
 #include <ir0/ktm/event.h>
 #include <ir0/ktm/fault.h>
@@ -41,10 +41,11 @@ pipe_t *pipe_create(void)
 
 	memset(pipe, 0, sizeof(*pipe));
 	{
-		unsigned long irq_flags = irq_save();
+		ir0_spinlock_t lock;
 
+		ir0_spin_lock(&lock);
 		pipe->pipe_id = pipe_next_id++;
-		irq_restore(irq_flags);
+		ir0_spin_unlock(&lock);
 	}
 	pipe_stats_created++;
 	ktm_event_emit4(KTM_EVENT_PIPE_CREATE, KTM_SUBSYS_IPC, pipe->pipe_id, 0, 0, 0);
@@ -57,7 +58,7 @@ pipe_t *pipe_create(void)
  */
 void pipe_acquire_end(pipe_t *pipe, int end)
 {
-	unsigned long irq_flags;
+	ir0_spinlock_t lock;
 
 	if (!pipe)
 		return;
@@ -65,7 +66,7 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 	if (end != 0 && end != 1)
 		return;
 
-	irq_flags = irq_save();
+	ir0_spin_lock(&lock);
 	pipe->fd_refs++;
 	if (end == 0)
 	{
@@ -79,7 +80,7 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 		if (pipe->named)
 			pipe->closed_write = 0;
 	}
-	irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 
 	ktm_event_emit4(KTM_EVENT_PIPE_END_ACQUIRE, KTM_SUBSYS_IPC,
 			pipe->pipe_id, (uint64_t)(uint32_t)end,
@@ -89,14 +90,14 @@ void pipe_acquire_end(pipe_t *pipe, int end)
 
 void pipe_acquire(pipe_t *pipe)
 {
-	unsigned long irq_flags;
+	ir0_spinlock_t lock;
 
 	if (!pipe)
 		return;
 
-	irq_flags = irq_save();
+	ir0_spin_lock(&lock);
 	pipe->fd_refs++;
-	irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 }
 
 int pipe_read(pipe_t *pipe, void *buf, size_t count)
@@ -111,10 +112,12 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 	 * increment, count ends up larger than the bytes actually queued, and the
 	 * next reader hands userspace that much stale ring content — NUL runs on a
 	 * fresh pipe, old bytes on a reused one. Linux serialises the same window
-	 * with the pipe mutex; IR0 IPC uses the irq-save pattern (kernel/ipc.c).
+	 * with the pipe mutex; IR0 IPC uses ir0_spinlock (UP: irq-save).
 	 * Bounded by PIPE_SIZE (4 KiB), so the hold time stays comparable.
 	 */
-	unsigned long irq_flags = irq_save();
+	ir0_spinlock_t lock;
+
+	ir0_spin_lock(&lock);
 	size_t to_read;
 	char *dest = (char *)buf;
 	size_t bytes_read = 0;
@@ -127,7 +130,7 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 		writers_snapshot = (uint32_t)pipe->writers;
 		readers_snapshot = (uint32_t)pipe->readers;
 		count_snapshot = pipe->count;
-		irq_restore(irq_flags);
+		ir0_spin_unlock(&lock);
 
 		if ((int)writers_snapshot <= 0)
 		{
@@ -157,7 +160,7 @@ int pipe_read(pipe_t *pipe, void *buf, size_t count)
 	pipe->count -= bytes_read;
 	writers_snapshot = (uint32_t)pipe->writers;
 	count_snapshot = pipe->count;
-	irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 
 	ktm_event_emit4(KTM_EVENT_PIPE_READ, KTM_SUBSYS_IPC, pipe->pipe_id,
 			(uint64_t)bytes_read,
@@ -172,7 +175,9 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 		return -EINVAL;
 
 	/* Same critical section as pipe_read: see the comment there. */
-	unsigned long irq_flags = irq_save();
+	ir0_spinlock_t lock;
+
+	ir0_spin_lock(&lock);
 	size_t space;
 	size_t to_write;
 	const char *src = (const char *)buf;
@@ -186,7 +191,7 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 		readers_snapshot = (uint32_t)pipe->readers;
 		writers_snapshot = (uint32_t)pipe->writers;
 		count_snapshot = pipe->count;
-		irq_restore(irq_flags);
+		ir0_spin_unlock(&lock);
 
 		ktm_event_emit4(KTM_EVENT_PIPE_EPIPE, KTM_SUBSYS_IPC, pipe->pipe_id,
 				(uint64_t)readers_snapshot,
@@ -195,13 +200,25 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 		return -EPIPE;
 	}
 
-	if (pipe->count >= PIPE_SIZE)
+	space = PIPE_SIZE - pipe->count;
+	if (space == 0)
 	{
-		irq_restore(irq_flags);
+		ir0_spin_unlock(&lock);
 		return -EAGAIN;
 	}
 
-	space = PIPE_SIZE - pipe->count;
+	/*
+	 * Linux pipe(7): writes of ≤ PIPE_BUF are atomic. If the whole
+	 * request does not fit, do not emit a short write — return -EAGAIN
+	 * so blocking callers wait and O_NONBLOCK surfaces EAGAIN.
+	 * Requests larger than PIPE_BUF may partial-write (Linux).
+	 */
+	if (count <= (size_t)PIPE_BUF && space < count)
+	{
+		ir0_spin_unlock(&lock);
+		return -EAGAIN;
+	}
+
 	to_write = (count < space) ? count : space;
 
 	while (bytes_written < to_write)
@@ -214,7 +231,7 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 	pipe->count += bytes_written;
 	readers_snapshot = (uint32_t)pipe->readers;
 	count_snapshot = pipe->count;
-	irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 
 	ktm_event_emit4(KTM_EVENT_PIPE_WRITE, KTM_SUBSYS_IPC, pipe->pipe_id,
 			(uint64_t)bytes_written,
@@ -227,7 +244,7 @@ int pipe_write(pipe_t *pipe, const void *buf, size_t count)
 void pipe_close_end(pipe_t *pipe, int end)
 {
 	int last = 0;
-	unsigned long irq_flags;
+	ir0_spinlock_t lock;
 
 	if (!pipe)
 		return;
@@ -235,7 +252,7 @@ void pipe_close_end(pipe_t *pipe, int end)
 	if (end != 0 && end != 1)
 		return;
 
-	irq_flags = irq_save();
+	ir0_spin_lock(&lock);
 	if (end == 0)
 	{
 		if (pipe->readers > 0)
@@ -256,7 +273,7 @@ void pipe_close_end(pipe_t *pipe, int end)
 		pipe->fd_refs--;
 		last = (pipe->fd_refs == 0);
 	}
-	irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 
 	ktm_event_emit4(KTM_EVENT_PIPE_END_CLOSE, KTM_SUBSYS_IPC, pipe->pipe_id,
 			(uint64_t)(uint32_t)end,

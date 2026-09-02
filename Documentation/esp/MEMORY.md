@@ -1,7 +1,24 @@
 # Subsistema de Memoria en IR0
 
+> **Última verificación:** 2026-09-02  
+> **Fuente de verdad:** [`../MEMORY.md`](../MEMORY.md), [`uaccess.md`](uaccess.md)
+
 La memoria en IR0 combina PMM, allocator del kernel y paginacion para
 aislamiento de procesos.
+
+## Cambios recientes (2026-09-02)
+
+- Frontera uaccess documentada: [`uaccess.md`](uaccess.md) — toda copia a VA
+  user pasa por `copy_*_user` / region helpers (COW-safe); fallos kernel en VA
+  user clasifican como `KERNEL_UACCESS_FAULT`.
+- Stack: sin soft-grow past `USER_STACK_TOP`; frames de señal vía
+  `signal_pick_handler_sp` + margen TOP (detalle en [`../MEMORY.md`](../MEMORY.md)).
+
+## Cambios recientes (2026-09-01)
+
+- Eliminado soft-grow implicito heap/stack en `#PF` (fuera de VMA → SIGSEGV).
+- Forensics x86 bajo `DEBUG_D1_DIAG` en `arch/x86-64/sources/arch_pf_debug.c`.
+- COW sin cambio de contrato; gate: `make smoke-mm-cow-lazy`.
 
 ## Capas Principales
 
@@ -19,7 +36,8 @@ aislamiento de procesos.
 
 - La creacion de procesos enlaza estructuras de memoria por proceso.
 - Scheduler/context-switch depende del cambio de estado de paging.
-- Validacion de acceso user y helpers de copia refuerzan limites.
+- Validacion de acceso user y helpers de copia refuerzan limites — ver
+  contrato canónico [`uaccess.md`](uaccess.md).
 
 ## Puntos Fuertes
 

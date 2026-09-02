@@ -50,9 +50,10 @@ int64_t sys_syslog(int type, char *bufp, int len);
 fd_entry_t *get_process_fd_table(void);
 void ensure_devfs_init(void);
 int stdio_is_redirected(fd_entry_t *fd_table, int fd);
-int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read);
+int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read, size_t write_need);
 void pipe_wake_check(void);
 void pipe_wake_all(pipe_t *pipe);
+void pipe_purge_waiters_for_process(process_t *proc);
 void fd_slot_stats_get(uint64_t *created, uint64_t *destroyed,
 		       uint64_t *blocked_readers, uint64_t *blocked_writers);
 void fd_slot_note_created(void);

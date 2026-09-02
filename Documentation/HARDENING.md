@@ -1,9 +1,44 @@
 # IR0 — Architecture hardening backlog
 
-> **Last verified:** 2026-06-23  
-> **Source of truth:** `kernel/syscalls.c`, `kernel/process.*`, `includes/ir0/*`, `scripts/architecture_guard.py`, CTR gates in `Makefile`, ktest runner in `kernel/test/test_runner.c`.
+> **Last verified:** 2026-09-01  
+> **Source of truth:** `kernel/syscalls.c`, `kernel/process/*`, `includes/ir0/*`, `scripts/architecture_guard.py`, CTR gates in `Makefile`, ktest runner in `kernel/test/test_runner.c`.
 
 This document tracks **post-milestone sanitization** (not new features). Each sprint must close with green CTR gates before the next feature oleada. Canonical sprint IDs also appear in [`ROADMAP.md`](ROADMAP.md) and `.cursor/rules/ir0-optimization-arch-sprints.mdc`.
+
+---
+
+## Oleada cerrada (2026-09-02) — pipes + stack Linux-strict
+
+| Area | Change | Evidence |
+|------|--------|----------|
+| **pipe write** | ≤ `PIPE_BUF` atomic (wait if no room); blocking `sys_write` completes full count | `kernel/lib/pipe.c`, `fs_syscalls.c` |
+| **SIGPIPE** | Queue unless `SIG_IGN`; respect mask; default terminate via `handle_signals` | `fs_syscalls.c`, `signals.c` |
+| **pipe_wait** | Writer waits for `write_need` free bytes (no busy-spin); full waiter table yields | `io_syscalls.c` |
+| **IRQ signal SP** | `signals_deliver_from_irq_frame` uses `signal_pick_handler_sp` + TOP margin | `kernel/lib/signals.c` |
+| **Rootfs `/tmp`** | MINIX pack applies mode `1777` after inject mkdir (was `0755`) | ISD `scripts/pack-minix.sh` |
+
+**Gates:** `make smoke-pipeline-stress` (`PIPELINE_STRESS_OK`), `smoke-mm-cow-lazy`,
+`arch-guard`, `tests/host` (pipe close/refcount), 0× `STACK_TOP_OVERRUN` on pipeline smoke.
+
+**Still open:** HMP/session chaos as hard desk gate if ash still trips
+`STACK_TOP_OVERRUN` under keyboard automation; `PIPE_SIZE` remains 4 KiB.
+
+---
+
+## Oleada cerrada (2026-09-01) — audio UAF, MM honesty, process encapsulation
+
+| Area | Change | Evidence |
+|------|--------|----------|
+| **SB16 playback** | Ping-pong static DMA buffers; DMA before PLAY; `sb16_play_pcm`; IRQ5 handler | `make smoke-sb16-probe`; `drivers/audio/sound_blaster.c` |
+| **poll ABI** | `fd_can_write_for(proc)` uses `process_fd_table(proc)` — no `current_process` swap | `kernel/syscalls/io_syscalls.c` |
+| **MM soft-grow** | Removed heap/stack implicit +1 page on fault past VMA top | `mm/page_fault.c` |
+| **IPC lock facade** | `includes/ir0/spinlock.h` on pipe read/write hot path | `kernel/lib/pipe.c` |
+| **PF debug portable** | x86 `pf_debug_*` moved to `arch/x86-64/sources/arch_pf_debug.c` | `arch-guard` (no `arch_*` from `mm/`) |
+| **saved_context** | `kernel/process/saved_context.c` + arch-guard on `->saved_context` | `scripts/architecture_guard.py` |
+
+**Gates:** `kernel-x64.bin`, `arch-guard`, `build-matrix-min`, `tests/host` 43/43, `smoke-sb16-probe`.
+
+**Not in this oleada (still open):** Doom IWAD smoke (`smoke-fase55d-doomgeneric`); pipe stress soft-skip `echo pipeok \| cat \| head`; full `process_t` field encapsulation beyond `saved_context`; SMP `ir0_spinlock` backend.
 
 ---
 

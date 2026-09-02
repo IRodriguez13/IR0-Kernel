@@ -33,7 +33,7 @@
 #include <ir0/clock_wait.h>
 #include <ir0/signals.h>
 #include <ir0/arch_port.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/cpu.h>
 #include <ir0/paging.h>
 #include <config.h>
 
@@ -143,10 +143,8 @@ int fd_can_read_for(process_t *proc, int fd)
 /**
  * fd_can_write - Comprueba si se puede escribir en el fd.
  */
-static int fd_can_write(int fd)
+static int fd_can_write_table(fd_entry_t *fd_table, int fd)
 {
-  fd_entry_t *fd_table = get_process_fd_table();
-
   if (fd == STDIN_FILENO && !stdio_is_redirected(fd_table, fd))
     return 0;
   if ((fd == STDOUT_FILENO || fd == STDERR_FILENO) && !stdio_is_redirected(fd_table, fd))
@@ -173,15 +171,9 @@ static int fd_can_write(int fd)
 
 int fd_can_write_for(process_t *proc, int fd)
 {
-	process_t *saved = current_process;
-	int ret;
+  fd_entry_t *fd_table = proc ? process_fd_table(proc) : get_process_fd_table();
 
-	if (!proc)
-		return fd_can_write(fd);
-	current_process = proc;
-	ret = fd_can_write(fd);
-	current_process = saved;
-	return ret;
+  return fd_can_write_table(fd_table, fd);
 }
 
 /**
@@ -678,16 +670,19 @@ int64_t sys_pause(void)
  */
 int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem)
 {
+  struct timespec kreq;
+  struct timespec krem;
+
   if (!current_process || !req)
     return -EFAULT;
-  if (validate_userspace_buffer((void *)req, sizeof(struct timespec)) != 0)
+  if (copy_from_user(&kreq, req, sizeof(kreq)) != 0)
     return -EFAULT;
   if (rem && validate_userspace_buffer(rem, sizeof(struct timespec)) != 0)
     return -EFAULT;
 
   /* Convert to milliseconds; clamp tv_nsec to 0-999999999 */
-  int64_t sec = req->tv_sec;
-  long nsec = req->tv_nsec;
+  int64_t sec = kreq.tv_sec;
+  long nsec = kreq.tv_nsec;
   if (sec < 0 || nsec < 0 || nsec > 999999999)
     return -EINVAL;
 
@@ -698,8 +693,10 @@ int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem)
     return ret;
   if (rem)
   {
-    rem->tv_sec = 0;
-    rem->tv_nsec = 0;
+    krem.tv_sec = 0;
+    krem.tv_nsec = 0;
+    if (copy_to_user(rem, &krem, sizeof(krem)) != 0)
+      return -EFAULT;
   }
   return 0;
 }
@@ -711,7 +708,23 @@ struct pipe_waiter
 	process_t *proc;
 	pipe_t *pipe;
 	int waiting_read;
+	/* Writer: wake only when free space >= write_need (PIPE_BUF atomic). */
+	size_t write_need;
 };
+
+static int pipe_writer_ready(const pipe_t *pipe, size_t need)
+{
+	size_t space;
+
+	if (!pipe || pipe->readers <= 0)
+		return 1;
+	if (need == 0)
+		need = 1;
+	if (need > PIPE_SIZE)
+		need = PIPE_SIZE;
+	space = PIPE_SIZE - pipe->count;
+	return space >= need;
+}
 
 static struct pipe_waiter pipe_waiters[MAX_PIPE_WAITERS];
 static uint64_t fase48_fd_created;
@@ -775,13 +788,21 @@ void fd_slot_note_destroyed(void)
 #endif
 }
 
-int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
+int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read, size_t write_need)
 {
 	unsigned int i;
 	int slot = -1;
 
 	if (!proc || !pipe)
 		return -EINVAL;
+
+	if (!waiting_read)
+	{
+		if (write_need == 0)
+			write_need = 1;
+		if (write_need > PIPE_SIZE)
+			write_need = PIPE_SIZE;
+	}
 
 	for (i = 0; i < MAX_PIPE_WAITERS; i++)
 	{
@@ -792,11 +813,21 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		}
 	}
 	if (slot < 0)
-		return -EAGAIN;
+	{
+		/*
+		 * Waiter table full (ceiling MAX_PIPE_WAITERS). Do not return
+		 * -EAGAIN to userspace on a blocking fd — that looks like
+		 * O_NONBLOCK. Yield and let the caller retry pipe_write/read.
+		 */
+		enable_interrupts();
+		sched_schedule_next();
+		return 0;
+	}
 
 	pipe_waiters[slot].proc = proc;
 	pipe_waiters[slot].pipe = pipe;
 	pipe_waiters[slot].waiting_read = waiting_read;
+	pipe_waiters[slot].write_need = waiting_read ? 0 : write_need;
 	if (waiting_read)
 		fase48_blocked_readers++;
 	else
@@ -822,8 +853,8 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 	 * Refs: LWN prepare_to_wait; Linux pipe_wait_readable + wait_event;
 	 * commit 472e5b0 (pipe: remove pipe_wait and fix wakeup race).
 	 *
-	 * Do NOT busy-retry on PROCESS_READY without scheduling — that starves
-	 * the peer that must close / write.
+	 * Writer wait uses write_need so PIPE_BUF-atomic EAGAIN does not
+	 * busy-spin when 0 < space < n (wake on any free byte was wrong).
 	 */
 	for (;;)
 	{
@@ -840,6 +871,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 				pipe_waiters[slot].proc = NULL;
 				pipe_waiters[slot].pipe = NULL;
 				pipe_waiters[slot].waiting_read = 0;
+				pipe_waiters[slot].write_need = 0;
 			}
 			return -EINTR;
 		}
@@ -854,7 +886,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		}
 		else
 		{
-			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
+			if (pipe_writer_ready(pipe, write_need))
 			{
 				process_set_sched_state(proc, PROCESS_READY);
 				break;
@@ -878,6 +910,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 				pipe_waiters[slot].proc = NULL;
 				pipe_waiters[slot].pipe = NULL;
 				pipe_waiters[slot].waiting_read = 0;
+				pipe_waiters[slot].write_need = 0;
 			}
 			return -EINTR;
 		}
@@ -896,6 +929,7 @@ int pipe_wait(process_t *proc, pipe_t *pipe, int waiting_read)
 		pipe_waiters[slot].proc = NULL;
 		pipe_waiters[slot].pipe = NULL;
 		pipe_waiters[slot].waiting_read = 0;
+		pipe_waiters[slot].write_need = 0;
 	}
 	return 0;
 }
@@ -935,11 +969,12 @@ void pipe_wake_all(pipe_t *pipe)
 				w->proc = NULL;
 				w->pipe = NULL;
 				w->waiting_read = 0;
+				w->write_need = 0;
 			}
 		}
 		else
 		{
-			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
+			if (pipe_writer_ready(pipe, w->write_need))
 			{
 				pipe_ktm_note_write_wake(pipe);
 				proc = w->proc;
@@ -950,6 +985,7 @@ void pipe_wake_all(pipe_t *pipe)
 				w->proc = NULL;
 				w->pipe = NULL;
 				w->waiting_read = 0;
+				w->write_need = 0;
 			}
 		}
 	}
@@ -982,11 +1018,12 @@ void pipe_wake_check(void)
 				w->proc = NULL;
 				w->pipe = NULL;
 				w->waiting_read = 0;
+				w->write_need = 0;
 			}
 		}
 		else
 		{
-			if (pipe->readers <= 0 || pipe->count < PIPE_SIZE)
+			if (pipe_writer_ready(pipe, w->write_need))
 			{
 				pipe_ktm_note_write_wake(pipe);
 				proc = w->proc;
@@ -997,10 +1034,39 @@ void pipe_wake_check(void)
 				w->proc = NULL;
 				w->pipe = NULL;
 				w->waiting_read = 0;
+				w->write_need = 0;
 			}
 		}
 	}
 }
+
+void pipe_purge_waiters_for_process(process_t *proc)
+{
+	unsigned int i;
+
+	if (!proc)
+		return;
+
+	for (i = 0; i < MAX_PIPE_WAITERS; i++)
+	{
+		struct pipe_waiter *w = &pipe_waiters[i];
+
+		if (w->proc != proc)
+			continue;
+		if (w->waiting_read)
+		{
+			if (fase48_blocked_readers > 0)
+				fase48_blocked_readers--;
+		}
+		else if (fase48_blocked_writers > 0)
+			fase48_blocked_writers--;
+		w->proc = NULL;
+		w->pipe = NULL;
+		w->waiting_read = 0;
+		w->write_need = 0;
+	}
+}
+
 void ensure_devfs_init(void)
 {
   if (!devfs_initialized)

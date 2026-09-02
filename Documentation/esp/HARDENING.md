@@ -1,9 +1,27 @@
 # IR0 — Backlog de hardening arquitectónico
 
-> **Última verificación:** 2026-06-23  
+> **Última verificación:** 2026-09-01  
 > **Fuente de verdad:** [`Documentation/HARDENING.md`](../HARDENING.md) (inglés, canónico)
 
 Espejo breve del plan de sanitización post-hito. Detalle completo, tablas de archivos y gates en el documento EN.
+
+## Oleada cerrada (2026-09-02) — pipes + stack Linux-strict **CERRADO**
+
+- Write atómico ≤ `PIPE_BUF`; `sys_write` blocking completa el count; SIGPIPE
+- `pipe_wait(write_need)`; IRQ signals con `signal_pick_handler_sp`
+- Pack ISD: `/tmp` 1777
+- Gates: `smoke-pipeline-stress`, `smoke-mm-cow-lazy`, host pipes
+- Detalle: [`../HARDENING.md`](../HARDENING.md)
+
+## Oleada cerrada (2026-09-01) — audio, MM, encapsulación **CERRADO**
+
+- SB16: buffers ping-pong, DMA antes PLAY, IRQ 5; `smoke-sb16-probe`
+- `fd_can_write_for` sin mutar `current_process`
+- PF: sin soft-grow heap/stack; `pf_debug_*` en arch x86
+- `ir0_spinlock` en pipes; `process_saved_context_*` + arch-guard
+- Gates: `kernel-x64.bin`, arch-guard, host 43/43
+
+Pendiente fuera de oleada: smoke Doom IWAD al disparar; pipe stress 5/6.
 
 ## Oleada cerrada (2026-06-23) — hardening estructural **CERRADO**
 

@@ -13,6 +13,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/signals.h>
+#include <ir0/abi/signal_contract.h>
 #include <ir0/process.h>
 #include <ir0/sched.h>
 #include <ir0/ktm/klog.h>
@@ -23,12 +24,18 @@
 #include <ir0/kmem.h>
 #include <ir0/task_ops.h>
 #include <ir0/signal_irq.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/paging.h>
+#include <ir0/tls.h>
 #include <ir0/arch_task.h>
 #include <ir0/errno.h>
 #include <config.h>
+#include <kernel/process.h>
 #include <string.h>
 #include <ktm.h>
+
+static int signal_sp_in_stack(process_t *p, uint64_t sp);
+static uint64_t signal_pick_handler_sp(process_t *p, uint64_t saved_sp,
+				       uint64_t *frame_addr_out);
 
 int signals_has_user_handler(process_t *p, int sig)
 {
@@ -68,31 +75,31 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 	handler = p->signal_handlers[sig];
 	sa_flags = p->signal_sa_flags[sig];
 
-	if (p->saved_context)
-	{
-		kfree(p->saved_context);
-		p->saved_context = NULL;
-	}
+	if (process_saved_context_present(p))
+		process_saved_context_clear(p);
 
 	ctx = kmalloc(sizeof(*ctx));
 	if (!ctx)
 		return 0;
 
 	signal_fill_sigcontext_from_irq_frame(ctx, frame);
-	p->saved_context = ctx;
+	process_saved_context_attach(p, ctx);
 
-	new_rsp = irq_frame_sp(frame);
-	if (sa_flags & SA_SIGINFO)
-		new_rsp -= 256;
-	else
-		new_rsp -= 128;
-	new_rsp &= ~0xFULL;
-
-	if (new_rsp < 0x400000UL || new_rsp > 0x7FFFFFFFFFFFUL)
+	/*
+	 * Same stack-band policy as handle_signals(): never build the
+	 * handler frame in the canary / near USER_STACK_TOP (STACK_TOP_OVERRUN).
+	 */
 	{
-		kfree(ctx);
-		p->saved_context = NULL;
-		return 0;
+		uint64_t frame_addr;
+
+		new_rsp = signal_pick_handler_sp(p, irq_frame_sp(frame),
+						 &frame_addr);
+		if (new_rsp == 0)
+		{
+			process_saved_context_clear(p);
+			return 0;
+		}
+		(void)frame_addr;
 	}
 
 	info_addr = 0;
@@ -100,7 +107,6 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 
 	if (sa_flags & SA_SIGINFO)
 	{
-		uint64_t old_cr3;
 		char uctx_zero[128];
 
 		memset(&info, 0, sizeof(info));
@@ -114,19 +120,23 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 		info_addr &= ~0xFULL;
 		uctx_addr &= ~0xFULL;
 
-		if (uctx_addr < 0x400000UL)
+		if (uctx_addr < 0x400000UL ||
+		    !signal_sp_in_stack(p, uctx_addr))
 		{
-			kfree(ctx);
-			p->saved_context = NULL;
+			process_saved_context_clear(p);
 			return 0;
 		}
 
 		memset(uctx_zero, 0, sizeof(uctx_zero));
-		old_cr3 = get_current_page_directory();
-		load_page_directory((uint64_t)process_pgd(p));
-		memcpy((void *)info_addr, &info, sizeof(info));
-		memcpy((void *)uctx_addr, uctx_zero, sizeof(uctx_zero));
-		load_page_directory(old_cr3);
+		if (copy_to_user_region_in_directory(process_pgd(p), info_addr,
+						     &info, sizeof(info)) != 0 ||
+		    copy_to_user_region_in_directory(process_pgd(p), uctx_addr,
+						     uctx_zero,
+						     sizeof(uctx_zero)) != 0)
+		{
+			process_saved_context_clear(p);
+			return 0;
+		}
 	}
 
 	signal_redirect_irq_frame(frame, (void *)handler, sig, new_rsp,
@@ -171,11 +181,7 @@ void signals_reset_on_exec(process_t *p)
 
 	if (!p)
 		return;
-	if (p->saved_context)
-	{
-		kfree(p->saved_context);
-		p->saved_context = NULL;
-	}
+	process_saved_context_clear(p);
 	p->signal_pending = 0;
 	p->signal_mask = 0;
 	p->signal_ignored = 0;
@@ -328,6 +334,114 @@ int send_signal_pgrp(int32_t pgid, int signal)
 	return n;
 }
 
+void signal_note_syscall_return(process_t *p, int64_t ret)
+{
+	if (!p || p->mode != USER_MODE)
+		return;
+	if (!process_saved_context_present(p))
+		return;
+
+	task_set_retval(&p->task, (uint64_t)ret);
+}
+
+/*
+ * Pick a mapped user stack slot for [restorer][sigframe] + handler redzone.
+ * When the interrupted SP is near the stack guard (deep call chain in
+ * recvfrom → ping), placing the frame below saved SP lands in unmapped
+ * pages and syscalls from the handler (clock_gettime in SIGALRM) fail with
+ * -EFAULT.
+ *
+ * Stale syscall_frame SP (outside the process stack VMA) must not be used —
+ * BusyBox ping after exec can interrupt with bogus sp≈0xffa… and unmapped
+ * handler locals.
+ */
+static int signal_sp_in_stack(process_t *p, uint64_t sp)
+{
+	uint64_t lo;
+	uint64_t hi;
+
+	if (!p || sp == 0)
+		return 0;
+
+	lo = process_stack_start(p);
+	hi = lo + process_stack_size(p);
+	if (lo == 0 || hi <= lo)
+	{
+		lo = USER_STACK_BASE;
+		hi = USER_STACK_TOP;
+	}
+
+	return sp >= lo + 16 && sp < hi;
+}
+
+static uint64_t signal_pick_handler_sp(process_t *p, uint64_t saved_sp,
+				       uint64_t *frame_addr_out)
+{
+	uint64_t stack_lo;
+	uint64_t stack_hi;
+	uint64_t user_sp;
+	uint64_t frame_addr;
+	uint64_t min_sp;
+
+	if (!p || !frame_addr_out)
+		return 0;
+
+	stack_lo = process_stack_start(p);
+	stack_hi = stack_lo + process_stack_size(p);
+	if (stack_lo == 0 || stack_hi <= stack_lo)
+	{
+		stack_lo = USER_STACK_BASE;
+		stack_hi = USER_STACK_TOP;
+	}
+
+	saved_sp &= ~0xFUL;
+	min_sp = stack_lo + 2048UL;
+
+	if (!signal_sp_in_stack(p, saved_sp))
+		saved_sp = 0;
+
+	user_sp = saved_sp;
+	if (user_sp < sizeof(struct sigframe) + 8)
+		user_sp = 0;
+
+	/*
+	 * Deep call chain left SP near USER_STACK_TOP: building the frame below
+	 * saved SP still runs the handler in the canary band (STACK_TOP_OVERRUN).
+	 */
+	if (user_sp != 0 && user_sp > stack_hi - SIGNAL_HANDLER_TOP_MARGIN)
+		user_sp = 0;
+
+	if (user_sp == 0 || user_sp < min_sp)
+	{
+		uint64_t margin = SIGNAL_HANDLER_TOP_MARGIN;
+
+		if (margin + sizeof(struct sigframe) + 8 + 2048UL >
+		    (stack_hi - stack_lo))
+			margin = (stack_hi - stack_lo) / 4;
+
+		user_sp = (stack_hi - margin) & ~0xFUL;
+		if (user_sp < sizeof(struct sigframe) + 8 + min_sp)
+			return 0;
+	}
+	else
+	{
+		if (user_sp < sizeof(struct sigframe) + 8)
+			return 0;
+	}
+
+	user_sp -= sizeof(struct sigframe);
+	frame_addr = user_sp;
+	user_sp -= 8;
+
+	if (user_sp < min_sp || frame_addr + sizeof(struct sigframe) > stack_hi)
+		return 0;
+	if (user_sp < 0x400000UL || user_sp > 0x7FFFFFFFFFFFUL)
+		return 0;
+
+	*frame_addr_out = frame_addr;
+	return user_sp;
+}
+
 /**
  * handle_signals - Handle pending signals
  * Called by scheduler before switching to process
@@ -379,9 +493,17 @@ void handle_signals(void)
     {
         if (!signals_has_user_handler(current, SIGSEGV))
         {
-#if DEBUG_PROCESS
-            klog_info("SIGNAL", "SIGSEGV received (segmentation fault), terminating process");
-#endif
+	    /*
+	     * Pending-bit kill without a live #PF frame (e.g. send_signal from
+	     * non-PF path). Still emit a greppable tag so session smokes are
+	     * not limited to CONSOLE_SESSION_SEGV.
+	     */
+	    klog_info_fmt("FAULT",
+			  "USER_FAULT_FRAME CLASSIFY SIGNAL_KILL_SIGSEGV "
+			  "pid=%x comm=%s",
+			  (unsigned)((uint32_t)current->task.pid),
+			  current->comm[0] ? current->comm : "(none)");
+	    klog_print("USER_FAULT_FRAME\n");
             if (!process_signal_default_kill(current, SIGSEGV))
             {
                 current->signal_pending &= ~SIGNAL_MASK(SIGSEGV);
@@ -547,12 +669,18 @@ void handle_signals(void)
     /*
      * SIGPIPE: write(2) to a pipe/FIFO with no readers (Linux signal(7)).
      * Queued from sys_write; delivered here before returning to ring 3.
+     * Masked: leave pending (no terminate). Ignored: drop. Default: exit.
+     * User handler: fall through to delivery below.
      */
     if (current->signal_pending & SIGNAL_MASK(SIGPIPE))
     {
         if (current->signal_ignored & SIGNAL_MASK(SIGPIPE))
         {
             current->signal_pending &= ~SIGNAL_MASK(SIGPIPE);
+        }
+        else if (current->signal_mask & SIGNAL_MASK(SIGPIPE))
+        {
+            /* blocked — keep pending */
         }
         else if (!signals_has_user_handler(current, SIGPIPE))
         {
@@ -577,16 +705,13 @@ void handle_signals(void)
         }
     }
 
-    /* SIGCHLD - child process terminated (handled by parent, clear here) */
-    if (current->signal_pending & SIGNAL_MASK(SIGCHLD))
-    {
-#if DEBUG_PROCESS
-        klog_info("SIGNAL", "SIGCHLD received (child terminated)");
-#endif
-        current->signal_pending &= ~SIGNAL_MASK(SIGCHLD);
-        if (current->state == PROCESS_BLOCKED)
-            process_set_sched_state(current, PROCESS_READY);
-    }
+    /*
+     * SIGCHLD: do not clear pending here. Ash waits via rt_sigsuspend with a
+     * temporary mask that unblocks SIGCHLD; clearing in handle_signals() on
+     * schedule-in dropped the notification and left pipeline subshells as
+     * zombies while the shell slept forever (P1 wait4/sigsuspend hang).
+     * send_signal() already sets pending and wakes BLOCKED parents.
+     */
 
     /* Check for signals with userspace handlers */
     for (int sig = 1; sig < _NSIG; sig++)
@@ -618,7 +743,7 @@ void handle_signals(void)
 		 * Defer catchable delivery: leave pending for the in-syscall
 		 * wait to return -EINTR/-ETIMEDOUT (see signal_defer_catchable).
 		 */
-		if (current->signal_defer_catchable)
+		if (process_signal_defer_catchable(current))
 			continue;
                 
                 /* Validate handler is in userspace */
@@ -637,7 +762,6 @@ void handle_signals(void)
                         uint64_t user_sp;
                         uint64_t frame_addr;
                         uint64_t restorer;
-                        uint64_t old_cr3;
                         void (*restorer_fn)(void);
 
                         ctx = kmalloc(sizeof(struct sigcontext));
@@ -660,29 +784,13 @@ void handle_signals(void)
                         else
                             task_store_sigcontext(ctx, &current->task);
 
-                        current->saved_context = ctx;
+                        process_saved_context_attach(current, ctx);
 
-                        user_sp = sigcontext_sp(ctx) & ~0xFUL;
-                        /*
-                         * Layout (low→high): [restorer][sigframe…]
-                         * Handler `ret` → musl __restore_rt → rt_sigreturn.
-                         */
-                        if (user_sp < sizeof(struct sigframe) + 8)
+                        user_sp = signal_pick_handler_sp(current,
+                            sigcontext_sp(ctx), &frame_addr);
+                        if (user_sp == 0)
                         {
-                            kfree(ctx);
-                            current->saved_context = NULL;
-                            current->signal_pending &= ~SIGNAL_MASK(sig);
-                            continue;
-                        }
-                        user_sp -= sizeof(struct sigframe);
-                        frame_addr = user_sp;
-                        user_sp -= 8;
-
-                        if (user_sp < 0x400000UL ||
-                            user_sp > 0x7FFFFFFFFFFFUL)
-                        {
-                            kfree(ctx);
-                            current->saved_context = NULL;
+                            process_saved_context_clear(current);
                             current->signal_handlers[sig] = SIG_DFL;
                             current->signal_pending &= ~SIGNAL_MASK(sig);
                             continue;
@@ -697,8 +805,7 @@ void handle_signals(void)
                              * No SA_RESTORER: cannot safely return from
                              * handler. Keep pending; stop scanning this tick.
                              */
-                            kfree(ctx);
-                            current->saved_context = NULL;
+                            process_saved_context_clear(current);
                             break;
                         }
                         restorer = (uint64_t)(uintptr_t)restorer_fn;
@@ -707,12 +814,16 @@ void handle_signals(void)
                         frame.signum = sig;
                         frame.ctx = *ctx;
 
-                        old_cr3 = get_current_page_directory();
-                        load_page_directory((uint64_t)process_pgd(current));
-                        memcpy((void *)frame_addr, &frame,
-                               sizeof(struct sigframe));
-                        memcpy((void *)user_sp, &restorer, sizeof(restorer));
-                        load_page_directory(old_cr3);
+                        if (copy_to_user_region_in_directory(
+				    process_pgd(current), frame_addr, &frame,
+				    sizeof(struct sigframe)) != 0 ||
+			    copy_to_user_region_in_directory(
+				    process_pgd(current), user_sp, &restorer,
+				    sizeof(restorer)) != 0)
+                        {
+                            process_saved_context_clear(current);
+                            break;
+                        }
 
                         signal_prepare_task_handler(&current->task,
                                                          (void *)handler, sig,
@@ -739,9 +850,9 @@ void handle_signals(void)
                         current->want_kernel_ret = 0;
                         process_apply_syscall_frame_to_task(
                             &current->task, &current->syscall_frame,
-                            (uint64_t)(uint32_t)sig);
+                            0);
                         restore_user_fs_base();
-                        current->signal_enter_pending = 1;
+                        process_signal_enter_pending_set(current);
 
                         current->signal_pending &= ~SIGNAL_MASK(sig);
 

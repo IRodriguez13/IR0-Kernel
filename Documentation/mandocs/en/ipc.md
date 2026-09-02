@@ -37,8 +37,9 @@ Boot: `ipc_init()` in `kmain` after `process_init()`.
 ```text
   sys_pipe2 → pipe_create → fd[read], fd[write] (path "/dev/pipe", is_pipe=true)
   read(fd)  → pipe_read → if empty: pipe_wait(BLOCKED) → idle poll wake
-  write(fd) → pipe_write → pipe_wake_all on data
-  close(fd) → pipe_close_end → EOF readers when writers==0
+  write(fd)  → pipe_write → if atomic need unmet: pipe_wait(write_need)
+                          → pipe_wake_all on data / close
+  close(fd) → pipe_close_end → EOF readers when writers==0; wake waiters first
 ```
 
 **IPC channel:**
@@ -65,6 +66,11 @@ ASCII:
 ## 4. Responsibilities
 
 - Pipes: byte stream, `O_NONBLOCK`/`O_CLOEXEC` in `pipe2`; `-EPIPE` if no readers.
+- **Linux-strict write (2026-09-02):** writes of size ≤ `PIPE_BUF` (= `PIPE_SIZE`, 4 KiB)
+  are atomic — if the ring lacks room for the whole request, `pipe_write` returns
+  `-EAGAIN` and blocking `sys_write` waits with `write_need` (no short success).
+  Larger writes may partial-fill then wait. No readers → queue `SIGPIPE` unless
+  `SIG_IGN`, then `-EPIPE` (or short success if some bytes already written).
 - Fork duplicates pipe ends with `pipe_acquire_end` refcount.
 - IPC channels: global linked list; destroy wakes all waiters.
 

@@ -37,8 +37,9 @@ Arranque: `ipc_init()` en `kmain` tras `process_init()`.
 ```text
   sys_pipe2 → pipe_create → fd[read], fd[write] (path "/dev/pipe", is_pipe=true)
   read(fd)  → pipe_read → si vacío: pipe_wait(BLOCKED) → wake en idle poll
-  write(fd) → pipe_write → pipe_wake_all al escribir datos
-  close(fd) → pipe_close_end → EOF lectores cuando writers==0
+  write(fd)  → pipe_write → si falta sitio atómico: pipe_wait(write_need)
+                          → pipe_wake_all al escribir / cerrar
+  close(fd) → pipe_close_end → EOF lectores cuando writers==0; wake waiters primero
 ```
 
 **Canal IPC:**
@@ -65,6 +66,8 @@ Mapa ASCII:
 ## 4. Responsabilidades
 
 - Tuberías: flujo de bytes, `O_NONBLOCK`/`O_CLOEXEC` en `pipe2`; `-EPIPE` si no hay lectores.
+- **Write Linux-strict (2026-09-02):** ≤ `PIPE_BUF` atómico; blocking completa el
+  `count`; sin lectores → `SIGPIPE` salvo `SIG_IGN`.
 - Fork duplica extremos de tubería con refcount `pipe_acquire_end`.
 - Canales IPC: lista enlazada global; destroy despierta todos los waiters.
 

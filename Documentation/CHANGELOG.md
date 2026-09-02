@@ -1,6 +1,6 @@
 # IR0 Kernel Changelog
 
-> **Last verified:** 2026-08-30
+> **Last verified:** 2026-09-02
 > **Source of truth:** git history, `make ktm-check`, roadmap smokes in `Makefile`, [`HARDENING.md`](HARDENING.md), [`KTM.md`](KTM.md)
 
 This file tracks user-visible and developer-facing changes per iteration.
@@ -21,6 +21,17 @@ Notes: [`releases/IR0_0.0.1_RC4.md`](releases/IR0_0.0.1_RC4.md), [`releases/NETW
 - Stress: `setup/pid1/net_command_stress.c` → `NET_STRESS_PASS` / `NC_ONLY_PASS`.
 
 ## [Unreleased]
+
+### Pipes + stack Linux-strict (2026-09-02)
+
+- Pipe write: atomic ≤ `PIPE_BUF`; blocking write completes full count; SIGPIPE
+  unless `SIG_IGN` ([pipe(7)](https://man7.org/linux/man-pages/man7/pipe.7.html)).
+- `pipe_wait` wakes writers only when free space ≥ requested (`write_need`).
+- IRQ and normal signal delivery share `signal_pick_handler_sp` / TOP margin
+  (no soft-grow past `USER_STACK_TOP`).
+- ISD pack: `/tmp` mode `1777` after MINIX inject.
+- Gates: `smoke-pipeline-stress`, `smoke-mm-cow-lazy`; notes in [`MEMORY.md`](MEMORY.md),
+  [`HARDENING.md`](HARDENING.md), mandocs [`ipc`](mandocs/en/ipc.md) / [`signals`](mandocs/en/signals.md).
 
 ### Session stabilization: i8042 race, mount visibility, 9p statfs (2026-08-30)
 

@@ -1,6 +1,6 @@
 # IR0 Kernel — Changelog (español)
 
-> **Última verificación:** 2026-07-30  
+> **Última verificación:** 2026-09-02  
 > **Fuente de verdad:** historial git, smokes del `Makefile`, [`../STABLE.md`](../STABLE.md), [`../KTM.md`](../KTM.md)
 
 Versión en inglés (canónica): [`../CHANGELOG.md`](../CHANGELOG.md).
@@ -11,6 +11,11 @@ Tag **`v0.0.1-rc4`**. Tras este tag: **solo bugfixing y estabilización** hasta 
 Detalle: [`../releases/IR0_0.0.1_RC4.md`](../releases/IR0_0.0.1_RC4.md).
 
 ## [Sin publicar]
+
+### Pipes + stack Linux-strict (2026-09-02)
+
+- Write atómico ≤ `PIPE_BUF`; SIGPIPE; `signal_pick_handler_sp` en path IRQ.
+- Pack `/tmp` 1777. Gates: `smoke-pipeline-stress`. Detalle EN: [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ### Doom T2 audio/mouse + ESC + TinyCC `/lib/tcc` (2026-07-28)
 

@@ -14,6 +14,8 @@
 #include <stddef.h>
 
 #define PIPE_SIZE 4096
+/* POSIX atomic write guarantee; Linux pipe(7) — same as capacity today. */
+#define PIPE_BUF  PIPE_SIZE
 
 typedef struct pipe
 {

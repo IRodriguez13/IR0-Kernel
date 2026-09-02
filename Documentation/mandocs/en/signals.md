@@ -100,6 +100,9 @@ ASCII:
 1. SIGKILL/SIGSTOP cannot be caught or ignored.
 2. `sys_kill`: only `pid > 0`; no process groups or `kill(-1)`.
 3. User handler needs valid user stack in [0x400000, 0x7FFFFFFFFFFF], 16-byte aligned.
+   Frames are placed by `signal_pick_handler_sp()` (also used from
+   `signals_deliver_from_irq_frame`) with `SIGNAL_HANDLER_TOP_MARGIN` below
+   `USER_STACK_TOP` so delivery does not land in the canary / overrun page.
 4. `sa_flags` not implemented (always 0).
 5. `act->sa_mask` overwrites entire process mask on sigaction.
 

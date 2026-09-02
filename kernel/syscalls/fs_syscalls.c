@@ -584,7 +584,9 @@ int64_t sys_write(int fd, const void *buf, size_t count)
   if (fd_table[fd].is_pipe)
   {
     pipe_t *pipe = (pipe_t *)fd_table[fd].vfs_file;
+    size_t total = 0;
     int ret;
+    int nb = (fd_table[fd].flags & O_NONBLOCK) != 0;
 
     if (!pipe)
       return -EBADF;
@@ -592,68 +594,80 @@ int64_t sys_write(int fd, const void *buf, size_t count)
     if (fd_table[fd].pipe_end != 1)
       return -EBADF;
 
-    if (copy_from_user(kernel_buf, buf, copy_size) != 0)
-      return -EFAULT;
-
-
-    for (;;)
+    /*
+     * Linux pipe(7) / write(2): blocking write completes the full count
+     * (atomic ≤ PIPE_BUF via pipe_write, else partial chunks + wait).
+     * O_NONBLOCK may short-write after any progress.
+     */
+    while (total < count)
     {
-      ret = pipe_write(pipe, kernel_buf, copy_size);
-      if (ret >= 0)
-      {
-        pipe_wake_all(pipe);
-        process_clear_in_thread_syscall_block(current_process);
-        return ret;
-      }
-      if (ret == -EPIPE)
-      {
-	/*
-	 * Linux pipe_write: queue SIGPIPE then return -EPIPE. Deliver via
-	 * handle_signals() here so default Terminate runs before ring-3
-	 * resume (ash pipelines: hexdump | head). Do not call send_signal's
-	 * immediate default-kill from deep in write — that raced Class B /
-	 * wait4 teardown and showed up as userspace SIGSEGV (exit 139).
-	 */
-	if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)) &&
-	    !signals_has_user_handler(current_process, SIGPIPE))
-		current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
-	handle_signals();
-        return -EPIPE;
-      }
-      if (ret != -EAGAIN)
-        return ret;
-      if (fd_table[fd].flags & O_NONBLOCK)
-        return -EAGAIN;
-      if (pipe->readers <= 0)
-      {
-	if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)) &&
-	    !signals_has_user_handler(current_process, SIGPIPE))
-		current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
-	handle_signals();
-        return -EPIPE;
-      }
-      if (signals_pause_should_interrupt(current_process))
-      {
-	handle_signals();
-	return -EINTR;
-      }
-      {
-	int wait_ret = pipe_wait(current_process, pipe, 0);
+      size_t chunk = count - total;
+      size_t off = 0;
 
-	if (wait_ret == -EINTR)
+      if (chunk > sizeof(kernel_buf))
+	chunk = sizeof(kernel_buf);
+      if (copy_from_user(kernel_buf, (const char *)buf + total, chunk) != 0)
+	return total > 0 ? (int64_t)total : -EFAULT;
+
+      while (off < chunk)
+      {
+	ret = pipe_write(pipe, kernel_buf + off, chunk - off);
+	if (ret > 0)
+	{
+	  off += (size_t)ret;
+	  total += (size_t)ret;
+	  pipe_wake_all(pipe);
+	  continue;
+	}
+	if (ret == -EPIPE)
+	{
+	  /*
+	   * Queue SIGPIPE unless SIG_IGN (Linux signal(7)). User handlers
+	   * still get the signal; write returns -EPIPE if no bytes yet,
+	   * else short success (Linux pipe_write keeps prior progress).
+	   */
+	  if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)))
+	    current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
+	  handle_signals();
+	  return total > 0 ? (int64_t)total : -EPIPE;
+	}
+	if (ret != -EAGAIN)
+	  return total > 0 ? (int64_t)total : ret;
+	if (nb)
+	  return total > 0 ? (int64_t)total : -EAGAIN;
+	if (pipe->readers <= 0)
+	{
+	  if (!(current_process->signal_ignored & SIGNAL_MASK(SIGPIPE)))
+	    current_process->signal_pending |= SIGNAL_MASK(SIGPIPE);
+	  handle_signals();
+	  return total > 0 ? (int64_t)total : -EPIPE;
+	}
+	if (signals_pause_should_interrupt(current_process))
 	{
 	  handle_signals();
-	  return -EINTR;
+	  return total > 0 ? (int64_t)total : -EINTR;
 	}
-	if (wait_ret != 0)
-	  return -EAGAIN;
-      }
-      if (signals_pause_should_interrupt(current_process))
-      {
-	handle_signals();
-	return -EINTR;
+	{
+	  int wait_ret = pipe_wait(current_process, pipe, 0,
+				     chunk - off);
+
+	  if (wait_ret == -EINTR)
+	  {
+	    handle_signals();
+	    return total > 0 ? (int64_t)total : -EINTR;
+	  }
+	  if (wait_ret != 0)
+	    return total > 0 ? (int64_t)total : -EAGAIN;
+	}
+	if (signals_pause_should_interrupt(current_process))
+	{
+	  handle_signals();
+	  return total > 0 ? (int64_t)total : -EINTR;
+	}
       }
     }
+    process_clear_in_thread_syscall_block(current_process);
+    return (int64_t)total;
   }
 
   /* Check write permissions */
@@ -930,7 +944,7 @@ int64_t sys_read(int fd, void *buf, size_t count)
 	return -EINTR;
       }
       {
-	int wait_ret = pipe_wait(current_process, pipe, 1);
+	int wait_ret = pipe_wait(current_process, pipe, 1, 0);
 
 	if (wait_ret == -EINTR)
 	{

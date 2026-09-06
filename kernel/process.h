@@ -174,6 +174,12 @@ typedef struct process
 	 * comm[] cannot serve because it is only the basename.
 	 */
 	char exe_path[256];
+	/*
+	 * NUL-separated environment blob copied at exec (Linux /proc/pid/environ).
+	 * Not walked from user stack at read time.
+	 */
+	char *saved_environ;
+	size_t saved_environ_len;
 
 	/* Resource limits (Linux rlimit indices 0..15). */
 #define IR0_RLIM_NLIMITS 16
@@ -205,9 +211,21 @@ typedef struct process
 	uint32_t signal_ignored;  /* Mask of signals to ignore (SIG_IGN) */
 	uint32_t signal_sa_flags[_NSIG]; /* Per-signal sa_flags from sigaction */
 	uint32_t signal_sa_mask[_NSIG];  /* Per-signal sa_mask (during handler only) */
+	/*
+	 * signal_mask snapshotted when a userspace handler is armed; restored
+	 * on rt_sigreturn (Linux-like sa_mask / !SA_NODEFER blocking).
+	 */
+	uint32_t signal_mask_saved;
+	uint8_t signal_mask_saved_valid;
 	void (*signal_restorer[_NSIG])(void); /* sa_restorer (SA_RESTORER / musl) */
 	int *set_tid_ptr;      /* set_tid_address(2) userspace pointer */
-	struct sigcontext *saved_context;  /* Saved context before signal handler (for sigreturn) */
+	struct sigcontext *saved_context;  /* Kernel cache of interrupted GPRs */
+	/*
+	 * Handler entry RSP (points at restorer slot). Non-zero while a
+	 * userspace sigframe may still be live. Cleared on rt_sigreturn or
+	 * abandon (SP left the handler stack without sigreturn).
+	 */
+	uint64_t signal_frame_sp;
 	/*
 	 * Set when a userspace handler frame is armed; cleared on the first
 	 * switch_to_user_task into that handler. saved_context must stay until
@@ -215,6 +233,11 @@ typedef struct process
 	 * (sendto/setitimer from BusyBox ping SIGALRM) re-enter the handler.
 	 */
 	uint8_t signal_enter_pending;
+	/*
+	 * Catchable signal last delivered to a user handler (for SA_RESTART on
+	 * rt_sigreturn after kernel_sleep_interrupted). Cleared on sigreturn.
+	 */
+	uint8_t signal_last_delivered;
 	/*
 	 * When set, handle_signals() leaves catchable user handlers pending
 	 * (no sigframe / signal_enter_pending). Interruptible waits (e.g.
@@ -226,6 +249,12 @@ typedef struct process
 	/* Linux syscall insn frame (for fork child / blocked syscall return). */
 	arch_syscall_frame_t syscall_frame;
 	uint64_t syscall_resume_rax;
+	/*
+	 * Linux syscall nr at the current syscall entry (dispatch). Used for
+	 * SA_RESTART resume after signal delivery on a kernel_syscall_sleep block.
+	 */
+	uint32_t syscall_entry_nr;
+	uint32_t syscall_block_nr;
 	uint8_t irq_frame_saved; /* blocked syscall: resume via switch_to_user_task */
 	int *wait_status_ptr;    /* userspace wait4 status word while irq_frame_saved */
 	/*
@@ -282,6 +311,14 @@ typedef struct process
 	 * sat in the pipe. Cleared when the task returns to user segments.
 	 */
 	uint8_t kernel_syscall_sleep;
+
+	/*
+	 * Set when a catchable handler is delivered while kernel_syscall_sleep
+	 * (blocked TTY/pipe/poll in kernel). rt_sigreturn must restore the backed-up
+	 * syscall_frame and re-enter the syscall from a clean user pt_regs site.
+	 */
+	uint8_t kernel_sleep_interrupted;
+	arch_syscall_frame_t kernel_sleep_syscall_frame;
 
 	/*
 	 * Per-process kernel stack (IR0_PROC_KSTACK_SIZE). Mapped supervisor-only
@@ -344,7 +381,7 @@ _Static_assert(offsetof(process_t, fs_base) == IR0_PROC_FS_BASE_OFFSET,
 
 static inline fd_entry_t *process_fd_table(const process_t *p)
 {
-	if (!p || !p->files)
+	if (!p || !files_struct_live(p->files))
 		return NULL;
 	return p->files->fd_table;
 }
@@ -524,6 +561,7 @@ void process_clear_in_thread_syscall_block(process_t *p);
 void process_reset_blocked_syscall_state(process_t *p);
 /* "arm" = prepare/enable a resume path (English verb), not ARM64. */
 void process_arm_kernel_syscall_sleep(process_t *p);
+void process_kernel_sleep_capture_syscall_frame(process_t *p);
 /* After switch_context saved prev: honour want_kernel_ret (Class B close). */
 void process_after_task_save(task_t *prev);
 
@@ -627,6 +665,48 @@ int process_child_wait_status_word(const process_t *child);
 int process_signal_is_default_fatal(process_t *p, int sig);
 int process_signal_default_kill(process_t *target, int signal);
 
+struct sigcontext *process_saved_context_peek(const process_t *p);
+int process_saved_context_present(const process_t *p);
+void process_saved_context_init(process_t *p);
+int process_saved_context_attach(process_t *p, struct sigcontext *ctx);
+void process_saved_context_clear(process_t *p);
+
+int process_signal_enter_pending(const process_t *p);
+void process_signal_enter_pending_set(process_t *p);
+void process_signal_enter_pending_clear(process_t *p);
+void process_signal_enter_pending_init(process_t *p);
+
+int process_signal_defer_catchable(const process_t *p);
+void process_signal_defer_catchable_set(process_t *p);
+void process_signal_defer_catchable_clear(process_t *p);
+void process_signal_last_delivered_set(process_t *p, int sig);
+int process_signal_last_delivered(const process_t *p);
+void process_signal_last_delivered_clear(process_t *p);
+
+void process_kernel_sleep_interrupted_clear(process_t *p);
+void process_kernel_sleep_interrupted_backup_frame(process_t *p);
+
+int process_kernel_sleep_interrupted(const process_t *p);
+
+void process_saved_environ_clear(process_t *p);
+int process_saved_environ_set(process_t *p, char *const envp[]);
+int process_saved_environ_clone(process_t *dst, const process_t *src);
+
+int process_wait_blocked(const process_t *p);
+void process_wait_blocked_set(process_t *p);
+void process_wait_blocked_clear(process_t *p);
+pid_t process_wait_target_pid(const process_t *p);
+void process_wait_target_pid_set(process_t *p, pid_t pid);
+int process_wait_options(const process_t *p);
+void process_wait_options_set(process_t *p, int options);
+int *process_wait_status_ptr_peek(process_t *p);
+void process_wait_status_ptr_set(process_t *p, int *status_ptr);
+pid_t process_wait_resume_child_pid(const process_t *p);
+void process_wait_resume_child_pid_set(process_t *p, pid_t pid);
+void process_wait_state_init(process_t *p);
+void process_wait_state_arm(process_t *p, pid_t pid, int options, int *status_ptr);
+void process_wait_state_clear(process_t *p);
+
 /*
  * Reap a zombie child when resuming a blocked wait4 syscall.
  * Must run after the child has finished process_exit(), before returning to user.
@@ -671,6 +751,7 @@ void process_init_fd_table(process_t *process);
 
 /* Process lifecycle management */
 void process_reap_zombies(process_t *parent); /* Reap zombie children (used by init) */
+int process_has_zombie_child(const process_t *parent);
 void process_reap_zombie_child(process_t *child);
 void process_destroy(process_t *p);
 
@@ -691,6 +772,9 @@ uint64_t *process_pt_child(uint64_t *table, size_t index);
  * walk; 2 MiB huge leaves count as 512 pages each.
  */
 uint64_t process_count_resident_user_pages(const process_t *p);
+
+/* Page-table walk; @mm must be held alive (mm_get) for the duration of the call. */
+uint64_t mm_count_resident_user_pages(const mm_struct_t *mm);
 
 void process_fase50_trace_proc(const char *stage, process_t *p);
 

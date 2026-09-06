@@ -70,7 +70,9 @@ __attribute__((noreturn)) void process_exit(int code)
 	}
 	process_fase50_trace_proc("process_exit-entry", dying);
 	dying->irq_frame_saved = 0;
-	dying->signal_defer_catchable = 0;
+	process_signal_defer_catchable_clear(dying);
+	process_signal_last_delivered_clear(dying);
+	process_kernel_sleep_interrupted_clear(dying);
 #if CONFIG_ENABLE_NETWORKING
 	tcp_wire_on_process_exit((uint32_t)dying->task.pid);
 #endif
@@ -109,6 +111,9 @@ __attribute__((noreturn)) void process_exit(int code)
 	 * process that is on its way out.
 	 */
 	ir0_console_purge_waiters_for_process(dying);
+	pipe_purge_waiters_for_process(dying);
+	if (dying->pgid > 1)
+		ir0_console_clear_fg_pgid((int32_t)dying->pgid);
 
 	process_release_fds(dying, "EXIT_CLOSE");
 
@@ -183,7 +188,7 @@ __attribute__((noreturn)) void process_exit(int code)
 		{
 			send_signal(parent->task.pid, SIGCHLD);
 			if (parent->state == PROCESS_BLOCKED ||
-			    parent->wait_blocked)
+			    process_wait_blocked(parent))
 				process_wait_wake_blocked_parent(parent, dying);
 		}
 		else if (!parent || parent->state == PROCESS_ZOMBIE)
@@ -259,6 +264,7 @@ void process_destroy(process_t *p)
 		return;
 
 	ir0_console_purge_waiters_for_process(p);
+	pipe_purge_waiters_for_process(p);
 	ir0_clock_wait_disarm(p);
 
 	process_fase46_proc_log(p, -1, "DESTROY");
@@ -299,11 +305,8 @@ void process_destroy(process_t *p)
 			kfree((void *)(uintptr_t)kstack);
 	}
 
-	if (p->saved_context)
-	{
-		kfree(p->saved_context);
-		p->saved_context = NULL;
-	}
+	process_saved_context_clear(p);
+	process_saved_environ_clear(p);
 
 	pmm_owner_audit(&orphan_frames, &double_free, &alive_owner_missing);
 #if IR0_DEBUG_PMM

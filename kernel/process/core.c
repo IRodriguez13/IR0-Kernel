@@ -304,12 +304,10 @@ void process_clear_in_thread_syscall_block(process_t *p)
 	p->irq_frame_saved = 0;
 	p->poll_resume_via_arch = 0;
 	p->coop_resched_resume = 0;
-	/*
-	 * Clear want_kernel_ret only from in-syscall return paths (tty_sleep
-	 * poll_ready, pipe, etc.). ir0_console_wake_readers must NOT call this —
-	 * async wake races process_after_task_save and must leave the flag alone.
-	 */
 	p->want_kernel_ret = 0;
+	p->kernel_syscall_sleep = 0;
+	process_kernel_sleep_interrupted_clear(p);
+	p->syscall_block_nr = 0;
 }
 
 void process_reset_blocked_syscall_state(process_t *p)
@@ -321,14 +319,13 @@ void process_reset_blocked_syscall_state(process_t *p)
 	p->poll_resume_via_arch = 0;
 	p->coop_resched_resume = 0;
 	p->want_kernel_ret = 0;
+	p->kernel_syscall_sleep = 0;
+	process_kernel_sleep_interrupted_clear(p);
 	p->syscall_resume_rax = 0;
+	p->syscall_entry_nr = 0;
+	p->syscall_block_nr = 0;
 	p->syscall_interrupted = 0;
-	p->wait_status_ptr = NULL;
-	p->wait_blocked = 0;
-	p->wait_blocked = 0;
-	p->wait_target_pid = 0;
-	p->wait_options = 0;
-	p->wait_resume_child_pid = 0;
+	process_wait_state_init(p);
 	p->poll_waiter = NULL;
 	p->clock_wait_armed = 0;
 	p->clock_wait_deadline_ms = IR0_CLOCK_WAIT_DISARMED;
@@ -337,6 +334,18 @@ void process_reset_blocked_syscall_state(process_t *p)
 static void process_apply_kernel_ret_segments(process_t *p)
 {
 	task_apply_kernel_segments(&p->task);
+}
+
+void process_kernel_sleep_capture_syscall_frame(process_t *p)
+{
+	if (!p || !p->syscall_frame_fresh)
+		return;
+
+	p->kernel_sleep_syscall_frame = p->syscall_frame;
+	p->syscall_block_nr = p->syscall_entry_nr;
+	if (syscall_frame_arg(&p->kernel_sleep_syscall_frame, 0) ==
+	    (uint64_t)(int64_t)(-1))
+		syscall_frame_set_arg(&p->kernel_sleep_syscall_frame, 0, 0);
 }
 
 /*
@@ -362,6 +371,16 @@ void process_arm_kernel_syscall_sleep(process_t *p)
 	 * to know this task must re-enter its syscall rather than iretq.
 	 */
 	p->kernel_syscall_sleep = 1;
+
+	/*
+	 * Snapshot the syscall entry frame at block time. Delivery must not
+	 * trust syscall_frame later — kstack GPR residue and handler redirect
+	 * can leave rdi=-1 and double keystrokes after SIGCHLD (line editor).
+	 */
+	if (p->syscall_frame_fresh)
+	{
+		process_kernel_sleep_capture_syscall_frame(p);
+	}
 
 	if (process_rip_in_user_range(task_get_ip(&p->task)))
 	{

@@ -319,18 +319,33 @@ static int process_wait_pid_matches_child(pid_t wait_pid,
 	return child->pgid == (pid_t)(-wait_pid);
 }
 
+int process_has_zombie_child(const process_t *parent)
+{
+	process_t *p;
+
+	if (!parent)
+		return 0;
+
+	for (p = process_list; p; p = p->next)
+	{
+		if (p->ppid == parent->task.pid && p->state == PROCESS_ZOMBIE)
+			return 1;
+	}
+	return 0;
+}
+
 int process_wait_child_matches_blocked_target(const process_t *parent,
 					    pid_t child_pid)
 {
 	process_t *child;
 
-	if (!parent || child_pid <= 0 || !parent->wait_blocked)
+	if (!parent || child_pid <= 0 || !process_wait_blocked(parent))
 		return 0;
 
 	child = process_find_by_pid(child_pid);
 	if (!child || child->ppid != parent->task.pid)
 		return 0;
-	return process_wait_pid_matches_child(parent->wait_target_pid, parent,
+	return process_wait_pid_matches_child(process_wait_target_pid(parent), parent,
 					      child);
 }
 
@@ -348,7 +363,7 @@ void process_wait_wake_blocked_parent(process_t *parent, process_t *child)
 	int status_val;
 	int *status_ptr;
 
-	if (!parent || !child || !parent->wait_blocked)
+	if (!parent || !child || !process_wait_blocked(parent))
 		return;
 
 	if (!process_wait_child_matches_blocked_target(parent, child->task.pid))
@@ -371,7 +386,7 @@ void process_wait_wake_blocked_parent(process_t *parent, process_t *child)
 	}
 
 	status_val = process_child_wait_status_word(child);
-	status_ptr = parent->wait_status_ptr;
+	status_ptr = process_wait_status_ptr_peek(parent);
 	if (!status_ptr)
 		status_ptr = (int *)(uintptr_t)process_syscall_arg(parent, 1);
 
@@ -387,7 +402,7 @@ void process_wait_wake_blocked_parent(process_t *parent, process_t *child)
 #if IR0_DEBUG_PROC
 	klog_debug_fmt("SIGNAL", "[SIGTERM_AUDIT] wait_wake parent=%x child=%x status=%x rax=%x", (unsigned)((uint32_t)parent->task.pid), (unsigned)((uint32_t)child->task.pid), (unsigned)((uint32_t)status_val), (unsigned)((uint32_t)child->task.pid));
 #endif
-	parent->wait_resume_child_pid = child->task.pid;
+	process_wait_resume_child_pid_set(parent, child->task.pid);
 	parent->syscall_resume_rax = (uint64_t)child->task.pid;
 	process_set_sched_state(parent, PROCESS_READY);
 	sched_add_process(parent);
@@ -482,8 +497,8 @@ int process_wait(pid_t pid, int *status, int options)
 	 */
 
 	for (;;) {
-		const int active_opts = (current_process->mode == USER_MODE)
-			? current_process->wait_options
+		const int 		active_opts = (current_process->mode == USER_MODE)
+			? process_wait_options(current_process)
 			: options;
 		found_child = 0;
 		zombie = NULL;
@@ -531,14 +546,9 @@ int process_wait(pid_t pid, int *status, int options)
 				else if (copy_to_user(status, &status_val, sizeof(int)) != 0)
 					return -EFAULT;
 			}
-			current_process->wait_status_ptr = NULL;
-			current_process->irq_frame_saved = 0;
-			current_process->wait_blocked = 0;
-			current_process->wait_target_pid = 0;
-			current_process->wait_options = 0;
-			current_process->wait_resume_child_pid = 0;
+			process_wait_state_clear(current_process);
+			process_clear_in_thread_syscall_block(current_process);
 			current_process->syscall_resume_rax = 0;
-			current_process->coop_resched_resume = 0;
 			task_set_retval(&current_process->task, (uint64_t)(uint32_t)reaped_pid);
 
 			if (IR0_DEBUG_PROC)
@@ -584,11 +594,7 @@ int process_wait(pid_t pid, int *status, int options)
 		if (current_process->mode == USER_MODE)
 		{
 			wait_exit_audit_process_wait_block(pid, status);
-			current_process->wait_status_ptr = status;
-			current_process->wait_blocked = 1;
-			current_process->wait_target_pid = pid;
-			current_process->wait_options = active_opts;
-			current_process->wait_resume_child_pid = 0;
+			process_wait_state_arm(current_process, pid, active_opts, status);
 			current_process->coop_resched_resume = 0;
 			current_process->syscall_resume_rax = 0;
 			task_set_retval(&current_process->task, 0);
@@ -607,12 +613,7 @@ int process_wait(pid_t pid, int *status, int options)
 							    current_process);
 		}
 		else
-		{
-			current_process->wait_blocked = 1;
-			current_process->wait_target_pid = pid;
-			current_process->wait_options = active_opts;
-			current_process->wait_resume_child_pid = 0;
-		}
+			process_wait_state_arm(current_process, pid, active_opts, NULL);
 
 		zombie = NULL;
 		for (p = process_list; p; p = p->next)

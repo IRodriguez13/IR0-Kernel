@@ -46,6 +46,9 @@ int process_signals_clone(process_t *dst, const process_t *src)
 	dst->signal_pending = 0;
 	dst->signal_mask = src->signal_mask;
 	dst->signal_ignored = src->signal_ignored;
+	dst->signal_mask_saved = 0;
+	dst->signal_mask_saved_valid = 0;
+	dst->signal_frame_sp = 0;
 	/* Linux: interval timers are not inherited by the child. */
 	dst->it_real_expire_ms = 0;
 	dst->it_real_interval_ms = 0;
@@ -56,9 +59,11 @@ int process_signals_clone(process_t *dst, const process_t *src)
 		dst->signal_sa_mask[i] = src->signal_sa_mask[i];
 		dst->signal_restorer[i] = src->signal_restorer[i];
 	}
-	dst->saved_context = NULL;
-	dst->signal_enter_pending = 0;
-	dst->signal_defer_catchable = 0;
+	process_saved_context_init(dst);
+	process_signal_enter_pending_init(dst);
+	process_signal_defer_catchable_clear(dst);
+	process_signal_last_delivered_clear(dst);
+	process_kernel_sleep_interrupted_clear(dst);
 	return 0;
 }
 
@@ -105,5 +110,5 @@ int process_session_attrs_clone(process_t *dst, const process_t *src)
 	memcpy(dst->exe_path, src->exe_path, sizeof(dst->exe_path));
 	memcpy(dst->rlimits, src->rlimits, sizeof(dst->rlimits));
 	dst->robust_list = src->robust_list;
-	return 0;
+	return process_saved_environ_clone(dst, src);
 }

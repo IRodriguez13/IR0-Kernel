@@ -15,7 +15,8 @@
 #include "process_internal.h"
 #include <mm/pmm.h>
 #include <ir0/mm.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/paging.h>
+#include <ir0/tlb.h>
 
 static uint32_t ir0_kstack_slot_next;
 
@@ -86,21 +87,41 @@ int process_kernel_stack_alloc(process_t *p)
 			pmm_free_frame(phys);
 			goto rollback;
 		}
-		/* Shared kernel PTEs: flush even if active CR3 is a process mm. */
-		tlb_invalidate_page(va + off);
 		mapped = off + PAGE_SIZE_4KB;
+	}
+	/*
+	 * Flush via CR3 reload on the boot root — never invlpg each new
+	 * kstack VA while RSP may sit in the same 4K page (post-ash #DF).
+	 */
+	{
+		uint64_t saved = get_current_page_directory();
+
+		if (saved != (uint64_t)(uintptr_t)pml4)
+			load_page_directory((uint64_t)(uintptr_t)pml4);
+		tlb_invalidate_all();
+		if (saved != (uint64_t)(uintptr_t)pml4)
+			load_page_directory(saved);
 	}
 
 	/*
 	 * Process mm may have been created before PML4[kstack] existed on the
 	 * boot root. Re-share present kernel-half slots so switch_context_x64
 	 * (CR3 swap while still on prev RSP) and TSS.RSP0 keep working.
+	 * Broadcast to every process mm: new PTEs live in the shared PDPT, but
+	 * mms that never linked PML4[kstack] still need the root slot.
 	 */
 	{
-		uint64_t *proc_pml4 = process_pgd(p);
+		process_t *it;
+		uint64_t irqf = process_irq_save();
 
-		if (proc_pml4 && proc_pml4 != pml4)
-			mm_copy_kernel_half(proc_pml4, pml4);
+		for (it = process_list; it; it = it->next)
+		{
+			uint64_t *proc_pml4 = process_pgd(it);
+
+			if (proc_pml4 && proc_pml4 != pml4)
+				mm_copy_kernel_half(proc_pml4, pml4);
+		}
+		process_irq_restore(irqf);
 	}
 
 	p->kstack_base = (void *)va;
@@ -151,9 +172,8 @@ void process_kernel_stack_free(process_t *p)
 
 		for (off = 0; off < span; off += PAGE_SIZE_4KB)
 		{
-			/* unmap_page_in_directory already returns the PMM frame. */
-			if (unmap_page_in_directory(pml4, va + off) == 0)
-				tlb_invalidate_page(va + off);
+			/* unmap_page_in_directory already invlpgs; skip live page. */
+			(void)unmap_page_in_directory(pml4, va + off);
 		}
 	}
 #else
@@ -360,9 +380,11 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	proc->signal_pending = 0;
 	proc->signal_mask = 0;
 	proc->signal_ignored = 0;
-	proc->saved_context = NULL;
-	proc->signal_enter_pending = 0;
-	proc->signal_defer_catchable = 0;
+	process_saved_context_init(proc);
+	process_signal_enter_pending_init(proc);
+	process_signal_defer_catchable_clear(proc);
+	process_signal_last_delivered_clear(proc);
+	process_kernel_sleep_interrupted_clear(proc);
 	for (int i = 0; i < _NSIG; i++)
 	{
 		proc->signal_handlers[i] = SIG_DFL;

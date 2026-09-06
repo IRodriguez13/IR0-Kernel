@@ -6,7 +6,7 @@
 
 <p align="center">
  Unix-like kernel (GPL-3.0) — x86-64 bring-up under QEMU, narrow facades,
-  honest partial Linux ABI.
+ partial Linux ABI.
 </p>
 
   IR0 is a operating-system kernel (GPL-3.0). Primary bring-up target is
@@ -63,10 +63,10 @@ ISD builds a finished image; IR0 boots it.
 <p align="center"><em>Doom on IR0/Unix (<code>PROFILE=desktop</code>): framebuffer + input path.</em></p>
 
 <p align="center">
-  <img src="scripts/kconfig/assets/isd-panic-gtk.png" alt="IR0 kernel panic — GTK framebuffer with uptime and safe shutdown message" width="720" />
+  <img src="./scripts/kconfig/assets/isd-panic-gtk.png" alt="IR0 kernel panic on GTK framebuffer — uptime, fault site, safe shutdown" width="720" />
 </p>
 
-<p align="center"><em>Kernel panic on the GTK framebuffer: uptime at halt, source location, and <code>Safe to power off or reboot</code> (trigger: write to <code>/sys/kernel/panic</code>).</em></p>
+<p align="center"><em>Kernel panic on the GTK framebuffer (trigger: write to <code>/sys/kernel/panic</code>). Uptime, panic level, and <code>Safe to power off or reboot</code>.</em></p>
 
 ## Getting started
 
@@ -122,20 +122,29 @@ Subsystem docs: **[Documentation/](Documentation/README.md)** — `make man TOPI
 
 ## Context
 
+**Linux ABI:** partial by design — syscall coverage grows contract-by-contract
+(`Documentation/releases/IR0_0.0.1_ABI_BOARD.md`, `make linux-abi-audit`).
+
 **x86-64 (default):** uniprocessor kernel with RR scheduling, fork/exec/wait,
 demand paging and fork COW paths exercised in-tree, VFS (MINIX root, tmpfs,
-path-routed `/proc`/`/sys`), console/TTY, and a partial Linux syscall surface
-for musl/BusyBox bring-up. Networking includes UDP/ICMP, **AF_UNIX** streams,
-and lab-grade TCP (`sock_stream` / wire path with limited recovery) — not a
-full Internet stack or production NIC story. Optional demos: BusyBox `ash` via
-runit (`make load-userspace-runit` / `run-fase58e-ash-gui`), doomgeneric on `/dev/fb0`.
+path-routed `/proc`/`/sys`), console/TTY, musl/BusyBox bring-up. Networking
+includes UDP/ICMP, **AF_UNIX** streams, and lab-grade TCP — not a full Internet
+stack or production NIC story. Optional demos: BusyBox `ash` via runit
+(`make load-userspace-runit` / `run-fase58e-ash-gui`), doomgeneric on `/dev/fb0`.
 
 **ARM64:** early bring-up and board scaffolding (QEMU `virt`, RPi4 UART lab).
 Not a flashable appliance and not feature-parity with x86.
 
-**Non-goals today:** SMP, complete Linux syscall coverage, desktop-class
-userspace, or “better than Linux.” Near-term focus is open, rebuildable
-appliance profiles with a thin Makefile surface and actionable diagnostics.
+**Non-goals today:** SMP, desktop-class userspace, or “better than Linux.”
+Near-term focus is open, rebuildable appliance profiles with a thin Makefile
+surface and actionable diagnostics.
+
+**Failure model:** `BUG_ON` / `ASSERT` go straight to `panicex()` and halt
+(no continue-in-prod path). Before the final banner you still get classified
+output on serial: panic level, optional **FAULT FRAME** (CPU cause vs reporter),
+`[KTM][PANIC_SITE]`, stack/registers, and nested-fault tagging
+(`CLASSIFY NESTED_PANIC_OR_FAULT`). Userspace faults log `USER_FAULT_FRAME`
+without kernel panic. See `includes/ir0/oops.h`, `kernel/lib/oops.c`.
 
 ## License
 

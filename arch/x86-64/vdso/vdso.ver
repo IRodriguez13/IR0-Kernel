@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+LINUX_2.6 {
+	global:
+		__vdso_clock_gettime;
+	local:
+		*;
+};

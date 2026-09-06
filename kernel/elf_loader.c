@@ -32,13 +32,20 @@
 #include <ir0/signals.h>
 #include <ir0/ktm/user_canary.h>
 #include <ir0/console.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/paging.h>
+#include <ir0/tls.h>
+#include <ir0/context.h>
 #include <ir0/chmod.h>
 #include <ir0/credentials.h>
 #include <ir0/permissions.h>
 #include <config.h>
 #include <ir0/ktm/fault.h>
+#include <ir0/vdso.h>
+#include <ir0/errno.h>
 #include <errno.h>
+
+#define EXEC_SHEBANG_MAX_DEPTH 4
+#define EXEC_SHEBANG_LINE_MAX  127
 
 /* Compiler optimization hints */
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -108,9 +115,10 @@ typedef struct
 #define AT_SECURE 23
 #define AT_FLAGS  24
 #define AT_RANDOM 25
+#define AT_SYSINFO_EHDR 33
 #define PT_PHDR   6
 
-#define ELF_AUXV_PAIRS 15
+#define ELF_AUXV_PAIRS 16
 #define ELF_AT_RANDOM_BYTES 16
 #define AT_CLKTCK_VALUE 100
 
@@ -137,27 +145,168 @@ static void elf_trace_entry_stack_layout(process_t *proc, const elf64_header_t *
 
 static int validate_elf_header(const elf64_header_t *header)
 {
-    /* Check ELF magic number */
     if (header->e_ident[0] != ELF_MAGIC_0 ||
         header->e_ident[1] != ELF_MAGIC_1 ||
         header->e_ident[2] != ELF_MAGIC_2 ||
         header->e_ident[3] != ELF_MAGIC_3)
-    {
         return 0;
-    }
-
-    /* Check 64-bit ELF for this kernel's e_machine. */
     if (header->e_ident[4] != ELFCLASS64 ||
         !elf_machine_supported(header->e_machine))
-    {
         return 0;
-    }
-
-    /* ET_EXEC (static) or ET_DYN (PIE) */
     if (header->e_type != ET_EXEC && header->e_type != ET_DYN)
         return 0;
+    return 1;
+}
+
+static int exec_buffer_is_elf(const void *data, size_t size)
+{
+    if (!data || size < 4)
+        return 0;
+    {
+        const uint8_t *b = (const uint8_t *)data;
+
+        return b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' && b[3] == 'F';
+    }
+}
+
+/*
+ * Parse #! interpreter line. Returns 1 on success, 0 if not a shebang,
+ * -ENOEXEC on malformed script header.
+ */
+static int exec_parse_shebang_line(const void *data, size_t size,
+                                   char *interp, size_t interp_sz,
+                                   char *iarg, size_t iarg_sz)
+{
+    const char *p = (const char *)data;
+    const char *end = p + size;
+    const char *line_end;
+    const char *path_end;
+    size_t path_len;
+    size_t arg_len;
+
+    if (!data || size < 2 || p[0] != '#' || p[1] != '!')
+        return 0;
+
+    if (interp_sz == 0 || iarg_sz == 0)
+        return -ENOEXEC;
+
+    interp[0] = '\0';
+    iarg[0] = '\0';
+
+    p += 2;
+    while (p < end && (*p == ' ' || *p == '\t'))
+        p++;
+
+    line_end = p;
+    while (line_end < end && *line_end != '\n' && *line_end != '\r' && *line_end != '\0')
+        line_end++;
+
+    if (p >= line_end)
+        return -ENOEXEC;
+
+    path_end = line_end;
+    while (path_end > p && (path_end[-1] == ' ' || path_end[-1] == '\t'))
+        path_end--;
+
+    {
+        const char *sp = p;
+
+        while (sp < path_end && *sp != ' ' && *sp != '\t')
+            sp++;
+        path_len = (size_t)(sp - p);
+        if (path_len == 0 || path_len >= interp_sz)
+            return -ENOEXEC;
+        memcpy(interp, p, path_len);
+        interp[path_len] = '\0';
+
+        if (sp < path_end)
+        {
+            while (sp < path_end && (*sp == ' ' || *sp == '\t'))
+                sp++;
+            arg_len = (size_t)(path_end - sp);
+            if (arg_len >= iarg_sz)
+                return -ENOEXEC;
+            if (arg_len > 0)
+            {
+                memcpy(iarg, sp, arg_len);
+                iarg[arg_len] = '\0';
+            }
+        }
+    }
 
     return 1;
+}
+
+static char *exec_strdup_kern(const char *s)
+{
+    size_t n;
+    char *d;
+
+    if (!s)
+        return NULL;
+    n = strlen(s) + 1;
+    d = kmalloc(n);
+    if (!d)
+        return NULL;
+    memcpy(d, s, n);
+    return d;
+}
+
+static void exec_release_string_vector(char *const vec[])
+{
+	int i;
+
+	if (!vec)
+		return;
+
+	for (i = 0; i < 256 && vec[i]; i++)
+		kfree((void *)(uintptr_t)vec[i]);
+}
+
+static char **exec_build_shebang_argv(const char *interp, const char *iarg,
+                                      const char *script_path,
+                                      char *const orig_argv[])
+{
+    int origc = 0;
+    int idx = 0;
+    int i;
+    char **nv;
+
+    if (orig_argv)
+    {
+        while (orig_argv[origc])
+            origc++;
+    }
+
+    nv = kmalloc((size_t)(origc + 4) * sizeof(char *));
+    if (!nv)
+        return NULL;
+
+    nv[idx++] = exec_strdup_kern(interp);
+    if (!nv[0])
+        goto fail;
+    if (iarg && iarg[0])
+    {
+        nv[idx++] = exec_strdup_kern(iarg);
+        if (!nv[idx - 1])
+            goto fail;
+    }
+    nv[idx++] = exec_strdup_kern(script_path);
+    if (!nv[idx - 1])
+        goto fail;
+    for (i = 1; i < origc; i++)
+    {
+        nv[idx++] = exec_strdup_kern(orig_argv[i]);
+        if (!nv[idx - 1])
+            goto fail;
+    }
+    nv[idx] = NULL;
+    return nv;
+
+fail:
+    exec_release_string_vector(nv);
+    kfree(nv);
+    return NULL;
 }
 
 static uint64_t elf_compute_load_base(const elf64_header_t *header, const uint8_t *file_data)
@@ -478,8 +627,16 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
                            uint64_t at_base, const char *builder_tag,
                            const char *image_path)
 {
+    int vdso_ok;
+
     if (!process || process->mode != USER_MODE)
         return -1;
+
+    vdso_ok = (vdso_map(process) == 0);
+    if (!vdso_ok)
+    {
+        klog_debug("ELF", "SERIAL: ELF: vDSO map failed (continuing without AT_SYSINFO_EHDR)\n");
+    }
 
     (void)builder_tag;
 
@@ -697,6 +854,7 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
     /* auxv[] — musl walks past envp NULL to find these */
     {
         uint64_t at_secure = process ? process->at_secure : 0;
+        uint64_t at_vdso = vdso_ok ? vdso_ehdr() : 0;
 
         struct
         {
@@ -717,6 +875,7 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
             { AT_PAGESZ, 4096 },
             { AT_BASE, at_base },
             { AT_ENTRY, task_get_ip(&process->task) },
+            { AT_SYSINFO_EHDR, at_vdso },
             { AT_NULL, 0 },
         };
         size_t i;
@@ -760,7 +919,14 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
     klog_debug_fmt("ELF", "SERIAL: ELF: Stack initialized: argc=%x, argv=%x, envp=%x", (unsigned)(argc), (unsigned)((uint32_t)argv_array), (unsigned)((uint32_t)envp_array));
     elf_trace_argv_contract(process, image_path, "stack-builder-final");
     elf_trace_entry_stack_layout(process, header, at_phdr, at_base, "elf_setup_stack-final");
-    
+
+    {
+        int env_rc = process_saved_environ_set(process, envp);
+
+        if (env_rc < 0)
+            return env_rc;
+    }
+
     return 0;
 }
 
@@ -786,7 +952,8 @@ static int elf_setup_stack(process_t *process, char *const argv[], char *const e
  *
  * Thread safety: NOT thread-safe - should be called from process context
  */
-int kexecve(const char *path, char *const argv[], char *const envp[])
+static int kexecve_depth(const char *path, char *const argv[], char *const envp[],
+                         int shebang_depth)
 {
     /* Step 1: Read the ELF file from filesystem */
     void *file_data = NULL;
@@ -805,12 +972,44 @@ int kexecve(const char *path, char *const argv[], char *const envp[])
 
     klog_debug_fmt("ELF", "SERIAL: ELF: File loaded successfully, size: %x bytes\n", (unsigned)(file_size));
 
+    if (!exec_buffer_is_elf(file_data, file_size))
+    {
+        char interp[256];
+        char iarg[128];
+        int sh_rc;
+
+        sh_rc = exec_parse_shebang_line(file_data, file_size, interp,
+                                        sizeof(interp), iarg, sizeof(iarg));
+        kfree(file_data);
+        file_data = NULL;
+
+        if (sh_rc == 0)
+            return -ENOEXEC;
+        if (sh_rc < 0)
+            return sh_rc;
+        if (shebang_depth >= EXEC_SHEBANG_MAX_DEPTH)
+            return -ENOEXEC;
+        {
+            char **new_argv = exec_build_shebang_argv(interp,
+                                                      iarg[0] ? iarg : NULL,
+                                                      path, argv);
+            int rc;
+
+            if (!new_argv)
+                return -ENOMEM;
+            rc = kexecve_depth(interp, new_argv, envp, shebang_depth + 1);
+            exec_release_string_vector(new_argv);
+            kfree(new_argv);
+            return rc;
+        }
+    }
+
     /* Step 2: Validate ELF header */
     if (!validate_elf_header((elf64_header_t *)file_data))
     {
         klog_debug("ELF", "SERIAL: ELF: ERROR - Invalid ELF header\n");
         kfree(file_data);
-        return -1;
+        return -ENOEXEC;
     }
 
     header = (elf64_header_t *)file_data;
@@ -860,6 +1059,11 @@ int kexecve(const char *path, char *const argv[], char *const envp[])
     klog_debug("ELF", "SERIAL: ELF: ========================================\n");
 
     return process->task.pid;
+}
+
+int kexecve(const char *path, char *const argv[], char *const envp[])
+{
+    return kexecve_depth(path, argv, envp, 0);
 }
 
 /*
@@ -1111,24 +1315,16 @@ static void exec_fail_kill(process_t *proc, int code, const char *point)
 	process_exit(code);
 }
 
-/*
- * Release the caller's kernel copies of an argv/envp vector.
- *
- * Only valid for vectors built by sys_exec (kmalloc'd strings, NULL
- * terminated): kfree() panics on a pointer outside the heap.
- */
-static void exec_release_string_vector(char *const vec[])
-{
-	int i;
-
-	if (!vec)
-		return;
-
-	for (i = 0; i < 256 && vec[i]; i++)
-		kfree((void *)(uintptr_t)vec[i]);
-}
+static int exec_replace_current_depth(const char *path, char *const argv[],
+                                      char *const envp[], int shebang_depth);
 
 int exec_replace_current(const char *path, char *const argv[], char *const envp[])
+{
+    return exec_replace_current_depth(path, argv, envp, 0);
+}
+
+static int exec_replace_current_depth(const char *path, char *const argv[],
+                                      char *const envp[], int shebang_depth)
 {
     process_t *proc = current_process;
     void *file_data = NULL;
@@ -1216,6 +1412,60 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
     }
 
     exec_audit_emit_elf_header((const uint8_t *)file_data, file_size);
+    if (!exec_buffer_is_elf(file_data, file_size))
+    {
+        char interp[256];
+        char iarg[128];
+        int sh_rc;
+
+        sh_rc = exec_parse_shebang_line(file_data, file_size, interp,
+                                        sizeof(interp), iarg, sizeof(iarg));
+        kfree(file_data);
+        file_data = NULL;
+
+        if (sh_rc == 0)
+        {
+            exec_commit_emit("return-validate_elf_fail", -ENOEXEC, proc,
+                             "EXEC_ENOEXEC");
+            return -ENOEXEC;
+        }
+        if (sh_rc < 0)
+        {
+            exec_commit_emit("return-validate_elf_fail", sh_rc, proc,
+                             "EXEC_SHEBANG_BAD");
+            return sh_rc;
+        }
+        if (shebang_depth >= EXEC_SHEBANG_MAX_DEPTH)
+        {
+            exec_commit_emit("return-validate_elf_fail", -ENOEXEC, proc,
+                             "EXEC_SHEBANG_DEPTH");
+            return -ENOEXEC;
+        }
+        if (exec_permission_denied(proc, interp))
+        {
+            exec_commit_emit("return-eacces", -EACCES, proc,
+                             "EXEC_ABORT_BEFORE_COMMIT");
+            return -EACCES;
+        }
+        {
+            char **new_argv = exec_build_shebang_argv(interp,
+                                                      iarg[0] ? iarg : NULL,
+                                                      path, argv);
+            int rc;
+
+            if (!new_argv)
+            {
+                exec_commit_emit("return-read-fault", -ENOMEM, proc,
+                                 "EXEC_ABORT_BEFORE_COMMIT");
+                return -ENOMEM;
+            }
+            rc = exec_replace_current_depth(interp, new_argv, envp,
+                                            shebang_depth + 1);
+            exec_release_string_vector(new_argv);
+            kfree(new_argv);
+            return rc;
+        }
+    }
     {
         const char *elf_class =
             exec_audit_classify_elf((elf64_header_t *)file_data, file_size);
@@ -1226,7 +1476,7 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
             kfree(file_data);
             exec_commit_emit("return-validate_elf_fail", -ENOEXEC, proc,
                              elf_class);
-            return -1;
+            return -ENOEXEC;
         }
     }
 
@@ -1235,7 +1485,7 @@ int exec_replace_current(const char *path, char *const argv[], char *const envp[
         kfree(file_data);
         exec_commit_emit("return-validate_elf_fail", -ENOEXEC, proc,
                          "EXEC_ELF_MAGIC_BAD");
-        return -1;
+        return -ENOEXEC;
     }
 
     header = (elf64_header_t *)file_data;

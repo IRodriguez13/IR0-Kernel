@@ -101,6 +101,7 @@ int64_t sys_gettimeofday(struct timeval *tv, void *tz)
 	uint64_t uptime_ms;
 	time_t sec;
 	suseconds_t usec;
+	struct timeval ktv;
 
 	(void)tz;
 
@@ -122,19 +123,22 @@ int64_t sys_gettimeofday(struct timeval *tv, void *tz)
 		sec = (time_t)(uptime_ms / 1000);
 		usec = (suseconds_t)((uptime_ms % 1000) * 1000);
 	}
-	tv->tv_sec = sec;
-	tv->tv_usec = usec;
+	ktv.tv_sec = sec;
+	ktv.tv_usec = usec;
+	if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0)
+		return -EFAULT;
 	return 0;
 }
 
 int64_t sys_clock_gettime(int clock_id, struct timespec *tp)
 {
 	uint64_t uptime_ms;
+	struct timespec kts;
 
 	if (!current_process || !tp)
 		return -EFAULT;
 
-	if (validate_userspace_buffer(tp, sizeof(struct timespec)) != 0)
+  if (validate_userspace_buffer(tp, sizeof(struct timespec)) != 0)
 		return -EFAULT;
 
 	uptime_ms = clock_get_uptime_milliseconds();
@@ -142,26 +146,34 @@ int64_t sys_clock_gettime(int clock_id, struct timespec *tp)
 	/*
 	 * CLOCK_REALTIME (0): RTC_UTC + monotonic elapsed when available.
 	 * CLOCK_MONOTONIC (1), MONOTONIC_RAW (4), BOOTTIME (7): uptime since boot.
+	 * COARSE variants (5/6): same sources, lower precision (no separate hw).
 	 */
-	if (clock_id == 0)
+	if (clock_id == 0 || clock_id == 5)
 	{
-		if (clock_realtime_available())
+		if (clock_id == 0 && clock_realtime_available())
 		{
-			tp->tv_sec = clock_get_current_time();
-			tp->tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
-			return 0;
+			kts.tv_sec = clock_get_current_time();
+			kts.tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
 		}
-		/* No RTC: still return boot-relative so date(1) is not ENOSYS. */
-		tp->tv_sec = (time_t)(uptime_ms / 1000);
-		tp->tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
-		return 0;
+		else
+		{
+			/* No RTC or REALTIME_COARSE: boot-relative wall time. */
+			kts.tv_sec = (time_t)(uptime_ms / 1000);
+			kts.tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
+		}
+	}
+	else if (clock_id == 1 || clock_id == 4 || clock_id == 6 || clock_id == 7)
+	{
+		kts.tv_sec = (time_t)(uptime_ms / 1000);
+		kts.tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
+	}
+	else
+	{
+		return -EINVAL;
 	}
 
-	if (clock_id != 1 && clock_id != 4 && clock_id != 7)
-		return -EINVAL;
-
-	tp->tv_sec = (time_t)(uptime_ms / 1000);
-	tp->tv_nsec = (long)((uptime_ms % 1000) * 1000000UL);
+	if (copy_to_user(tp, &kts, sizeof(kts)) != 0)
+		return -EFAULT;
 	return 0;
 }
 

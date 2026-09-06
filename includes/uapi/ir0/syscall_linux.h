@@ -85,6 +85,7 @@
 #define __NR_exit          60
 #define __NR_wait4         61
 #define __NR_kill          62
+#define __NR_tkill         200
 #define __NR_tgkill        234
 #define __NR_uname         63
 #define __NR_shmdt         67
@@ -182,12 +183,22 @@
 #define __NR_utimensat       280
 #define __NR_exit_group   231
 
-/* IR0 custom syscalls (outside Linux range) */
-#define __NR_console_scroll   400
-#define __NR_console_clear    401
-#define __NR_keymap_set       402
-#define __NR_keymap_get       403
-/* 404 was sudo_auth: privilege elevation is userspace policy (doas/sudo). */
+/*
+ * Linux time64 syscalls (musl / BusyBox may call these even on x86_64 when built
+ * against recent kernel headers). Must not collide with IR0 custom numbers.
+ */
+#define __NR_clock_gettime64 403
+#define __NR_clock_settime64 404
+#define __NR_clock_adjtime64 405
+#define __NR_clock_getres_time64 406
+#define __NR_clock_nanosleep_time64 407
+
+/* IR0 custom syscalls (440+ — outside Linux x86-64 assigned range) */
+#define __NR_console_scroll   440
+#define __NR_console_clear    441
+#define __NR_keymap_set       442
+#define __NR_keymap_get       443
+/* 444 was sudo_auth: privilege elevation is userspace policy (doas/sudo). */
 
 /* Max syscall number we handle (for table size) */
 #define __NR_syscall_max   450

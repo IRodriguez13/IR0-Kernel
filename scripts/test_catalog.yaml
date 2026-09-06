@@ -1,0 +1,320 @@
+# IR0 test suite catalog — consumed by scripts/test_runner.py and scripts/test_tui.py
+# Last verified: 2026-09-04
+
+suites:
+  # --- CTR / fast ---
+  - id: host
+    group: ctr
+    label: "Host tests (arch-guard + tests/host)"
+    make: test-fast
+    default: true
+
+  - id: ktest
+    group: ctr
+    label: "In-kernel ktests (QEMU boot)"
+    make: kernel-tests
+    default: true
+
+  - id: ctr
+    group: ctr
+    label: "CTR gates (kernel + arch-guard + matrix-min + host)"
+    make: ctr
+
+  - id: memsafe
+    group: ctr
+    label: "Kernel memsafe (Valgrind host build)"
+    make: kernel-memsafe
+
+  - id: agent-fast
+    group: ctr
+    label: "Agent fast (host + ktest)"
+    make: agent-fast
+
+  # --- KTM core ---
+  - id: ktm-check
+    group: ktm
+    label: "KTM check (host + classify + manifest)"
+    make: ktm-check
+
+  - id: ktm-manifest
+    group: ktm
+    label: "KTM manifest inventory"
+    make: ktm-manifest
+
+  - id: ktm-run
+    group: ktm
+    label: "KTM interactive run (fork-wait case + ISO)"
+    make: ktm-run
+
+  - id: smoke-ktm-drains
+    group: ktm
+    label: "KTM drains/storms under runit"
+    make: smoke-ktm-drains-runit
+
+  - id: smoke-ktm-fault
+    group: ktm
+    label: "KTM fault pipe + fault exec"
+    make: smoke-ktm-fault
+
+  - id: smoke-busybox-manifest
+    group: ktm
+    label: "BusyBox manifest harness (KTM)"
+    make: smoke-busybox-manifest
+
+  - id: t3-prep
+    group: ktm
+    label: "T3 prep battery (unix/shm/fb/epoll)"
+    make: smoke-t3-prep
+
+  # --- KTM userdev (POSIX / IPC / fb) ---
+  - id: ktm-userdev-run
+    group: ktm-userdev
+    label: "KTM userdev fork-wait (9p virtfs)"
+    make: ktm-userdev-run
+
+  - id: smoke-epoll
+    group: ktm-userdev
+    label: "epoll basic (runit PID1)"
+    make: smoke-epoll-basic
+
+  - id: smoke-stream-sock
+    group: ktm-userdev
+    label: "TCP stream socket (runit)"
+    make: smoke-stream-sock
+
+  - id: smoke-socketpair
+    group: ktm-userdev
+    label: "UNIX socketpair (runit)"
+    make: smoke-socketpair
+
+  - id: smoke-scm-rights
+    group: ktm-userdev
+    label: "SCM_RIGHTS fd pass (runit)"
+    make: smoke-scm-rights
+
+  - id: smoke-unix-abstract
+    group: ktm-userdev
+    label: "UNIX abstract namespace (runit)"
+    make: smoke-unix-abstract
+
+  - id: smoke-sysv-shm
+    group: ktm-userdev
+    label: "SysV shared memory (runit)"
+    make: smoke-sysv-shm
+
+  - id: smoke-memfd-shared
+    group: ktm-userdev
+    label: "memfd shared mapping (runit)"
+    make: smoke-memfd-shared
+
+  - id: smoke-posix-shm
+    group: ktm-userdev
+    label: "POSIX shm (runit)"
+    make: smoke-posix-shm
+
+  - id: smoke-unix-harden
+    group: ktm-userdev
+    label: "UNIX socket hardening (runit)"
+    make: smoke-unix-harden
+
+  - id: smoke-unix-flags
+    group: ktm-userdev
+    label: "UNIX socket flags (runit)"
+    make: smoke-unix-flags
+
+  - id: smoke-event-fds
+    group: ktm-userdev
+    label: "eventfd (runit)"
+    make: smoke-event-fds
+
+  - id: smoke-fb-map-shared
+    group: ktm-userdev
+    label: "fb mmap MAP_SHARED (runit)"
+    make: smoke-fb-map-shared
+
+  - id: smoke-hostshare-exec
+    group: ktm-userdev
+    label: "9p hostshare exec under runit"
+    make: smoke-hostshare-exec
+
+  # --- Net (F8) ---
+  - id: smoke-f8-net
+    group: net
+    label: "F8 net battery (nic + tcp guest/wire/listen)"
+    make: smoke-f8-net
+
+  - id: smoke-nic-reach
+    group: net
+    label: "NIC reachability (virtfs)"
+    make: smoke-nic-reach
+
+  - id: smoke-nic-reach-virtio
+    group: net
+    label: "NIC reachability (virtio)"
+    make: smoke-nic-reach-virtio
+
+  - id: smoke-tcp-guest
+    group: net
+    label: "TCP guest loopback"
+    make: smoke-tcp-guest
+
+  - id: smoke-tcp-wire
+    group: net
+    label: "TCP host↔guest wire"
+    make: smoke-tcp-wire
+
+  - id: smoke-tcp-listen
+    group: net
+    label: "TCP listen+accept (host→guest)"
+    make: smoke-tcp-listen
+
+  - id: smoke-tcp-peer-cc
+    group: net
+    label: "TCP peer CC / loss probe"
+    make: smoke-tcp-peer-cc
+
+  # --- Storage / MM ---
+  - id: smoke-mm-cow-lazy
+    group: storage
+    label: "MM COW lazy fault"
+    make: smoke-mm-cow-lazy
+
+  - id: smoke-fat16-mount
+    group: storage
+    label: "FAT16 mount smoke"
+    make: smoke-fat16-mount
+
+  - id: smoke-ext2-mount
+    group: storage
+    label: "ext2 mount smoke"
+    make: smoke-ext2-mount
+
+  - id: smoke-gpt-partition
+    group: storage
+    label: "GPT partition smoke"
+    make: smoke-gpt-partition
+
+  - id: smoke-hostshare-9p
+    group: storage
+    label: "virtio-9p hostshare mount"
+    make: smoke-hostshare-9p
+
+  - id: smoke-p1-storage
+    group: storage
+    label: "P1 storage battery"
+    make: smoke-p1-storage
+
+  # --- Tier-1 userspace ---
+  - id: tier1
+    group: tier1
+    label: "Tier-1: runit boot + ash interactive"
+    make: smoke-tier1
+    default: true
+
+  - id: smoke-runit-boot
+    group: tier1
+    label: "runit stage1/stage2 boot tags"
+    make: smoke-runit-boot
+
+  - id: smoke-runit-ash
+    group: tier1
+    label: "runit ash interactive (GUI/serial tags)"
+    make: smoke-runit-ash-interactive
+
+  - id: smoke-musl-pthread
+    group: tier1
+    label: "musl pthread smoke"
+    make: smoke-musl-pthread
+
+  - id: smoke-kill-sigterm
+    group: tier1
+    label: "kill SIGTERM semantics"
+    make: smoke-kill-sigterm
+
+  # --- ABI audit (individual contracts) ---
+  - id: abi-audit
+    group: abi
+    label: "Linux ABI audit (enabled contracts)"
+    make: linux-abi-audit
+
+  - id: abi-audit-execve
+    group: abi
+    label: "ABI audit: execve"
+    make: linux-abi-audit-execve
+
+  - id: abi-audit-pipe
+    group: abi
+    label: "ABI audit: pipe/read"
+    make: linux-abi-audit-pipe
+
+  - id: abi-audit-poll
+    group: abi
+    label: "ABI audit: poll"
+    make: linux-abi-audit-poll
+
+  - id: abi-audit-dup
+    group: abi
+    label: "ABI audit: dup/dup2"
+    make: linux-abi-audit-dup
+
+  # --- Release ---
+  - id: release
+    group: release
+    label: "Release 0.0.1 gate"
+    make: release-0.0.1
+
+  - id: health
+    group: release
+    label: "Health (analyze + memsafe + ktests)"
+    make: health
+
+  # --- ISD session ---
+  - id: session-chaos
+    group: session
+    label: "ISD session chaos (login + /dev + 9p)"
+    make: smoke-session-chaos
+
+  - id: session-soak
+    group: session
+    label: "Session soak (long interactive)"
+    make: smoke-session-soak
+
+  - id: smoke-sigchld-tty
+    group: session
+    label: "SIGCHLD during TTY read (GPR leak regression)"
+    make: smoke-sigchld-tty
+
+  - id: smoke-kbd-resync
+    group: session
+    label: "Keyboard resync after session end (relogin abc)"
+    make: smoke-kbd-resync
+
+  - id: smoke-desktop-relogin
+    group: session
+    label: "Desktop relogin after exec ls"
+    make: smoke-desktop-relogin
+
+  - id: smoke-ctrl-c-spam
+    group: session
+    label: "Ctrl+C spam (no corruption / false logout)"
+    make: smoke-ctrl-c-spam
+
+  - id: smoke-sigchld-no-false-logout
+    group: session
+    label: "SIGCHLD must not voluntary-logout shell"
+    make: smoke-sigchld-no-false-logout
+
+  - id: smoke-sigchld-sysfs-stress
+    group: session
+    label: "SIGCHLD + sysfs/cat-on-directory stress"
+    make: smoke-sigchld-sysfs-stress
+
+  - id: smoke-keyboard-stability
+    group: session
+    label: "Keyboard/signal stability battery"
+    make: smoke-keyboard-stability
+
+  - id: session-stability
+    group: session
+    label: "Session stability battery"
+    make: smoke-session-stability

@@ -24,7 +24,7 @@ TEST_SRCS  = test_runner.c test_example.c \
 	test_named_fifo_supervise.c 	test_path_resolve_at.c \
 	test_path_chroot.c \
 	test_ktm_sched_contract.c test_class_b_ctx_invariant.c test_musl_cred_abi.c test_musl_mmap_contract.c \
-	test_signal_rt_sigaction_abi.c test_mmap_null_placement.c \
+	test_signal_rt_sigaction_abi.c test_sigreturn_sleep_eintr_abi.c test_mmap_null_placement.c \
 	test_elf_initial_brk_abi.c test_blockdev_facade.c \
 	test_arch_irq_facade.c test_arch_mm_pte_facade.c \
 	test_ps2_set1_modifiers.c \
@@ -37,6 +37,7 @@ TEST_SRCS  = test_runner.c test_example.c \
 	test_netdev_contract.c \
 	test_sched_backend_contract.c \
 	test_block_backend_contract.c \
+	test_usercopy_contract.c \
 	test_matrix_capture.c
 KERNEL_HOST_OBJS = host_pseudo_fs_registry.o host_usb_host_disabled.o \
 	host_rtc_calendar.o \
@@ -180,6 +181,9 @@ test_musl_cred_abi.o: test_musl_cred_abi.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 test_signal_rt_sigaction_abi.o: test_signal_rt_sigaction_abi.c
+	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
+
+test_sigreturn_sleep_eintr_abi.o: test_sigreturn_sleep_eintr_abi.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 test_mmap_null_placement.o: test_mmap_null_placement.c

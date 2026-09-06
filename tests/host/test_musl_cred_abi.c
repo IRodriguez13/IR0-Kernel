@@ -23,6 +23,7 @@ void test_musl_cred_abi(void)
 	ASSERT(IR0_SIGACTION_MIN_SIZE >= 152);
 	ASSERT(__NR_set_robust_list == 273);
 	ASSERT(__NR_getgroups == 115);
+	ASSERT(__NR_tkill == 200);
 	ASSERT(__NR_tgkill == 234);
 	TEST_END();
 }

@@ -29,6 +29,8 @@ void ktest_process_reset_blocked_syscall_state(void)
 	memset(&p, 0, sizeof(p));
 	p.irq_frame_saved = 1;
 	p.poll_resume_via_arch = 1;
+	p.kernel_syscall_sleep = 1;
+	p.kernel_sleep_interrupted = 1;
 	p.syscall_resume_rax = 99;
 	p.wait_status_ptr = (int *)(uintptr_t)0x1000;
 	p.poll_waiter = (void *)(uintptr_t)0x2000;
@@ -37,6 +39,8 @@ void ktest_process_reset_blocked_syscall_state(void)
 
 	KASSERT_EQ(p.irq_frame_saved, 0);
 	KASSERT_EQ(p.poll_resume_via_arch, 0);
+	KASSERT_EQ(p.kernel_syscall_sleep, 0);
+	KASSERT_EQ(p.kernel_sleep_interrupted, 0);
 	KASSERT_EQ(p.syscall_resume_rax, 0);
 	KASSERT(p.wait_status_ptr == NULL);
 	KASSERT(p.poll_waiter == NULL);

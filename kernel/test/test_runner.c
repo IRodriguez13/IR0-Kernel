@@ -34,6 +34,11 @@ static void (*const ktest_functions[])(void) = {
 	ktest_syscall_pipe,
 	ktest_procfs_uptime,
 	ktest_procfs_pid_status,
+	ktest_procfs_pid_maps,
+	ktest_procfs_pid_fd,
+	ktest_procfs_pid_environ,
+	ktest_procfs_self_symlink,
+	ktest_procfs_pid_exe,
 	ktest_process_current,
 	ktest_wait4_status,
 	ktest_wait4_specific_reaps_requested_child,
@@ -85,6 +90,11 @@ static const char *const ktest_names[] = {
 	"syscall_pipe",
 	"procfs_uptime",
 	"procfs_pid_status",
+	"procfs_pid_maps",
+	"procfs_pid_fd",
+	"procfs_pid_environ",
+	"procfs_self_symlink",
+	"procfs_pid_exe",
 	"process_current",
 	"wait4_status",
 	"wait4_specific_reaps_requested_child",
@@ -135,6 +145,11 @@ static const int ktest_needs_process[] = {
 	1,  /* syscall_pipe */
 	1,  /* procfs_uptime */
 	1,  /* procfs_pid_status */
+	1,  /* procfs_pid_maps */
+	1,  /* procfs_pid_fd */
+	1,  /* procfs_pid_environ */
+	1,  /* procfs_self_symlink */
+	1,  /* procfs_pid_exe */
 	1,  /* process_current */
 	1,  /* wait4_status */
 	1,  /* wait4_specific_reaps_requested_child */

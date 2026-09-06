@@ -36,6 +36,7 @@ extern void test_class_b_ctx_invariant_matrix(void);
 extern void test_musl_mmap_contract(void);
 extern void test_mmap_null_placement(void);
 extern void test_signal_rt_sigaction_abi(void);
+extern void test_sigreturn_sleep_eintr_frame_abi(void);
 extern void test_elf_initial_brk_abi(void);
 extern void test_musl_cred_abi(void);
 extern void test_blockdev_facade_contract(void);
@@ -61,6 +62,7 @@ extern void test_mm_mirror_contract(void);
 extern void test_netdev_contract(void);
 extern void test_sched_backend_contract(void);
 extern void test_block_backend_contract(void);
+extern void test_usercopy_no_raw_user_touch(void);
 extern void test_matrix_capture_suite(void);
 
 static void (*test_functions[])(void) = {
@@ -81,6 +83,7 @@ static void (*test_functions[])(void) = {
 	test_musl_mmap_contract,
 	test_mmap_null_placement,
 	test_signal_rt_sigaction_abi,
+	test_sigreturn_sleep_eintr_frame_abi,
 	test_elf_initial_brk_abi,
 	test_musl_cred_abi,
 	test_blockdev_facade_contract,
@@ -106,6 +109,7 @@ static void (*test_functions[])(void) = {
 	test_netdev_contract,
 	test_sched_backend_contract,
 	test_block_backend_contract,
+	test_usercopy_no_raw_user_touch,
 	test_matrix_capture_suite,
 	NULL
 };

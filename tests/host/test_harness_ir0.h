@@ -53,6 +53,14 @@ extern int _ir0_test_pass;
 	} \
 } while (0)
 
+#define ASSERT_NE(a, b) do { \
+	if ((a) == (b)) { \
+		fprintf(stderr, "\n[TEST] ASSERT_NE failed: %s != %s (%s:%d) (both %ld)\n", \
+			#a, #b, __FILE__, __LINE__, (long)(a)); \
+		_ir0_test_failed = 1; \
+	} \
+} while (0)
+
 #define ASSERT_STR_EQ(a, b) do { \
 	if (strcmp((a), (b)) != 0) { \
 		fprintf(stderr, "\n[TEST] ASSERT_STR_EQ failed: \"%s\" != \"%s\" (%s:%d)\n", \

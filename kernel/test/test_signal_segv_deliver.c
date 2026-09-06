@@ -39,7 +39,7 @@ void ktest_signal_segv_deliver_irq_frame(void)
 	current_process->signal_sa_flags[SIGSEGV] = 0;
 	current_process->signal_mask = 0;
 	current_process->signal_ignored = 0;
-	current_process->saved_context = NULL;
+	process_saved_context_init(current_process);
 
 	frame[0] = 14;
 	frame[1] = 4;
@@ -60,15 +60,11 @@ void ktest_signal_segv_deliver_irq_frame(void)
 	KASSERT_EQ(delivered, 1);
 	KASSERT(frame[2] == (uint64_t)(uintptr_t)handler);
 	KASSERT(frame[-7] == (uint64_t)SIGSEGV);
-	KASSERT(current_process->saved_context != NULL);
-	KASSERT(sigcontext_ip(current_process->saved_context) ==
+	KASSERT(process_saved_context_present(current_process));
+	KASSERT(sigcontext_ip(process_saved_context_peek(current_process)) ==
 		0x004422E3UL);
 
-	if (current_process->saved_context)
-	{
-		kfree(current_process->saved_context);
-		current_process->saved_context = NULL;
-	}
+	process_saved_context_clear(current_process);
 
 	KTEST_END();
 }

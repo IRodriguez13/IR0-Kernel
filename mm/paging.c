@@ -297,8 +297,25 @@ void setup_and_enable_paging(void)
 		paging_pin_kernel_cr3(get_current_page_directory());
 }
 
+void paging_sync_kernel_half(uint64_t *proc_pml4)
+{
+	uint64_t kcr3 = paging_kernel_cr3;
+
+	if (!proc_pml4 || !kcr3)
+		return;
+	if ((uint64_t)(uintptr_t)proc_pml4 == kcr3)
+		return;
+	mm_copy_kernel_half(proc_pml4, (uint64_t *)(uintptr_t)kcr3);
+}
+
 void load_page_directory(uint64_t pml4_addr)
 {
+	/*
+	 * Switch while RSP may sit on a per-task kstack: ensure this mm still
+	 * links the shared kernel-half PDPT (new kstack slots after fork).
+	 */
+	if (pml4_addr)
+		paging_sync_kernel_half((uint64_t *)(uintptr_t)pml4_addr);
 	mm_activate((uintptr_t)pml4_addr);
 }
 
@@ -323,7 +340,10 @@ static void paging_phys_map_begin(uint64_t *saved_cr3)
 static void paging_phys_map_end(uint64_t saved_cr3)
 {
 	if (paging_kernel_cr3 && paging_kernel_cr3 != saved_cr3)
+	{
+		/* load_page_directory syncs kernel half before mov CR3. */
 		load_page_directory(saved_cr3);
+	}
 }
 
 /*

@@ -13,11 +13,175 @@
 
 #include <ir0/oops.h>
 #include <ir0/vga.h>
+#include <ir0/console_backend.h>
 #include <ir0/ktm/klog.h>
 #include "process.h"
+#include <ir0/arch_task.h>
 #include <stdint.h>
 #include <ir0/cpu.h>
 #include <ir0/clock.h>
+#include <ir0/arch_io.h>
+#include <stddef.h>
+#include <string.h>
+#include <config.h>
+#include <mm/paging.h>
+
+/* Exception frame captured before panicex (CPU fault site, not reporter). */
+static struct
+{
+	int valid;
+	int stack_overflow;
+	unsigned vector;
+	uint32_t pid;
+	uint64_t err;
+	uint64_t rip;
+	uint64_t cs;
+	uint64_t rflags;
+	uint64_t rsp;
+	uint64_t ss;
+	uint64_t cr2; /* frozen at note time — nested #DF must not rewrite */
+	char comm[16];
+} panic_exc_frame;
+
+void panic_note_exception_frame(unsigned vector, unsigned long long err,
+				unsigned long long rip, unsigned long long cs,
+				unsigned long long rflags,
+				unsigned long long rsp, unsigned long long ss,
+				int stack_overflow, unsigned int pid,
+				const char *comm)
+{
+	size_t i;
+
+	/*
+	 * Keep the first (primary) frame. Nested #DF during panic dump must
+	 * not replace a kernel #PF / #GP site with dump_stack_trace's RIP.
+	 * Also freeze CR2 here: reading CR2 later in panicex sees the nested
+	 * fault address and falsely makes every panic look like a stack #DF.
+	 */
+	if (panic_exc_frame.valid)
+		return;
+
+	panic_exc_frame.valid = 1;
+	panic_exc_frame.stack_overflow = stack_overflow ? 1 : 0;
+	panic_exc_frame.vector = vector;
+	panic_exc_frame.err = err;
+	panic_exc_frame.rip = rip;
+	panic_exc_frame.cs = cs;
+	panic_exc_frame.rflags = rflags;
+	panic_exc_frame.rsp = rsp;
+	panic_exc_frame.ss = ss;
+	/*
+	 * CR2 is only defined for #PF (vector 14). Freezing live CR2 on #UD/#GP/#DF
+	 * reprints a stale userspace address and makes every panic look like an
+	 * MM fault (false positive).
+	 */
+	panic_exc_frame.cr2 =
+		(vector == 14) ? (uint64_t)read_fault_address() : 0;
+	panic_exc_frame.pid = pid;
+	panic_exc_frame.comm[0] = '\0';
+	if (comm)
+	{
+		for (i = 0; i < sizeof(panic_exc_frame.comm) - 1 && comm[i]; i++)
+			panic_exc_frame.comm[i] = comm[i];
+		panic_exc_frame.comm[i] = '\0';
+	}
+}
+
+unsigned long long ir0_panic_fault_rsp(void)
+{
+	return panic_exc_frame.valid ? panic_exc_frame.rsp : 0;
+}
+
+void ir0_log_user_fault_frame(unsigned vector, unsigned long long cr2,
+			      unsigned long long err, unsigned long long rip,
+			      unsigned long long cs, unsigned long long rsp,
+			      int present, int write, int exec,
+			      unsigned int pid, const char *comm)
+{
+	const char *classify = "USER_FAULT";
+	process_t *cur = process_get_current();
+	unsigned char opc = 0;
+	unsigned long long retaddr = 0;
+	int have_opc = 0;
+	int have_ret = 0;
+
+	/*
+	 * present/write/exec are page-fault error bits. For #GP/#UD they are
+	 * always passed as 0 from the ISR — do not mislabel as USER_NOT_PRESENT.
+	 */
+	if (vector == 13)
+		classify = "USER_GENERAL_PROTECTION";
+	else if (vector == 6)
+		classify = "USER_INVALID_OPCODE";
+	else if (vector == 0 || vector == 4 || vector == 19)
+		classify = "USER_ARITHMETIC";
+	else if (cr2 >= (unsigned long long)USER_STACK_TOP &&
+		 cr2 < (unsigned long long)USER_STACK_TOP + (unsigned long long)PAGE_SIZE_4KB)
+		classify = "USER_STACK_TOP_OVERRUN";
+	else if (cr2 >= (unsigned long long)IR0_KSTACK_VA_BASE &&
+		 cr2 < (unsigned long long)IR0_KSTACK_VA_BASE +
+			   (unsigned long long)IR0_KSTACK_MAX_SLOTS *
+				   (unsigned long long)IR0_KSTACK_SLOT_SIZE)
+		classify = "USER_TOUCHED_KSTACK_VA";
+	else if (!present)
+		classify = "USER_NOT_PRESENT";
+	else if (write)
+		classify = "USER_PROT_WRITE";
+	else if (exec)
+		classify = "USER_PROT_EXEC";
+	else
+		classify = "USER_PROT_READ";
+
+	/*
+	 * Peek opcode + [rsp] return address when the faulting mm is current.
+	 * #GP: also detect musl a_crash / abort fallback (endbr64; hlt).
+	 * #PF: retaddr identifies the caller (e.g. setjmp site → lineedit/ash).
+	 */
+	if ((vector == 13 || vector == 14) && cur && process_pgd(cur))
+	{
+		if (vector == 13 &&
+		    copy_from_user_region_in_directory(process_pgd(cur),
+						      (uintptr_t)rip, &opc, 1) == 0)
+		{
+			have_opc = 1;
+			if (opc == 0xf4)
+				classify = "USER_ABORT_HLT";
+		}
+		if (copy_from_user_region_in_directory(process_pgd(cur),
+						       (uintptr_t)rsp, &retaddr,
+						       sizeof(retaddr)) == 0)
+			have_ret = 1;
+	}
+
+	/*
+	 * INFO (not only NOTICE): default profile keeps INFO+; greppable even
+	 * if NOTICE mirroring is quieted. No panic / no page-table walks.
+	 */
+	klog_info_fmt("FAULT",
+		      "USER_FAULT_FRAME vector=%x cr2=%llx err=%llx rip=%llx "
+		      "cs=%llx rsp=%llx",
+		      (unsigned)vector, (unsigned long long)cr2,
+		      (unsigned long long)err, (unsigned long long)rip,
+		      (unsigned long long)cs, (unsigned long long)rsp);
+	if (cur)
+		klog_info_fmt("FAULT",
+			      "USER_FAULT_FRAME rdi=%llx rsi=%llx",
+			      (unsigned long long)task_get_rdi(&cur->task),
+			      (unsigned long long)task_get_rsi(&cur->task));
+	klog_info_fmt("FAULT",
+		      "USER_FAULT_FRAME pid=%x comm=%s present=%x write=%x "
+		      "exec=%x CLASSIFY %s",
+		      (unsigned)pid, comm && comm[0] ? comm : "(none)",
+		      (unsigned)(present ? 1 : 0), (unsigned)(write ? 1 : 0),
+		      (unsigned)(exec ? 1 : 0), classify);
+	if (have_opc || have_ret)
+		klog_info_fmt("FAULT",
+			      "USER_FAULT_FRAME opc=%x ret=%llx",
+			      (unsigned)(have_opc ? opc : 0),
+			      (unsigned long long)(have_ret ? retaddr : 0));
+	/* Raw tag for harnesses that strip klog prefixes. */
+	klog_print("USER_FAULT_FRAME\n");
+}
 /**
  * Kernel panic handler - comprehensive error reporting system
  *
@@ -86,6 +250,89 @@ static void klog_u32_dec(uint32_t n)
 	}
 }
 
+/*
+ * Human-readable uptime for the panic screen (seconds + milliseconds).
+ * Serial dump uses the same format via klog_u32_dec; this is for FB/GTK.
+ */
+static void panic_uptime_human(char *buf, size_t cap)
+{
+	uint64_t up_ms = clock_get_uptime_milliseconds();
+	uint64_t up_s = up_ms / 1000ULL;
+	uint64_t up_frac = up_ms % 1000ULL;
+
+	if (!buf || cap == 0)
+		return;
+	snprintf(buf, cap, "%llu.%03llu s",
+		 (unsigned long long)up_s, (unsigned long long)up_frac);
+}
+
+/*
+ * Final panic frame for FB/GTK: compact, readable, stays on screen.
+ * Full register/process dumps stay on serial only (no scroll-away).
+ */
+static void panic_print_final_screen(const char *message, panic_level_t level,
+				     const char *file, int line,
+				     const char *caller)
+{
+	char uptime[32];
+	char linebuf[384];
+
+	panic_uptime_human(uptime, sizeof(uptime));
+
+	print_screen_only("\n");
+	print_screen_only("========================================\n");
+	print_screen_only("KERNEL PANIC - SYSTEM HALTED\n");
+	print_screen_only("========================================\n");
+
+	snprintf(linebuf, sizeof(linebuf), "Uptime at panic: %s\n", uptime);
+	print_screen_only(linebuf);
+
+	snprintf(linebuf, sizeof(linebuf), "Panic Level: %s\n",
+		 panic_level_names[level]);
+	print_screen_only(linebuf);
+
+	snprintf(linebuf, sizeof(linebuf), "Source File: %s\n",
+		 file ? file : "unknown");
+	print_screen_only(linebuf);
+
+	snprintf(linebuf, sizeof(linebuf), "Line Number: %d\n", line);
+	print_screen_only(linebuf);
+
+	snprintf(linebuf, sizeof(linebuf), "Calling Function: %s\n",
+		 caller ? caller : "unknown");
+	print_screen_only(linebuf);
+
+	snprintf(linebuf, sizeof(linebuf), "Error Message: %s\n",
+		 message ? message : "no message");
+	print_screen_only(linebuf);
+
+	print_screen_only("========================================\n\n");
+
+	print_screen_only("     +------------------------------------------------+\n");
+	print_screen_only("     |                                                |\n");
+	print_screen_only("     |              O_o KERNEL PANIC                  |\n");
+	print_screen_only("     |                                                |\n");
+	print_screen_only("     +------------------------------------------------+\n\n");
+
+	snprintf(linebuf, sizeof(linebuf), "Type: %s\n", panic_level_names[level]);
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Location: %s:%d\n",
+		 file ? file : "unknown", line);
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Caller: %s\n",
+		 caller ? caller : "unknown");
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Due to: %s\n",
+		 message ? message : "no message");
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Uptime at panic: %s\n\n", uptime);
+	print_screen_only(linebuf);
+
+	print_screen_only("========================================\n");
+	print_screen_only("SYSTEM HALTED - Safe to power off or reboot\n");
+	print_screen_only("========================================\n");
+}
+
 /**
  * panicex - Extended panic handler with comprehensive diagnostics
  * @message: Human-readable error message describing the panic
@@ -118,7 +365,13 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
     if (in_panic)
     {
         disable_interrupts();
-        klog_fatal("OOPS", "\n!!! DOUBLE PANIC DETECTED !!!");
+        /*
+         * Nested fault while already panicking (often #DF after a primary
+         * #PF/#GP). Do not run a second full banner that looks like a new
+         * primary DOUBLE FAULT — keep the first FAULT FRAME as the cause.
+         */
+        klog_fatal("OOPS", "\nCLASSIFY NESTED_PANIC_OR_FAULT");
+        klog_fatal("OOPS", "PRIMARY_FAULT_FRAME_KEPT (ignore nested vector as cause)");
         klog_smoke("PANICEX_DOUBLE_FAULT_SAFE_OK");
         klog_smoke("PANIC_HANDLER_NO_USERPTR_DEREF_OK");
         for (;;)
@@ -140,6 +393,20 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
      * further corruption or triple faults.
      */
     disable_interrupts();
+
+    /*
+     * Do not load_page_directory(kernel) here while RSP may still sit on a
+     * per-task kstack: if that slot is missing from kernel CR3, the next
+     * stack access becomes #PF → #DF and the FAULT FRAME blames the dump.
+     */
+
+    /*
+     * Re-enable FB/GTK output for the final panic frame. Verbose dump goes to
+     * serial only so register stacks do not scroll the user-visible summary
+     * off a 25-row (or scaled) console.
+     */
+    console_backend_panic_screen_on();
+    klog_set_screen_sink(NULL);
 
     /* Dump comprehensive panic information to serial port first.
      * Serial output is structured for easy parsing and can be copied
@@ -172,6 +439,56 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
     klog_print("Panic Level: ");
     klog_print(panic_level_names[level]);
     klog_print("\n");
+    /*
+     * FAULT FRAME is the CPU exception site (cause). Source/Caller below are
+     * only where panicex was invoked (often isr_handler64_dispatch).
+     */
+    if (panic_exc_frame.valid)
+    {
+	klog_print("--- FAULT FRAME (cause) ---\n");
+	klog_print("vector=");
+	klog_hex32(panic_exc_frame.vector);
+	klog_print(" err=");
+	klog_hex64(panic_exc_frame.err);
+	klog_print("\n");
+	klog_print("fault_rip=");
+	klog_hex64(panic_exc_frame.rip);
+	klog_print(" fault_cs=");
+	klog_hex64(panic_exc_frame.cs);
+	klog_print("\n");
+	klog_print("fault_rsp=");
+	klog_hex64(panic_exc_frame.rsp);
+	klog_print(" fault_ss=");
+	klog_hex64(panic_exc_frame.ss);
+	klog_print("\n");
+	klog_print("fault_rflags=");
+	klog_hex64(panic_exc_frame.rflags);
+	klog_print("\n");
+	klog_print("cr2=");
+	if (panic_exc_frame.vector == 14)
+	{
+		klog_hex64(panic_exc_frame.cr2);
+		klog_print(" (frozen at #PF note)\n");
+	}
+	else
+		klog_print("n/a (not a #PF; do not trust live CR2)\n");
+	klog_print("pid=");
+	klog_hex32(panic_exc_frame.pid);
+	klog_print(" comm=");
+	klog_print(panic_exc_frame.comm[0] ? panic_exc_frame.comm : "(none)");
+	klog_print("\n");
+	if (panic_exc_frame.vector == 8)
+		klog_print("CLASSIFY PRIMARY_VECTOR_DOUBLE_FAULT\n");
+	else if (panic_exc_frame.vector == 14)
+		klog_print("CLASSIFY PRIMARY_VECTOR_PAGE_FAULT\n");
+	else if (panic_exc_frame.vector == 13)
+		klog_print("CLASSIFY PRIMARY_VECTOR_GENERAL_PROTECTION\n");
+	else if (panic_exc_frame.vector == 6)
+		klog_print("CLASSIFY PRIMARY_VECTOR_INVALID_OPCODE\n");
+	if (panic_exc_frame.stack_overflow)
+		klog_print("CLASSIFY KERNEL_STACK_OVERFLOW\n");
+	klog_print("--- panic site (reporter, not cause) ---\n");
+    }
     klog_print("Source File: ");
     klog_print(file ? file : "unknown");
     klog_print("\n");
@@ -186,46 +503,7 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
     klog_print("\n");
     klog_print("========================================\n");
 
-    /*
-     * Framebuffer and VGA text: clear_screen()/print() already select the
-     * active console backend so the panic is visible on the product FB path.
-     */
-    clear_screen();
-    print_colored("     ╔════════════════════════════════════════════════════════╗\n", VGA_COLOR_RED, VGA_COLOR_BLACK);
-    print_colored("     ║                                                        ║\n", VGA_COLOR_RED, VGA_COLOR_BLACK);
-    print_colored("     ║                      O_o KERNEL PANIC                  ║\n", VGA_COLOR_WHITE, VGA_COLOR_RED);
-    print_colored("     ║                                                        ║\n", VGA_COLOR_RED, VGA_COLOR_BLACK);
-    print_colored("     ╚════════════════════════════════════════════════════════╝\n", VGA_COLOR_RED, VGA_COLOR_BLACK);
-
-    print("\n");
-
-    /* Panic info — always on screen (FB or VGA). */
-    print_colored("Type: ", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-    print_error(panic_level_names[level]);
-    print("\n");
-
-    print_colored("Location: ", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-    print(file ? file : "unknown");
-    print(":");
-    print_hex_compact(line);
-    print("\n");
-
-    print_colored("Caller: ", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-    print(caller ? caller : "unknown");
-    print("\n");
-
-    print_colored("Due to: ", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-    print_error(message ? message : "no message");
-    print("\n");
-    {
-	uint64_t up_ms = clock_get_uptime_milliseconds();
-
-	print_colored("Uptime ms: ", VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-	print_hex_compact((uint32_t)up_ms);
-	print("\n\n");
-    }
-
-    /* Dump CPU state - registers and control registers */
+    /* Dump CPU state - registers and control registers (serial only). */
     dump_registers();
 
     /* IRETQ checkpoint buffer (debug: see kernel/scheduler/switch/switch_x64.asm) */
@@ -244,8 +522,8 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
         }
     }
 
-    /* Unwind call stack - shows the execution path that led to panic */
-    dump_stack_trace();
+    /* Never unwind during panic — see dump_stack_trace() stub rationale. */
+    klog_print("STACK TRACE skipped (panic-safe)\n");
 
     /* Dump process context - what process was running when panic occurred */
     dump_process_context();
@@ -257,11 +535,11 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
     klog_print("\n========================================\n");
     klog_print("SYSTEM HALTED - Safe to power off or reboot\n");
     klog_print("========================================\n");
-    klog_print("\nCopy the above information for kernel debugging.\n");
+    klog_print("Copy the above information for kernel debugging.\n");
     klog_print("End of panic dump.\n\n");
-    
-    print_colored("\n                          ═══ OOPS, SYSTEM HALTED ═══\n", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-    print_colored("\n Safe to power off or reboot.\n", VGA_COLOR_GREEN, VGA_COLOR_BLACK);
+
+    clear_screen();
+    panic_print_final_screen(message, level, file, line, caller);
 
     goto sleep;
 

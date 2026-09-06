@@ -87,6 +87,13 @@ void paging_pin_kernel_cr3(uint64_t cr3);
 /** Boot/kernel CR3 with PMM identity (0 if not pinned yet). */
 uint64_t paging_get_kernel_cr3(void);
 
+/**
+ * Re-share present kernel-half root slots from the pinned boot CR3 into
+ * @proc_pml4 (kstacks, supervisor identity PDPT links). Safe no-op if
+ * @proc_pml4 is NULL or is the boot root itself.
+ */
+void paging_sync_kernel_half(uint64_t *proc_pml4);
+
 /** Copy one 4KiB frame via pinned boot CR3 (COW / phys access). */
 void paging_copy_phys_page(uintptr_t dst_phys, uintptr_t src_phys);
 

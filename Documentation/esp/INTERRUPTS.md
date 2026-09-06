@@ -1,7 +1,19 @@
 # Ruta de Interrupciones y Excepciones en IR0
 
+> **Última verificación:** 2026-09-01  
+> **Fuente de verdad:** [`../INTERRUPTS.md`](../INTERRUPTS.md)
+
 IR0 usa flujo x86-64 con IDT + PIC, gateway de syscalls e integracion de
 excepciones con senales hacia procesos.
+
+## IRQ PIC (parcial)
+
+| IRQ | Dispositivo |
+|-----|-------------|
+| 0 | PIT (timer) |
+| 1 | Teclado PS/2 |
+| 5 | SB16 DMA (`CONFIG_ENABLE_SOUND`) |
+| 12 | Mouse PS/2 |
 
 ## Componentes Base
 

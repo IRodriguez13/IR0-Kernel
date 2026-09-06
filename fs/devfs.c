@@ -361,7 +361,7 @@ static int64_t dev_console_ioctl(devfs_entry_t *entry, uint64_t request, void *a
     if (request == IR0_CONSOLE_TCFLSH)
     {
         /* 0=IFLUSH, 1=OFLUSH, 2=IOFLUSH — input-only console. */
-        tty_flush_input();
+        ir0_console_flush_input_session();
         return 0;
     }
 

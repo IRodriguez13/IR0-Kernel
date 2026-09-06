@@ -1,7 +1,8 @@
 # Coupling IR0 (kernel) ↔ ISD
 
-> **Last verified:** 2026-07-29  
-> **Source of truth:** this file, `scripts/make/isd.mk`, `scripts/bootstrap-isd.sh`, sibling [ISD](https://github.com/IRodriguez13/ISD), [SETUP.md](../SETUP.md).  
+> **Last verified:** 2026-09-02  
+> **Source of truth:** this file, `scripts/make/isd.mk`, `scripts/bootstrap-isd.sh`, sibling [ISD](https://github.com/IRodriguez13/ISD), [SETUP.md](../SETUP.md),
+> `ISD/services/runit_console_run.c`, `ISD/lib/ir0_auth.c`.  
 > **Spanish:** [`esp/USERSPACE.md`](esp/USERSPACE.md)
 
 ## Why two repositories?
@@ -89,6 +90,29 @@ parent/
 | `make run-console PROFILE=…` | Same without GTK |
 | `make bootstrap-userspace` | **Deprecated** → `first-boot` |
 | `IR0_LEGACY_USERSPACE=1 make run` | Old inject path (smokes) |
+
+### Login / getty notes (2026-09-02)
+
+After firstboot, `etc/runit/sv/console/run` (`runit_console_run`) prompts for
+username/password. Smoke markers such as `LOGIN_USER_READ` go to **`/dev/serial`**
+only (not the human TTY). Emitting that tag on every empty/`EINTR`/`EOF` read used
+to busy-loop the prompt and flood the serial log so it looked like
+`Enter your Unix username: LOGIN_USER_READ` repeated. Fixed in ISD:
+
+- `ir0_read_line` retries `EINTR`, treats `r==0` as EOF (not a blank name).
+- Login loop tags `LOGIN_USER_READ` only after a non-empty username; backs off
+  with `sleep(1)` on read failure.
+
+**Unix reminders (not bugs):** `chown root` with mode `0755` still lets others
+execute the file; restrict with `chmod`. `/tmp` as tmpfs is intentional RAM FS.
+
+### Shebang scripts (`#!`)
+
+`execve` / `exec_replace_current` in `kernel/elf_loader.c` recognize a leading
+`#!` line before ELF validation: interpreter path, optional argument, then the
+script path is appended to `argv`. Recursion depth is capped at 4; non-ELF files
+without a valid shebang return `-ENOEXEC`. Example: `./script.sh` with
+`#!/bin/sh` runs the interpreter on the script path.
 
 ### Incremental builds
 

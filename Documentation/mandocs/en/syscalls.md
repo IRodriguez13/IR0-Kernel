@@ -67,9 +67,13 @@ Two entry mechanisms coexist: legacy **`int 0x80`** (historical lab ABI) and the
 
 **`copy_from_user` / `copy_to_user`:**
 
-1. If `KERNEL_MODE` process (embedded/kernel tasks): plain `memcpy`.
-2. Else validate `[USER_SPACE_START, USER_SPACE_END)`.
-3. Copy via `copy_*_region_in_directory(current_process->page_directory, …)`.
+Canonical contract: [`Documentation/uaccess.md`](../../uaccess.md).
+
+1. If `KERNEL_MODE` process (dbgshell / embedded only): plain `memcpy` bypass.
+2. Else validate with `mm_user_va_ok` (ISA window via `arch/*/arch_mm.c`).
+3. Copy via `copy_*_region_in_directory(process_pgd(current), …)` (COW-safe).
+4. Never `load_page_directory` + raw `memcpy` to a user VA — that classifies as
+   `KERNEL_UACCESS_FAULT` at runtime and fails `arch-guard` for signals/syscalls P0.
 
 ## 4. Responsibilities
 

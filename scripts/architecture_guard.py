@@ -466,6 +466,81 @@ def check_devfs_usercopy_contract():
     return errors
 
 
+def check_usercopy_no_raw_user_touch():
+    """
+    Forbid CR3-switch + raw memcpy/memset into (void *) user VAs, and
+    sys_uname-style memset/strncpy into the syscall buffer argument.
+    """
+    errors = []
+    fn_re = re.compile(
+        r"^\s*(?:static\s+)?(?:inline\s+)?[A-Za-z_][A-Za-z0-9_\s\*]*\s+"
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
+    )
+    cr3_memcpy_re = re.compile(r"memcpy\s*\(\s*\(void\s*\*\)")
+    cr3_memset_re = re.compile(r"memset\s*\(\s*\(void\s*\*\)")
+    load_cr3_re = re.compile(r"load_page_directory\s*\(")
+    uname_memset_re = re.compile(r"memset\s*\(\s*buf\s*,")
+    uname_strncpy_re = re.compile(r"strncpy\s*\(\s*buf\s*->")
+
+    targets = [ROOT / "kernel" / "lib" / "signals.c"]
+    syscalls = ROOT / "kernel" / "syscalls"
+    if syscalls.is_dir():
+        targets.extend(sorted(syscalls.glob("*.c")))
+
+    for fpath in targets:
+        if not fpath.is_file():
+            continue
+        try:
+            lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception as exc:
+            errors.append(f"[read-error] {fpath}: {exc}")
+            continue
+
+        current_fn = None
+        saw_load_cr3 = False
+        rel = fpath.relative_to(ROOT)
+
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.lstrip()
+            if stripped.startswith("//") or stripped.startswith("/*"):
+                continue
+            m = fn_re.match(line)
+            if m and not stripped.startswith("return"):
+                name = m.group(1)
+                if name not in ("if", "while", "for", "switch", "return", "sizeof"):
+                    current_fn = name
+                    saw_load_cr3 = False
+
+            if load_cr3_re.search(line):
+                saw_load_cr3 = True
+
+            if saw_load_cr3 and (
+                cr3_memcpy_re.search(line) or cr3_memset_re.search(line)
+            ):
+                errors.append(
+                    f"[usercopy-no-cr3-memcpy] {rel}:{idx}: "
+                    f"load_page_directory + raw mem* in {current_fn}; "
+                    f"use copy_to_user / *_region_in_directory"
+                )
+
+            if current_fn == "sys_uname" and (
+                uname_memset_re.search(line) or uname_strncpy_re.search(line)
+            ):
+                errors.append(
+                    f"[usercopy-sys-uname] {rel}:{idx}: "
+                    f"write utsname via kernel bounce + copy_to_user"
+                )
+
+            # signals.c: any memcpy((void *) is the known KERNEL_UACCESS pattern
+            if fpath.name == "signals.c" and cr3_memcpy_re.search(line):
+                errors.append(
+                    f"[usercopy-signals] {rel}:{idx}: "
+                    f"memcpy((void *) forbidden; use copy_to_user_region_in_directory"
+                )
+
+    return errors
+
+
 def check_ktm_core_no_fase():
     """KTM v1 core must not embed legacy FASE diagnostics."""
     errors = []
@@ -921,6 +996,227 @@ def check_process_pgd_accessor():
     return errors
 
 
+PROCESS_SAVED_CONTEXT_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_][A-Za-z0-9_]*)->saved_context\b"
+)
+
+PROCESS_SAVED_CONTEXT_ALLOWLIST = {
+    ROOT / "kernel" / "process.h",
+    ROOT / "kernel" / "process" / "saved_context.c",
+    ROOT / "kernel" / "process" / "create.c",
+    ROOT / "kernel" / "process" / "domains.c",
+}
+
+
+def check_process_saved_context_accessor():
+    """Fail if code touches process->saved_context outside signal/process paths."""
+    errors = []
+    trees = [
+        ROOT / "kernel",
+        ROOT / "mm",
+        ROOT / "fs",
+        ROOT / "net",
+        ROOT / "sched",
+        ROOT / "includes" / "ir0",
+        ROOT / "ktm",
+        ROOT / "interrupt",
+        ROOT / "drivers",
+    ]
+    for base in trees:
+        if not base.is_dir():
+            continue
+        for fpath in list(iter_c_files(base)) + list(base.rglob("*.h")):
+            if fpath in PROCESS_SAVED_CONTEXT_ALLOWLIST:
+                continue
+            if fpath.suffix not in (".c", ".h"):
+                continue
+            try:
+                rel = fpath.relative_to(ROOT)
+            except ValueError:
+                continue
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                if PROCESS_SAVED_CONTEXT_RE.search(line):
+                    errors.append(
+                        f"[process-saved-context-accessor] {rel}:{idx}: "
+                        f"no direct process->saved_context "
+                        f"(use signal/process helpers): {line.strip()}"
+                    )
+    return errors
+
+
+PROCESS_SIGNAL_ENTER_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_][A-Za-z0-9_]*)->signal_enter_pending\b"
+)
+
+PROCESS_SIGNAL_ENTER_ALLOWLIST = {
+    ROOT / "kernel" / "process.h",
+    ROOT / "kernel" / "process" / "signal_enter.c",
+    ROOT / "kernel" / "process" / "create.c",
+    ROOT / "kernel" / "process" / "domains.c",
+}
+
+
+def check_process_signal_enter_accessor():
+    """Fail if code touches process->signal_enter_pending outside signal paths."""
+    errors = []
+    trees = [
+        ROOT / "kernel",
+        ROOT / "mm",
+        ROOT / "fs",
+        ROOT / "net",
+        ROOT / "sched",
+        ROOT / "includes" / "ir0",
+        ROOT / "ktm",
+        ROOT / "interrupt",
+        ROOT / "drivers",
+    ]
+    for base in trees:
+        if not base.is_dir():
+            continue
+        for fpath in list(iter_c_files(base)) + list(base.rglob("*.h")):
+            if fpath in PROCESS_SIGNAL_ENTER_ALLOWLIST:
+                continue
+            if fpath.suffix not in (".c", ".h"):
+                continue
+            try:
+                rel = fpath.relative_to(ROOT)
+            except ValueError:
+                continue
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                if PROCESS_SIGNAL_ENTER_RE.search(line):
+                    errors.append(
+                        f"[process-signal-enter-accessor] {rel}:{idx}: "
+                        f"no direct process->signal_enter_pending "
+                        f"(use process_signal_enter_pending_*): {line.strip()}"
+                    )
+    return errors
+
+
+PROCESS_SIGNAL_DEFER_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_][A-Za-z0-9_]*)->signal_defer_catchable\b"
+)
+
+PROCESS_SIGNAL_DEFER_ALLOWLIST = {
+    ROOT / "kernel" / "process.h",
+    ROOT / "kernel" / "process" / "signal_enter.c",
+    ROOT / "kernel" / "process" / "create.c",
+    ROOT / "kernel" / "process" / "domains.c",
+    ROOT / "kernel" / "process" / "exit.c",
+}
+
+
+def check_process_signal_defer_accessor():
+    """Fail if code touches process->signal_defer_catchable outside signal paths."""
+    errors = []
+    trees = [
+        ROOT / "kernel",
+        ROOT / "mm",
+        ROOT / "fs",
+        ROOT / "net",
+        ROOT / "sched",
+        ROOT / "includes" / "ir0",
+        ROOT / "ktm",
+        ROOT / "interrupt",
+        ROOT / "drivers",
+    ]
+    for base in trees:
+        if not base.is_dir():
+            continue
+        for fpath in list(iter_c_files(base)) + list(base.rglob("*.h")):
+            if fpath in PROCESS_SIGNAL_DEFER_ALLOWLIST:
+                continue
+            if fpath.suffix not in (".c", ".h"):
+                continue
+            try:
+                rel = fpath.relative_to(ROOT)
+            except ValueError:
+                continue
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                if PROCESS_SIGNAL_DEFER_RE.search(line):
+                    errors.append(
+                        f"[process-signal-defer-accessor] {rel}:{idx}: "
+                        f"no direct process->signal_defer_catchable "
+                        f"(use process_signal_defer_catchable_*): {line.strip()}"
+                    )
+    return errors
+
+
+PROCESS_WAIT_FIELD_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_][A-Za-z0-9_]*)->"
+    r"(wait_blocked|wait_target_pid|wait_options|wait_status_ptr|"
+    r"wait_resume_child_pid)\b"
+)
+
+PROCESS_WAIT_FIELD_ALLOWLIST = {
+    ROOT / "kernel" / "process.h",
+    ROOT / "kernel" / "process" / "wait_state.c",
+}
+
+
+def check_process_wait_state_accessor():
+    """Fail if portable code touches process wait4 block fields directly."""
+    errors = []
+    trees = [
+        ROOT / "kernel",
+        ROOT / "mm",
+        ROOT / "fs",
+        ROOT / "net",
+        ROOT / "sched",
+        ROOT / "includes" / "ir0",
+        ROOT / "ktm",
+        ROOT / "interrupt",
+        ROOT / "drivers",
+    ]
+    for base in trees:
+        if not base.is_dir():
+            continue
+        for fpath in list(iter_c_files(base)) + list(base.rglob("*.h")):
+            if fpath in PROCESS_WAIT_FIELD_ALLOWLIST:
+                continue
+            if fpath.suffix not in (".c", ".h"):
+                continue
+            try:
+                rel = fpath.relative_to(ROOT)
+            except ValueError:
+                continue
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                if PROCESS_WAIT_FIELD_RE.search(line):
+                    errors.append(
+                        f"[process-wait-state-accessor] {rel}:{idx}: "
+                        f"use process_wait_* helpers; "
+                        f"no direct wait field: {line.strip()}"
+                    )
+    return errors
+
+
 # syscall_user_frame_t fields — portable code uses process_syscall_* accessors.
 SYSCALL_FRAME_FIELD_RE = re.compile(
     r"syscall_frame\.(rip|rsp|rflags|rdi|rsi|rdx|r10|r8|r9|rbx|rbp|r12|r13|r14|r15|"
@@ -1057,16 +1353,29 @@ ARCH_PUBLIC_CALL_RE = re.compile(r"\barch_[a-z_][a-z0-9_]*\s*\(")
 PORTABLE_ARCH_CALL_ALLOW = {
     "sched/switch/arch_context_switch.c": {
         "arch_switch_to",
-        "arch_report_bad_kernel_ret_rip",
     },
 }
+
+ARCH_SWITCH_INCLUDE_ALLOW = {
+    "sched/switch/arch_context_switch.c",
+    "arch/x86-64/sources/arch_switch.c",
+    "arch/arm64/sources/arch_switch.c",
+}
+
+PORTABLE_NO_ARCH_CALL_TREES = [
+    ROOT / "mm",
+    ROOT / "kernel",
+    ROOT / "fs",
+    ROOT / "net",
+    ROOT / "sched",
+    ROOT / "interrupt",
+]
 
 
 def check_portable_no_arch_prefix_calls():
     """Portable code must not call arch_*(); use simple facades (PORT-2..4)."""
     errors = []
-    trees = list(PORTABLE_PORT1_TREES) + [ROOT / "kernel" / "lib", ROOT / "interrupt"]
-    for base in trees:
+    for base in PORTABLE_NO_ARCH_CALL_TREES:
         if not base.is_dir():
             continue
         for fpath in iter_c_files(base):
@@ -1091,6 +1400,41 @@ def check_portable_no_arch_prefix_calls():
                     errors.append(
                         f"[portable-no-arch-call] {rel_s}:{idx}: "
                         f"use simple facade, not {name}()"
+                    )
+    return errors
+
+
+ARCH_SWITCH_INCLUDE_RE = re.compile(
+    r'#\s*include\s*[<"]ir0/arch_switch\.h[>"]'
+)
+
+
+def check_portable_no_arch_switch_include():
+    """arch_switch.h is ISA-private; portable code uses context.h / switch_to()."""
+    errors = []
+    for base in PORTABLE_NO_ARCH_CALL_TREES:
+        if not base.is_dir():
+            continue
+        for fpath in iter_c_files(base):
+            try:
+                rel = fpath.relative_to(ROOT)
+                rel_s = str(rel).replace("\\", "/")
+            except ValueError:
+                continue
+            if rel_s in ARCH_SWITCH_INCLUDE_ALLOW:
+                continue
+            try:
+                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception as exc:
+                errors.append(f"[read-error] {fpath}: {exc}")
+                continue
+            for idx, line in enumerate(lines, 1):
+                if _line_is_comment_only(line):
+                    continue
+                if ARCH_SWITCH_INCLUDE_RE.search(line):
+                    errors.append(
+                        f"[portable-no-arch-switch-include] {rel_s}:{idx}: "
+                        f"use <ir0/context.h> / switch_to(), not arch_switch.h"
                     )
     return errors
 
@@ -1174,6 +1518,7 @@ def main():
     errors.extend(check_fs_no_mm_includes())
     errors.extend(check_bluetooth_subdir_include_policy())
     errors.extend(check_devfs_usercopy_contract())
+    errors.extend(check_usercopy_no_raw_user_touch())
     errors.extend(check_ktm_core_no_fase())
     errors.extend(check_ktm_no_fase_serial())
     errors.extend(check_klog_serial_print_allowlist())
@@ -1183,6 +1528,10 @@ def main():
     errors.extend(check_portable_no_isa_leak_literals())
     errors.extend(check_portable_no_task_arch_fields())
     errors.extend(check_process_pgd_accessor())
+    errors.extend(check_process_saved_context_accessor())
+    errors.extend(check_process_signal_enter_accessor())
+    errors.extend(check_process_signal_defer_accessor())
+    errors.extend(check_process_wait_state_accessor())
     errors.extend(check_syscall_frame_accessor())
     errors.extend(check_asm_offsets_sync())
     errors.extend(check_subsystems_json_paths())
@@ -1190,6 +1539,7 @@ def main():
     errors.extend(check_includes_ir0_no_c_sources())
     errors.extend(check_portable_port1_no_legacy_arch_mm())
     errors.extend(check_portable_no_arch_prefix_calls())
+    errors.extend(check_portable_no_arch_switch_include())
 
     if errors:
         print("[arch-guard] FAILED")

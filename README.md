@@ -1,12 +1,18 @@
-# IR0 Kernel
+<p align="center">
+  <img src="scripts/kconfig/assets/black_hole_logo.png" alt="IR0 — black hole logo" width="160" />
+</p>
 
-IR0 is a research operating-system kernel (GPL-3.0). Primary bring-up target is
-**x86-64** under QEMU (Multiboot, GRUB, VFS/MINIX, ELF userspace). Version
-string: **`0.0.1-rc4`** (last pre-release before `v0.0.1` final).
+<h1 align="center">IR0 Kernel</h1>
 
-It is not a general-purpose production OS. The tree emphasizes narrow facades
-(`includes/ir0/`), Kconfig selection, and honest partial Linux ABI (`-ENOSYS`
-where unimplemented).
+<p align="center">
+ Unix-like kernel (GPL-3.0) — x86-64 bring-up under QEMU, narrow facades,
+  honest partial Linux ABI.
+</p>
+
+  IR0 is a operating-system kernel (GPL-3.0). Primary bring-up target is
+  **x86-64** under QEMU (Multiboot, GRUB, VFS/MINIX, ELF userspace). Version
+  string: **`0.0.1-rc4`** (last pre-release before `v0.0.1` final).
+
 
 ## ISD — IR0 Software Distribution
 
@@ -15,20 +21,22 @@ login/firstboot, packages, rootfs, and the MINIX `disk.img`. Sources live in
 the sibling repo [`ISD`](https://github.com/IRodriguez13/ISD). This tree is the
 kernel, UAPI export, and QEMU/boot orchestration.
 
-| Layer | Repo | Role |
-|-------|------|------|
-| Kernel | **IR0** (this tree) | mechanisms, drivers, UAPI, ISO |
-| Distribution | **ISD** | packages, services, rootfs, `disk.img` |
-| Product | both | `make first-boot` / `make run PROFILE=…` |
+| Layer | Role |
+|-------|------|
+| **IR0** (this tree) | mechanisms, drivers, UAPI, ISO |
+| **ISD** (sibling repo) | packages, services, rootfs, `disk.img` |
+| **Product** (both) | `make first-boot` / `make run PROFILE=…` |
 
 IR0 does **not** inject BusyBox/runit/nano individually on the canonical path —
 ISD builds a finished image; IR0 boots it.
+
+### Screenshots (ISD on QEMU)
 
 <p align="center">
   <img src="scripts/kconfig/assets/isd-firstboot.png" alt="ISD first boot — create your account" width="720" />
 </p>
 
-<p align="center"><em>ISD first boot: runit stage1 → account wizard (password also used for doas).</em></p>
+<p align="center"><em>First boot: runit stage1 → account wizard (password also used for doas).</em></p>
 
 <p align="center">
   <img src="scripts/kconfig/assets/isd-shell-session.png" alt="ISD shell — ls, uname, doas" width="720" />
@@ -40,19 +48,25 @@ ISD builds a finished image; IR0 boots it.
   <img src="scripts/kconfig/assets/isd-vi-editor.png" alt="ISD guest — BusyBox vi editing main.c" width="720" />
 </p>
 
-<p align="center"><em>In-guest BusyBox <code>vi</code> after <code>make run</code>: edit C sources on the ISD rootfs (QEMU GTK).</em></p>
+<p align="center"><em>BusyBox <code>vi</code> on the ISD rootfs (QEMU GTK).</em></p>
 
 <p align="center">
   <img src="scripts/kconfig/assets/isd-top.png" alt="ISD guest — BusyBox top under runit" width="720" />
 </p>
 
-<p align="center"><em>BusyBox <code>top</code> after login: runit PID 1, <code>runsvdir</code>/<code>runsv</code>, ash, and idle — live process view on the ISD image.</em></p>
+<p align="center"><em>BusyBox <code>top</code>: runit PID 1, <code>runsvdir</code>/<code>runsv</code>, ash, and idle.</em></p>
 
 <p align="center">
   <img src="scripts/kconfig/assets/isd-doom.png" alt="IR0/Unix — Doom on QEMU (desktop profile)" width="720" />
 </p>
 
-<p align="center"><em>Doom on IR0/Unix under QEMU: framebuffer + input path on the ISD desktop image (<code>PROFILE=desktop</code>).</em></p>
+<p align="center"><em>Doom on IR0/Unix (<code>PROFILE=desktop</code>): framebuffer + input path.</em></p>
+
+<p align="center">
+  <img src="scripts/kconfig/assets/isd-panic-gtk.png" alt="IR0 kernel panic — GTK framebuffer with uptime and safe shutdown message" width="720" />
+</p>
+
+<p align="center"><em>Kernel panic on the GTK framebuffer: uptime at halt, source location, and <code>Safe to power off or reboot</code> (trigger: write to <code>/sys/kernel/panic</code>).</em></p>
 
 ## Getting started
 

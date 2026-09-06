@@ -1,5 +1,8 @@
 # IR0 Driver Subsystem
 
+> **Last verified:** 2026-09-01  
+> **Source of truth:** `drivers/init_drv.c`, `drivers/audio/sound_blaster.c`, `interrupt/arch/isr_handlers.c`, `scripts/make/boot-audio.mk`
+
 IR0 uses a centralized registry and bootstrap path for core and optional drivers.
 
 ## Registry and Bootstrap
@@ -39,7 +42,10 @@ IR0 uses a centralized registry and bootstrap path for core and optional drivers
 ## Audio (SB16 / Adlib)
 
 - Sources: `drivers/audio/sound_blaster.c`, `drivers/audio/adlib.c`.
+- Facade: `includes/ir0/sound_blaster.h`; glue: `kernel/lib/audio_backend.c` → `/dev/audio` in `fs/devfs.c`.
 - Successful SB16 DSP probe emits `klog_smoke("SB16_DSP_OK")` and logs DSP version.
+- **Playback (2026-09-01):** `sb16_play_pcm()` copies PCM into static ping-pong buffers (8192 B max, identity-mapped). DMA is programmed **before** `SB16_DSP_PLAY_8BIT` (0x14). Buffers are never `kfree`'d while DMA may still reference them (fixes Doom-class UAF on `/dev/audio` writes).
+- **IRQ:** PIC IRQ **5** → `sb16_irq_handler()` in `interrupt/arch/isr_handlers.c` (ack DSP data port, clears `sb16_hw_playing`). Registered with `resource_register_irq(5, "sb16")` on successful probe.
 - QEMU 8+ needs an audiodev before the ISA device.
 - Interactive (`make run` / Doom GUI): default **PulseAudio** —
   `-audiodev pa,id=snd0 -device sb16,audiodev=snd0` so the Linux host hears guest PCM.

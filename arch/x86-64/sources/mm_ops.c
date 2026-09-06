@@ -41,7 +41,27 @@ uintptr_t mm_current_root(void)
 
 void tlb_invalidate_page(uintptr_t va)
 {
+	unsigned long flags;
+	uintptr_t rsp;
+
+	/*
+	 * Never invlpg the page backing the live RSP. Post-LOGIN #DF had
+	 * fault_rip on the reload of saved flags after invlpg with
+	 * cr2 inside the current kstack page: TLB drop + missing/stale PTE
+	 * under process CR3 cannot be recovered without an IRQ/DF IST walk.
+	 */
+	__asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+	if ((va & ~0xFFFUL) == (rsp & ~0xFFFUL))
+		return;
+
+	/*
+	 * Keep IRQs off for the invlpg + return: IR0 has no IRQ stack, so a
+	 * timer nest on a deep #PF path can #DF (seen post-ash as fault_rip in
+	 * this function's leave epilogue with IF=1).
+	 */
+	flags = irq_save();
 	__asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+	irq_restore(flags);
 }
 
 void tlb_invalidate_all(void)

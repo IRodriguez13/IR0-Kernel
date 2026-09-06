@@ -68,9 +68,14 @@ permanecen en el monolítico `syscalls.c`.
 
 **`copy_from_user` / `copy_to_user`:**
 
-1. Si proceso `KERNEL_MODE` (tareas embebidas/kernel): `memcpy` plano.
-2. Si no, validar `[USER_SPACE_START, USER_SPACE_END)`.
-3. Copiar vía `copy_*_region_in_directory(current_process->page_directory, …)`.
+Contrato canónico: [`Documentation/esp/uaccess.md`](../../esp/uaccess.md)
+(inglés: [`uaccess.md`](../../uaccess.md)).
+
+1. Si proceso `KERNEL_MODE` (solo dbgshell / embebido): bypass `memcpy`.
+2. Si no, validar con `mm_user_va_ok` (ventana ISA en `arch/*/arch_mm.c`).
+3. Copiar vía `copy_*_region_in_directory(process_pgd(current), …)` (COW-safe).
+4. Nunca `load_page_directory` + `memcpy` crudo a VA user — clasifica como
+   `KERNEL_UACCESS_FAULT` y falla `arch-guard` en signals/syscalls P0.
 
 ## 4. Responsabilidades
 

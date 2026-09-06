@@ -12,6 +12,7 @@ Este directorio contiene traducciones de la documentacion tecnica principal.
 
 - `README.md`
 - `USERSPACE.md` — acoplamiento kernel ↔ [IR0-userspace](https://github.com/IRodriguez13/IR0-userspace)
+- `virtio.md` — virtio-9p / virtio-net y chaos de sesión
 - `DECOUPLING.md`
 - `MAKEFILE.md`
 - `TOOLING.md`
@@ -20,6 +21,7 @@ Este directorio contiene traducciones de la documentacion tecnica principal.
 - `DRIVERS.md`
 - `INTERRUPTS.md`
 - `MEMORY.md`
+- `uaccess.md` — frontera `copy_*_user` multi-ISA y clasificación de fallos
 - `PROCESSES.md`
 - `SCHEDULING.md`
 - `UNIX_DIFFERENCES.md`

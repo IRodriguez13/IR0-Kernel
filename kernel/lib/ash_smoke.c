@@ -4,6 +4,7 @@
  */
 
 #include <ir0/ash_smoke.h>
+#include <ir0/cmdline.h>
 #include <ir0/ktm/klog.h>
 #include <string.h>
 
@@ -49,6 +50,8 @@ void ir0_ash_smoke_scan_write(const char *buf, size_t count)
 	static const char marker[] = "BusyBox v";
 	size_t i;
 
+	if (!ir0_cmdline_ash_smoke_enabled())
+		return;
 	if (ash_smoke_active || !buf || count < sizeof(marker) - 1)
 		return;
 

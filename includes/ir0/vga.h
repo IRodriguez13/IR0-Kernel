@@ -72,6 +72,13 @@ static inline void print(const char *str)
 void putchar(char c);
 
 /*
+ * Escribe en la consola (FB/VGA) sin mirror a serial y sin respetar el gate
+ * printk_to_screen. Reservado para el panic: recupera la salida a la pantalla
+ * GTK cuando el handoff a userspace ya apagó el printk a pantalla.
+ */
+void print_screen_only(const char *str);
+
+/*
  * Imprime un carácter en posición específica sin mover el cursor global.
  * Útil para escribir en posiciones exactas (HUDs, menús, etc.)
  * 

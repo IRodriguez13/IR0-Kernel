@@ -25,6 +25,8 @@ The goal is to document implemented behavior first, then known gaps.
 - `KTM.md`: **canonical KTM guide** — internals, **klog layers**, kernel API, `/dev/ktm`, gates (Spanish: `esp/KTM.md`).
 - `USERSPACE.md`: **kernel ↔ IR0-userspace coupling** — `make first-boot`, BusyBox
   path, no-init panic contract (Spanish: `esp/USERSPACE.md`).
+- `virtio.md`: **virtio-9p hostshare + virtio-net** — QEMU flags, guest mount,
+  `smoke-session-chaos` / `smoke-hostshare-*` (Spanish: `esp/virtio.md`).
 - `KLOG.md`: **structured event core** — `klog_record`, phases, early clock, sinks, `/proc/kmsg`, product boot via runit/ash (Spanish: `esp/KLOG.md`).
 - `KTM_FASE_PARITY.md`: FASE oleada → KTM analogue map (COVERED/PARTIAL/GAP/SUB).
 - `KTM_FASE_INVENTORY.md`: legacy `smoke-fase*` class A/B/C and canonical KTM gates.
@@ -35,6 +37,9 @@ The goal is to document implemented behavior first, then known gaps.
 - `DRIVERS.md`: driver registry, bootstrap flow, config-gated initialization, **SB16 QEMU smoke**.
 - `INTERRUPTS.md`: IDT/PIC path, syscall entry, and exception behavior.
 - `MEMORY.md`: PMM, allocator, paging, real fork COW + lazy alloc limits.
+- `uaccess.md`: **kernel↔userspace copy frontier** — `copy_*_user` contract,
+  multi-ISA `mm_user_va_ok`, COW-safe region helpers, arch-guard tags,
+  `KERNEL_UACCESS_FAULT` diagnosis (Spanish: `esp/uaccess.md`).
 - `PROCESSES.md`: process lifecycle, credentials, signals, and wait/reap behavior.
 - `SCHEDULING.md`: scheduler selection, blocked poll/pause yield, Class B.
 - `UNIX_DIFFERENCES.md`: compatibility boundaries and intentional divergences.

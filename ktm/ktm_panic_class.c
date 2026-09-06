@@ -69,7 +69,7 @@ void ktm_classify_user_fault(process_t *proc, uint64_t fault_addr,
 		klass = "KERNEL_JUMP_BAD_RIP";
 	else if (fault_addr < 0x1000ULL)
 		klass = "USER_NULL_DEREF";
-	else if (proc && proc->irq_frame_saved && proc->wait_status_ptr)
+	else if (proc && proc->irq_frame_saved && process_wait_status_ptr_peek(proc))
 		klass = "FAULT_DURING_WAIT4";
 	else if (proc && proc->irq_frame_saved)
 		klass = "FAULT_DURING_SYSCALL_BLOCK";

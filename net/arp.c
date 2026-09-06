@@ -606,27 +606,15 @@ int arp_resolve(struct net_device *dev, ip4_addr_t ip, mac_addr_t mac)
         /* Wait for ARP reply with timeout */
         uint64_t start_time = clock_get_uptime_milliseconds();
         uint64_t timeout_ms = ARP_RESOLVE_TIMEOUT_MS;
-        
-        /* Log to serial only for verbose info */
-        extern void klog_print(const char *);
-        extern void klog_hex32(uint32_t);
-        klog_print("[ARP] Waiting for ARP reply (timeout=");
-        klog_hex32((uint32_t)timeout_ms);
-        klog_print(" ms, attempt ");
-        klog_hex32((uint32_t)(retry + 1));
-        klog_print("/");
-        klog_hex32((uint32_t)ARP_RESOLVE_RETRIES);
-        klog_print(")\n");
-        
-        uint64_t last_log_time = start_time;
+
         int check_count = 0;
         int max_checks = (timeout_ms / 10) + 10; /* Safety limit */
-        
+
         while (check_count < max_checks)
         {
             uint64_t current_time = clock_get_uptime_milliseconds();
             uint64_t elapsed = 0;
-            
+
             /* Check for overflow */
             if (current_time >= start_time)
             {
@@ -637,25 +625,11 @@ int arp_resolve(struct net_device *dev, ip4_addr_t ip, mac_addr_t mac)
                 LOG_WARNING("ARP", "Timer overflow detected!");
                 elapsed = timeout_ms + 1; /* Force exit */
             }
-            
-            /* Reduced logging: only log every 500ms to reduce VGA clutter */
-            if (check_count == 0 || (current_time - last_log_time) >= 500)
-            {
-                /* Use serial for verbose progress logs */
-                extern void klog_print(const char *);
-                extern void klog_hex32(uint32_t);
-                klog_print("[ARP] Waiting... elapsed=");
-                klog_hex32((uint32_t)elapsed);
-                klog_print(" ms, check_count=");
-                klog_hex32((uint32_t)check_count);
-                klog_print("\n");
-                last_log_time = current_time;
-            }
-            
+
             /* Check timeout */
             if (elapsed >= timeout_ms)
             {
-                LOG_INFO_FMT("ARP", "Timeout reached: elapsed=%d ms >= timeout=%d ms", 
+                LOG_INFO_FMT("ARP", "Timeout reached: elapsed=%d ms >= timeout=%d ms",
                             (int)elapsed, (int)timeout_ms);
                 break;
             }

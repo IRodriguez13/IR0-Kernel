@@ -244,6 +244,7 @@ static void heart_fill_dir_stat(stat_t *st)
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFDIR | 0555;
     st->st_nlink = 2;
+    pseudo_fs_stat_now(st);
 }
 
 int heart_stat(const char *path, stat_t *st)

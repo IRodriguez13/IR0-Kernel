@@ -35,6 +35,9 @@ setup/generated/
 __pycache__/
 *.pyc
 
+# Dev clipboard bridge (9p dennis → guest ir0-paste)
+.ir0/
+
 # Dev tooling artifacts
 *.map
 *.disasm

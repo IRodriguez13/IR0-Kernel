@@ -14,7 +14,7 @@
 #include "arch_interface.h"
 #include <arch/common/arch_portable.h>
 #include <ir0/cpu.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/early_clock.h>
 #include <ir0/oops.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -143,7 +143,7 @@ const char *get_arch_uname_machine(void)
 #endif
 }
 
-int arch_early_clock_available(void)
+int early_clock_available(void)
 {
 #if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 	return 1;
@@ -152,7 +152,7 @@ int arch_early_clock_available(void)
 #endif
 }
 
-uint64_t arch_early_clock_read(void)
+uint64_t early_clock_read(void)
 {
 #if defined(__x86_64__) || defined(__i386__)
 	uint32_t lo;
@@ -170,10 +170,10 @@ uint64_t arch_early_clock_read(void)
 #endif
 }
 
-arch_clock_quality_t arch_early_clock_quality(void)
+early_clock_quality_t early_clock_quality(void)
 {
-	return arch_early_clock_available() ? ARCH_CLOCK_RAW
-					   : ARCH_CLOCK_UNAVAILABLE;
+	return early_clock_available() ? EARLY_CLOCK_RAW
+				       : EARLY_CLOCK_UNAVAILABLE;
 }
 
 void outb(uint16_t port, uint8_t value)

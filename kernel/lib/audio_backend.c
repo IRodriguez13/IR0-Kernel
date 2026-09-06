@@ -32,18 +32,15 @@ int audio_backend_play_pcm(const void *buf, size_t count, uint32_t sample_rate,
 			   uint8_t channels, uint8_t bits_per_sample)
 {
 #if CONFIG_ENABLE_SOUND
-	sb16_sample_t sample;
 	int ret;
 
 	if (!buf || count == 0)
 		return 0;
 	if (!sb16_is_available())
 		return (int)count;
-	if (sb16_create_sample(&sample, (uint8_t *)(uintptr_t)buf, (uint32_t)count,
-			       sample_rate, channels, bits_per_sample) != 0)
-		return -1;
-	ret = sb16_play_sample(&sample);
-	sb16_destroy_sample(&sample);
+	(void)channels;
+	(void)bits_per_sample;
+	ret = sb16_play_pcm(buf, (uint32_t)count, sample_rate);
 	return (ret == 0) ? (int)count : -1;
 #else
 	(void)buf;

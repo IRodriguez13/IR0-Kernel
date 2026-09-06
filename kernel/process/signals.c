@@ -91,7 +91,7 @@ int process_signal_default_kill(process_t *dying, int sig)
 		{
 			send_signal(parent->task.pid, SIGCHLD);
 			if (parent->state == PROCESS_BLOCKED ||
-			    parent->wait_blocked)
+			    process_wait_blocked(parent))
 				process_wait_wake_blocked_parent(parent, dying);
 		}
 		wait_exit_audit_process_exit(dying, parent, parent_state_before);

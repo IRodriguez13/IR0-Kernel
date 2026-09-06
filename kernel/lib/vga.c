@@ -91,21 +91,30 @@ void scroll()
     }
 }
 
-/* Función para poner un carácter (con cursor automático) */
-void putchar(char c)
+/*
+ * putchar_ex - núcleo de salida de un carácter.
+ * @to_serial:    mirror a COM1 (ruta normal de putchar).
+ * @force_screen: dibujar en pantalla aunque el handoff a userspace haya
+ *                apagado printk_to_screen (usado por el panic para recuperar
+ *                la consola FB, ver print_screen_only()).
+ */
+static void putchar_ex(char c, int to_serial, int force_screen)
 {
     int cols = vga_cols();
     int rows = vga_rows();
 
-    if (c == '\n')
+    if (to_serial)
     {
-        serial_putchar('\r');
-        serial_putchar('\n');
+        if (c == '\n')
+        {
+            serial_putchar('\r');
+            serial_putchar('\n');
+        }
+        else
+            serial_putchar(c);
     }
-    else
-        serial_putchar(c);
 
-    if (!console_backend_printk_to_screen())
+    if (!force_screen && !console_backend_printk_to_screen())
         return;
 
     cursor_x = cursor_pos % cols;
@@ -150,6 +159,28 @@ void putchar(char c)
     }
 
     cursor_pos = cursor_y * cols + cursor_x;
+}
+
+/* Función para poner un carácter (con cursor automático) */
+void putchar(char c)
+{
+    putchar_ex(c, 1, 0);
+}
+
+/*
+ * print_screen_only - escribe en la consola (FB/VGA) sin tocar serial y sin
+ * respetar el gate printk_to_screen. Sólo para el panic: tras el handoff a
+ * userspace printk_to_screen queda apagado, así que print()/klog no dibujan
+ * en la pantalla GTK; esta ruta recupera la salida a pantalla del volcado.
+ */
+void print_screen_only(const char *str)
+{
+    int i;
+
+    if (!str)
+        return;
+    for (i = 0; str[i] != '\0'; i++)
+        putchar_ex(str[i], 0, 1);
 }
 
 void console_puts(const char *str)

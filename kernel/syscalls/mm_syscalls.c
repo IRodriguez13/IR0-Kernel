@@ -1301,12 +1301,10 @@ int sys_mprotect(void *addr, size_t len, int prot)
         pmm_free_frame(phys);
         return -ENOMEM;
       }
+      if (zero_user_region_in_directory(pml4, page, PAGE_SIZE_4KB) != 0)
       {
-        uint64_t old_cr3 = get_current_page_directory();
-
-        load_page_directory((uint64_t)pml4);
-        memset((void *)page, 0, PAGE_SIZE_4KB);
-        load_page_directory(old_cr3);
+        (void)unmap_page_in_directory(pml4, page);
+        return -EFAULT;
       }
       tlb_invalidate_page((uintptr_t)page);
       saw_present = 1;

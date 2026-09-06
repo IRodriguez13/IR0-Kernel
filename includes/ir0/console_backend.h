@@ -30,4 +30,6 @@ int console_backend_cursor_x(void);
 void console_backend_userspace_handoff(void);
 void console_backend_set_tty_serial_mirror(int on);
 int console_backend_printk_to_screen(void);
+/* Re-enable kernel text output to the active console (panic path only). */
+void console_backend_panic_screen_on(void);
 void console_backend_typewriter_init(void);

@@ -1,7 +1,8 @@
 # Mapa de desacople del kernel IR0
 
-> **Última verificación:** 2026-07-26  
-> **Fuente de verdad:** `Documentation/DECOUPLING.md` (inglés) + `includes/ir0/*`
+> **Última verificación:** 2026-09-02  
+> **Fuente de verdad:** `Documentation/DECOUPLING.md` (inglés) + `includes/ir0/*` +
+> [`uaccess.md`](uaccess.md)
 
 Este documento es la versión en español de `Documentation/DECOUPLING.md`. La documentación
 técnica principal se mantiene en inglés en el directorio `Documentation/`; aquí se resume el
@@ -77,6 +78,9 @@ drivers. Las reglas ejecutadas por `scripts/architecture_guard.py` están tabula
 | `kernel-no-driver-include` | `kernel/` (árbol completo) | Sin `#include <drivers/...>` |
 | `kernel-use-arch-port-facade` | `kernel/` | Sin `#include <arch/common/arch_portable.h>`; **`ir0/arch_port.h`** |
 | `bluetooth-include-scope` | Fuera de `drivers/bluetooth/` | Sin `#include <bluetooth/...>` |
+| `usercopy-no-cr3-memcpy` | `kernel/syscalls/**`, `signals.c` | Sin `load_page_directory` + `memcpy((void *)` crudo; ver [`uaccess.md`](uaccess.md) |
+| `usercopy-signals` | `kernel/lib/signals.c` | Sin `memcpy((void *)` a stack user |
+| `usercopy-sys-uname` | `sys_uname` | Bounce + `copy_to_user` |
 | Recursos | `resource_register_irq`, `resource_register_ioport` | Los drivers usan [`includes/ir0/resource_registry.h`](../../includes/ir0/resource_registry.h). |
 
 **Nota proc/sys:** el runtime legacy sigue siendo **FD + switch** en `fs/procfs.c`; la tabla registrada amplía algunos endpoints sin reemplazar todavía el árbol completo.

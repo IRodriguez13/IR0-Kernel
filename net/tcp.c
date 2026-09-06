@@ -22,7 +22,7 @@
 #include <ir0/process.h>
 #include <ir0/signals.h>
 #include <ir0/context.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/cpu.h>
 #include <ir0/poll.h>
 #include <string.h>
 
@@ -152,12 +152,8 @@ static int tcp_consume_connect_sigalrm(void)
 	current_process->signal_pending &= ~SIGNAL_MASK(SIGALRM);
 	current_process->it_real_expire_ms = 0;
 	current_process->it_real_interval_ms = 0;
-	if (current_process->saved_context)
-	{
-		kfree(current_process->saved_context);
-		current_process->saved_context = NULL;
-	}
-	current_process->signal_enter_pending = 0;
+	process_saved_context_clear(current_process);
+	process_signal_enter_pending_clear(current_process);
 	return 1;
 }
 static struct tcp_wire_outbound g_out;
@@ -1235,7 +1231,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 	 * die-from-handler → SEGV on repeat.
 	 */
 	if (current_process)
-		current_process->signal_defer_catchable = 1;
+		process_signal_defer_catchable_set(current_process);
 
 	/*
 	 * One outbound association at a time. Concurrent connect (stress
@@ -1249,13 +1245,13 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		if (tcp_consume_connect_sigalrm())
 		{
 			if (current_process)
-				current_process->signal_defer_catchable = 0;
+				process_signal_defer_catchable_clear(current_process);
 			return -ETIMEDOUT;
 		}
 		if (clock_get_uptime_milliseconds() >= wait_deadline)
 		{
 			if (current_process)
-				current_process->signal_defer_catchable = 0;
+				process_signal_defer_catchable_clear(current_process);
 			return -ETIMEDOUT;
 		}
 		(void)ir0_clock_wait_block_until(
@@ -1269,7 +1265,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		g_tcp_connect_owner = 0;
 		__sync_lock_release(&g_tcp_connect_busy);
 		if (current_process)
-			current_process->signal_defer_catchable = 0;
+			process_signal_defer_catchable_clear(current_process);
 		return ret;
 	}
 	*local_port_out = lport;
@@ -1285,7 +1281,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		if (ret != -EAGAIN)
 		{
 			if (current_process)
-				current_process->signal_defer_catchable = 0;
+				process_signal_defer_catchable_clear(current_process);
 			g_tcp_connect_owner = 0;
 			__sync_lock_release(&g_tcp_connect_busy);
 			return ret;
@@ -1296,7 +1292,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		{
 			tcp_pending_clear();
 			if (current_process)
-				current_process->signal_defer_catchable = 0;
+				process_signal_defer_catchable_clear(current_process);
 			g_tcp_connect_owner = 0;
 			__sync_lock_release(&g_tcp_connect_busy);
 			return -ETIMEDOUT;
@@ -1306,7 +1302,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		{
 			tcp_pending_clear();
 			if (current_process)
-				current_process->signal_defer_catchable = 0;
+				process_signal_defer_catchable_clear(current_process);
 			g_tcp_connect_owner = 0;
 			__sync_lock_release(&g_tcp_connect_busy);
 			return -ETIMEDOUT;
@@ -1315,7 +1311,7 @@ int tcp_wire_connect(ip4_addr_t peer_ip, uint16_t peer_port,
 		if (current_process &&
 		    signals_pause_should_interrupt(current_process))
 		{
-			current_process->signal_defer_catchable = 0;
+			process_signal_defer_catchable_clear(current_process);
 			handle_signals();
 			tcp_pending_clear();
 			g_tcp_connect_owner = 0;

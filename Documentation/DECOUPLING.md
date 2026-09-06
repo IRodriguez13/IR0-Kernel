@@ -1,7 +1,8 @@
 # Kernel Decoupling Map
 
-> **Last verified:** 2026-07-26  
-> **Source of truth:** `includes/ir0/*`, `scripts/architecture_guard.py`, `ktm/include/klog.h`
+> **Last verified:** 2026-09-02  
+> **Source of truth:** `includes/ir0/*`, `scripts/architecture_guard.py`, `ktm/include/klog.h`,
+> [`uaccess.md`](uaccess.md)
 
 This document maps how IR0 separates subsystems, where stable interfaces live, and where
 coupling still exists. It complements `DRIVERS.md`, `MAKEFILE.md`, `TOOLING.md`, and the CTR checklist in
@@ -35,6 +36,8 @@ underlying `drivers/*` via those façades; direct `#include <drivers/serial/...>
 | Signals / sigcontext | ISA layouts in [`sigcontext_x86_64.h`](../../includes/ir0/sigcontext_x86_64.h) / [`sigcontext_arm64.h`](../../includes/ir0/sigcontext_arm64.h); portable delivery via **`arch_signal_*`** + **`arch_task_{load,store}_sigcontext`**. |
 | Syscall frame | Opaque **`process_syscall_*`** accessors; fill/restore in **`arch_syscall_frame`**. Guard: `[syscall-frame-accessor]`. |
 | MM root half | **`arch_mm_copy_kernel_half` / `arch_mm_user_root_slots`** ([`arch_mm.h`](../../includes/ir0/arch_mm.h)). |
+| User VA window | **`mm_user_va_ok(addr, size)`** ([`mm.h`](../../includes/ir0/mm.h)); ISA bodies in `arch/*/sources/arch_mm.c`. |
+| Usercopy | **`copy_to/from_user` / `clear_user` / region helpers** ([`copy_user.h`](../../includes/ir0/copy_user.h)); never CR3+`memcpy` to user VA. Full contract: [`uaccess.md`](uaccess.md). |
 | IRQ / MM / TLB | Simple names: **`irq_save`/`irq_restore`**, **`mm_activate`**, **`tlb_invalidate_*`**, **`cpu_relax`**, **`smp_mb`**, **`timer_read`** ([`includes/ir0/cpu.h`](../../includes/ir0/cpu.h) + `arch_cpu.h`). No `arch_` prefix on new hot-path facades. |
 | **`fs/`** vs `arch/` | No `#include <arch/...>` in `fs/`; use **`includes/ir0/arch_port.h`** (`scripts/architecture_guard.py` enforces). |
 
@@ -61,6 +64,10 @@ underlying `drivers/*` via those façades; direct `#include <drivers/serial/...>
 | `kernel-use-arch-port-facade` | `kernel/` | No `#include <arch/common/arch_portable.h>`; use **`ir0/arch_port.h`** |
 | `bluetooth-include-scope` | Outside `drivers/bluetooth/` | No `#include <bluetooth/...>` |
 | `portable-no-isa-asm` | `kernel/`, `net/`, `mm/`, `sched/`, `drivers/`, `fs/`, `includes/ir0/` | No ISA mnemonics in asm; use **`cpu_relax`/`smp_mb`/`inb`/…** ([`ir0/cpu.h`](../../includes/ir0/cpu.h)). Allowlist: `syscall_x86_64.h` / `syscall_arm64.h`. |
+| `usercopy-no-cr3-memcpy` | `kernel/syscalls/**`, `kernel/lib/signals.c` | No `load_page_directory` + raw `memcpy((void *)` / `memset((void *)` in the same function; use **`copy_*_user` / region helpers** ([`uaccess.md`](uaccess.md)). |
+| `usercopy-signals` | `kernel/lib/signals.c` | No `memcpy((void *)` (signal frame must use region copy). |
+| `usercopy-sys-uname` | `sys_uname` | No `memset(buf` / `strncpy(buf->`; bounce + **`copy_to_user`**. |
+| `devfs-io-contract-usercopy` | `fs/devfs.c` | Device I/O must usercopy via allowlisted helpers ([`devfs-io-contract.md`](devfs-io-contract.md)). |
 
 ### Binary stability check
 
@@ -114,6 +121,9 @@ specific driver implementation file:
 | Power | `platform_ops.h` | `kernel/power/power_manag.c` |
 | Scheduler | **`sched.h`** (`scheduler_api.h` → alias) | Process/timer/IRQ → `sched_schedule_next()` |
 | IRQ subsystem | **`irq.h`** | Boot IDT/PIC/GIC + keyboard poll; not `interrupt/arch/*` from portable/drivers |
+| UP spinlock | **`spinlock.h`** (`ir0_spinlock_t`; irq-save on UP) | Hot paths e.g. `kernel/lib/pipe.c` read/write |
+| Page-fault debug | **`arch_pf_debug.h`** (`pf_debug_*`; x86 frame layout) | `mm/page_fault.c` calls; impl in `arch/*/sources/arch_pf_debug.c` |
+| Signal sigreturn ctx | `process_saved_context_*()` in `process.h` | Only `kernel/process/saved_context.c` may touch `->saved_context` |
 | Context switch | **`context.h`**, **`arch_switch.h`** | `switch_to` / kernel stack handoff |
 | MM root layout | **`arch_mm.h`** | User/kernel half of page-table root |
 | Resources | `resource_registry.h` | IRQ / I/O port registration from drivers |

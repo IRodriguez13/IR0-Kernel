@@ -174,6 +174,7 @@ run-isd: kernel-x64-userspace.iso ensure-isd-disk
 	@echo "  DISK     $(IR0_ISD_DISK)"
 	@echo "  ISO      kernel-x64-userspace.iso"
 	@echo "  Ungrab:  Ctrl+Alt+G"
+	@echo "  Clipboard: make clip-send (host) → ir0-paste in guest (9p dennis)"
 	@echo "  Guest:   first-boot wizard or login (development = autologin root)"
 	qemu-system-x86_64 -cdrom kernel-x64-userspace.iso \
 		-drive file=$(IR0_ISD_DISK),format=raw,if=ide,index=0 \

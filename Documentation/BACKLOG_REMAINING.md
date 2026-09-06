@@ -1,6 +1,6 @@
 # IR0 — Post-0.0.1 backlog (honest remaining work)
 
-> **Last verified:** 2026-07-24
+> **Last verified:** 2026-09-01
 > **Source of truth:** `Documentation/ROADMAP.md`, code under `fs/`, `drivers/storage/`,
 > `scripts/linux_abi/`, Makefile gates. Prefer this file for **what is still open**;
 > ROADMAP holds history and tier %.
@@ -61,6 +61,17 @@
 | Kernel `[FASE` serial retired | arch-guard `ktm-no-fase` |
 | PERF-1 `sys_gettid` | no per-call GETTID spam |
 | FASE→KTM Open residual | 41/42/44 fork+exec_drain+reap_drain+**init_exit_drain** SUB; 52/55/58 HOST+KTM; **57 GUI** HOST |
+
+## Closed this wave (2026-09-01) — post-0.0.1 hardening (pre-Doom validation)
+
+| Item | Proof |
+|------|-------|
+| SB16 DMA-safe playback + IRQ5 | `smoke-sb16-probe`; `sound_blaster.c`, `isr_handlers.c` |
+| `fd_can_write_for` without `current_process` swap | `io_syscalls.c`; host poll contracts unchanged 43/43 |
+| PF soft-grow removed | `mm/page_fault.c` |
+| `ir0_spinlock` + pipe hot path | `includes/ir0/spinlock.h`, `pipe.c` |
+| `saved_context` accessors + arch-guard | `saved_context.c`, `architecture_guard.py` |
+| `pf_debug_*` in arch tree | `arch_pf_debug.c` (x86/arm64) |
 
 ## Closed this wave (2026-07-25) — tree boundary: no in-kernel userspace shell
 

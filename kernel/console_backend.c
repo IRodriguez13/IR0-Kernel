@@ -54,6 +54,17 @@ int console_backend_printk_to_screen(void)
     return printk_to_screen;
 }
 
+void console_backend_panic_screen_on(void)
+{
+    /*
+     * Re-enable kernel text output to the active console. After the userspace
+     * handoff printk_to_screen is 0, so a panic drew nothing on the FB/GTK
+     * screen (print()/clear_screen() were gated). Turn it back on so the panic
+     * banner and the mirrored dump reach the screen, not just serial.
+     */
+    printk_to_screen = 1;
+}
+
 void console_backend_set_tty_serial_mirror(int on)
 {
     tty_serial_mirror = on ? 1 : 0;
@@ -68,6 +79,9 @@ void console_backend_userspace_handoff(void)
     /*
      * Product console must be instant. TYPEWRITER_* delays are a demo effect
      * only — never leave FAST/NORMAL/SLOW enabled after userspace attach.
+     * Keep TTY→COM1 mirror when CONFIG_CONSOLE_SERIAL_MIRROR=y so headless
+     * smokes can grep prompts; serial_putchar itself must not spin forever
+     * if the host stdio pipe backs up.
      */
     typewriter_set_mode(TYPEWRITER_DISABLED);
     typewriter_console_clear(IR0_CONSOLE_COLOR_DEFAULT);

@@ -16,6 +16,7 @@
 #include <ir0/heartfs.h>
 #include <ir0/sysfs.h>
 #include <ir0/procfs.h>
+#include <ir0/fd_types.h>
 #include <ir0/arch_port.h>
 #include <config.h>
 #include <ir0/errno.h>
@@ -56,6 +57,35 @@ static int64_t pseudo_max_processes_write(void *ctx, const char *buf, size_t cou
         return r;
     return (int64_t)count;
 }
+
+static int64_t pseudo_sys_panic_write(void *ctx, const char *buf, size_t count)
+{
+    (void)ctx;
+    /* Never returns: forces panicex(TESTING) so read is help-only above. */
+    return (int64_t)sys_kernel_panic_write_reg(buf, count);
+}
+
+/* Root-writable only (0644): a foot-gun crash trigger, Linux sysrq-style. */
+static int pseudo_panic_stat(void *ctx, stat_t *st)
+{
+    (void)ctx;
+    if (!st)
+        return -EINVAL;
+    memset(st, 0, sizeof(*st));
+    st->st_mode = S_IFREG | 0644;
+    st->st_nlink = 1;
+    st->st_uid = 0;
+    st->st_gid = 0;
+    st->st_size = 4096;
+    pseudo_fs_stat_now(st);
+    return 0;
+}
+
+static const pseudo_fs_ops_t sys_panic_ops = {
+    .read = pseudo_read_wrap_int,
+    .write = pseudo_sys_panic_write,
+    .stat = pseudo_panic_stat,
+};
 
 static int64_t pseudo_sys_cpu_read(void *ctx, char *buf, size_t count, off_t *offset)
 {
@@ -375,12 +405,17 @@ typedef struct proc_pid_file_ctx
 {
     pid_t pid;
     int kind;
+    int fd_num;
     int in_use;
 } proc_pid_file_ctx_t;
 
 #define PROC_PID_FILE_STATUS  0
 #define PROC_PID_FILE_CMDLINE 1
 #define PROC_PID_FILE_STAT    2
+#define PROC_PID_FILE_MAPS    3
+#define PROC_PID_FILE_STATM   4
+#define PROC_PID_FILE_ENVIRON 5
+#define PROC_PID_FILE_FD_LINK 6
 #define PROC_PID_CTX_MAX      32
 
 static proc_pid_file_ctx_t g_proc_pid_ctx[PROC_PID_CTX_MAX];
@@ -398,20 +433,59 @@ static proc_pid_file_ctx_t *proc_pid_file_ctx_alloc(void)
     return NULL;
 }
 
+static int proc_pid_file_parse_fd_link(const char *path, pid_t *pid_out, int *fd_out)
+{
+    const char *name;
+    const char *fd_slash;
+    int fd;
+
+    name = proc_resolve_path(path, pid_out);
+    if (!name || strcmp(name, "fd_link") != 0)
+        return -ENOENT;
+
+    fd_slash = strstr(path, "/fd/");
+    if (!fd_slash)
+        return -ENOENT;
+
+    fd = atoi(fd_slash + 4);
+    if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+        return -EINVAL;
+
+    *fd_out = fd;
+    return 0;
+}
+
 static int proc_pid_file_match(const char *path, void **out_ctx)
 {
     pid_t pid;
     const char *name;
     proc_pid_file_ctx_t *ctx;
+    int fd_num;
 
     if (!out_ctx)
         return -EINVAL;
+
+    if (proc_pid_file_parse_fd_link(path, &pid, &fd_num) == 0)
+    {
+        ctx = proc_pid_file_ctx_alloc();
+        if (!ctx)
+            return -ENFILE;
+
+        ctx->pid = pid;
+        ctx->kind = PROC_PID_FILE_FD_LINK;
+        ctx->fd_num = fd_num;
+        ctx->in_use = 1;
+        *out_ctx = ctx;
+        return 0;
+    }
 
     name = proc_resolve_path(path, &pid);
     if (!name)
         return -ENOENT;
 
     if (strcmp(name, "status") != 0 && strcmp(name, "cmdline") != 0 &&
+        strcmp(name, "maps") != 0 && strcmp(name, "statm") != 0 &&
+        strcmp(name, "environ") != 0 &&
         !(strcmp(name, "stat") == 0 && pid > 0))
         return -ENOENT;
 
@@ -420,10 +494,17 @@ static int proc_pid_file_match(const char *path, void **out_ctx)
         return -ENFILE;
 
     ctx->pid = pid;
+    ctx->fd_num = -1;
     if (strcmp(name, "cmdline") == 0)
         ctx->kind = PROC_PID_FILE_CMDLINE;
     else if (strcmp(name, "stat") == 0)
         ctx->kind = PROC_PID_FILE_STAT;
+    else if (strcmp(name, "maps") == 0)
+        ctx->kind = PROC_PID_FILE_MAPS;
+    else if (strcmp(name, "statm") == 0)
+        ctx->kind = PROC_PID_FILE_STATM;
+    else if (strcmp(name, "environ") == 0)
+        ctx->kind = PROC_PID_FILE_ENVIRON;
     else
         ctx->kind = PROC_PID_FILE_STATUS;
     ctx->in_use = 1;
@@ -443,6 +524,14 @@ static int64_t proc_pid_file_read(void *ctx, char *buf, size_t count, off_t *off
         return proc_cmdline_read(buf, count, file->pid);
     if (file->kind == PROC_PID_FILE_STAT)
         return proc_pid_stat_read(buf, count, file->pid);
+    if (file->kind == PROC_PID_FILE_MAPS)
+        return proc_pid_maps_read(buf, count, file->pid);
+    if (file->kind == PROC_PID_FILE_STATM)
+        return proc_pid_statm_read(buf, count, file->pid);
+    if (file->kind == PROC_PID_FILE_ENVIRON)
+        return proc_pid_environ_read(buf, count, file->pid);
+    if (file->kind == PROC_PID_FILE_FD_LINK)
+        return proc_pid_fd_link_target_read(buf, count, file->pid, file->fd_num);
 
     return proc_status_read(buf, count, file->pid);
 }
@@ -458,16 +547,21 @@ static int64_t proc_pid_file_close(void *ctx)
 
 static int proc_pid_file_stat(void *ctx, stat_t *st)
 {
-    (void)ctx;
+    proc_pid_file_ctx_t *file = ctx;
+
     if (!st)
         return -EINVAL;
 
     memset(st, 0, sizeof(*st));
-    st->st_mode = S_IFREG | 0444;
+    if (file && file->kind == PROC_PID_FILE_FD_LINK)
+        st->st_mode = S_IFLNK | 0777;
+    else if (file && file->kind == PROC_PID_FILE_ENVIRON)
+        st->st_mode = S_IFREG | 0400;
+    else
+        st->st_mode = S_IFREG | 0444;
     st->st_nlink = 1;
     st->st_uid = 0;
     st->st_gid = 0;
-    /* Linux reports 0 for /proc/pid files; readers must not trust st_size. */
     st->st_size = 0;
     pseudo_fs_stat_now(st);
     return 0;
@@ -600,8 +694,12 @@ void pseudo_fs_nodes_register_all(void)
 		       (void *)(uintptr_t)sys_kernel_build_read_reg);
     pseudo_fs_register("/sys", "kernel/features", &sys_static_read_ops,
 		       (void *)(uintptr_t)sys_kernel_features_read_reg);
+    pseudo_fs_register("/sys", "kernel/mm", &sys_static_read_ops,
+		       (void *)(uintptr_t)sys_kernel_mm_read_reg);
     pseudo_fs_register("/sys", "kernel/max_processes", &sys_max_processes_ops,
                        (void *)(uintptr_t)sys_kernel_max_processes_read_reg);
+    pseudo_fs_register("/sys", "kernel/panic", &sys_panic_ops,
+                       (void *)(uintptr_t)sys_kernel_panic_read_reg);
     pseudo_fs_register("/sys", "devices/system", &sys_static_read_ops,
                        (void *)(uintptr_t)sys_devices_system_read_reg);
     pseudo_fs_register("/sys", "devices/block", &sys_static_read_ops,

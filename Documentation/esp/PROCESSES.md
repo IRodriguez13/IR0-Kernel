@@ -1,8 +1,8 @@
 # Modelo de Procesos en IR0
 
-> **Última verificación:** 2026-07-29
+> **Última verificación:** 2026-09-02
 > **Fuente de verdad:** `kernel/process/exit.c`, `kernel/process/wait.c`,
-> [`PROCESSES.md`](../PROCESSES.md) (canónico en inglés)
+> [`PROCESSES.md`](../PROCESSES.md) (canónico en inglés), [`uaccess.md`](uaccess.md)
 
 El manejo de procesos en IR0 prioriza ciclo de vida claro y semántica Unix de
 credenciales en forma incremental.
@@ -13,6 +13,8 @@ credenciales en forma incremental.
 - Integración con syscalls en `kernel/syscalls/process_syscalls.c`.
 - Handoff al scheduler vía scheduler API.
 - Rutas de señales y wait/reap integradas al estado de proceso.
+- Frames/`siginfo` vía `copy_to_user_region_in_directory` (nunca CR3+`memcpy`);
+  contrato: [`uaccess.md`](uaccess.md).
 
 ## Datos clave por proceso
 
@@ -21,6 +23,7 @@ credenciales en forma incremental.
 - Tabla de file descriptors y directorio de trabajo.
 - Credenciales: `uid/gid/euid/egid` y `umask`.
 - Estado de señales pendientes y metadata de salida.
+- **`saved_context`:** copia kernel del contexto CPU para `rt_sigreturn`; acceso solo vía `process_saved_context_*()` (`kernel/process/saved_context.c`).
 
 ## Exit, reparent, wait
 

@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Number of root-table slots for the user half (x86-64: PML4[0..255]). */
@@ -27,3 +28,9 @@ unsigned mm_root_slots(void);
  * User half of @dst_root is left untouched by this helper.
  */
 void mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root);
+
+/*
+ * ISA userspace VA window for access_ok / is_user_address (no page walk).
+ * Returns 1 if [addr, addr+size) is a canonical user range for this arch.
+ */
+int mm_user_va_ok(uintptr_t addr, size_t size);

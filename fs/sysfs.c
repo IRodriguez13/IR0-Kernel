@@ -45,7 +45,10 @@
 #include <ir0/blockdev.h>
 #include <ir0/video_backend.h>
 #include <ir0/pseudo_fs.h>
+#include <ir0/oops.h>
 #include <ir0/arch_port.h>
+#include <ir0/mm_port.h>
+#include <ir0/ktm/stack_watch.h>
 #if CONFIG_ENABLE_NETWORKING
 #include <ir0/net.h>
 #endif
@@ -157,6 +160,47 @@ int sys_kernel_hostname_write_reg(const char *buf, size_t count)
         return -EINVAL;
 
     return (int)count;
+}
+
+/**
+ * sys_kernel_panic_read_reg - help text for /sys/kernel/panic.
+ *
+ * cat shows how to use it; the actual crash happens on write. Modeled on
+ * Linux /proc/sysrq-trigger (echo c) but exposed under /sys as requested.
+ */
+int sys_kernel_panic_read_reg(char *buf, size_t count)
+{
+    int len;
+
+    if (!buf || count == 0)
+        return -EINVAL;
+    len = snprintf(buf, count,
+                   "write any byte to force a kernel panic (test/debug)\n");
+    if (len < 0)
+        return -1;
+    if (len >= (int)count)
+    {
+        buf[count - 1] = '\0';
+        return (int)(count - 1);
+    }
+    return len;
+}
+
+/**
+ * sys_kernel_panic_write_reg - force a kernel panic on demand.
+ *
+ * Any non-empty write triggers panicex() at TESTING level. This is the only
+ * on-demand panic path (no NMI handler, no boot self-test), so it also lets
+ * smokes exercise the panic banner / FB screen path. Never returns.
+ */
+int sys_kernel_panic_write_reg(const char *buf, size_t count)
+{
+    if (!buf || count == 0)
+        return -EINVAL;
+
+    panicex("forced panic via /sys/kernel/panic", TESTING,
+            __FILE__, __LINE__, __func__);
+    return (int)count; /* not reached */
 }
 
 /**
@@ -478,6 +522,70 @@ int sys_kernel_features_read_reg(char *buf, size_t count)
 		       "networking\n"
 #endif
 		       "minix\ntmpfs\n");
+	if (len < 0)
+		return -1;
+	if (len >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	return len;
+}
+
+/*
+ * /sys/kernel/mm — subset of /proc/meminfo (same PMM + heap sources).
+ */
+int sys_kernel_mm_read_reg(char *buf, size_t count)
+{
+	size_t total_frames = 0;
+	size_t used_frames = 0;
+	size_t free_frames = 0;
+	size_t heap_total = 0;
+	size_t heap_used = 0;
+	size_t heap_allocs = 0;
+	uint64_t total_kb;
+	uint64_t used_kb;
+	uint64_t free_kb;
+	int len;
+
+	if (!buf || count == 0)
+		return -EINVAL;
+
+	ir0_mm_pmm_stats(&total_frames, &used_frames, &free_frames);
+	total_kb = ((uint64_t)total_frames * (uint64_t)IR0_MM_PAGE_SIZE) / 1024ULL;
+	used_kb = ((uint64_t)used_frames * (uint64_t)IR0_MM_PAGE_SIZE) / 1024ULL;
+	free_kb = ((uint64_t)free_frames * (uint64_t)IR0_MM_PAGE_SIZE) / 1024ULL;
+	ir0_mm_alloc_stats(&heap_total, &heap_used, &heap_allocs);
+
+	len = snprintf(buf, count,
+		       "MemTotal:       %llu kB\n"
+		       "MemFree:        %llu kB\n"
+		       "MemAvailable:   %llu kB\n"
+		       "MemUsed:        %llu kB\n"
+		       "PmmTotalFrames: %llu\n"
+		       "PmmUsedFrames:  %llu\n"
+		       "PmmFreeFrames:  %llu\n"
+		       "Slab:           %llu kB\n"
+		       "SlabTotal:      %llu kB\n"
+		       "SlabAllocs:     %llu\n"
+		       "PageSize:       %u kB\n"
+		       "KStackMinFree:  %llu\n"
+		       "IrqNestMax:     %u\n"
+		       "KStackPeak:     %llu\n",
+		       (unsigned long long)total_kb,
+		       (unsigned long long)free_kb,
+		       (unsigned long long)free_kb,
+		       (unsigned long long)used_kb,
+		       (unsigned long long)(uint64_t)total_frames,
+		       (unsigned long long)(uint64_t)used_frames,
+		       (unsigned long long)(uint64_t)free_frames,
+		       (unsigned long long)((uint64_t)heap_used / 1024ULL),
+		       (unsigned long long)((uint64_t)heap_total / 1024ULL),
+		       (unsigned long long)(uint64_t)heap_allocs,
+		       (unsigned)(IR0_MM_PAGE_SIZE / 1024U),
+		       (unsigned long long)ktm_stack_min_headroom_get(),
+		       ktm_irq_nest_max_get(),
+		       (unsigned long long)ktm_stack_peak_used());
 	if (len < 0)
 		return -1;
 	if (len >= (int)count)
@@ -849,6 +957,7 @@ int sysfs_stat(const char *path, stat_t *st)
         memset(st, 0, sizeof(*st));
         st->st_mode = S_IFDIR | 0555;
         st->st_nlink = 2;
+        pseudo_fs_stat_now(st);
         return 0;
     }
 
@@ -867,6 +976,7 @@ int sysfs_stat(const char *path, stat_t *st)
         memset(st, 0, sizeof(*st));
         st->st_mode = S_IFDIR | 0555;
         st->st_nlink = 2;
+        pseudo_fs_stat_now(st);
         return 0;
     }
 

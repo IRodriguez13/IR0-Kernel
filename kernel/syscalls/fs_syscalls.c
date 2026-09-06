@@ -35,6 +35,7 @@
 #include <ir0/timerfd.h>
 #include <ir0/posix_shm.h>
 #include <ir0/fd_dispatch.h>
+#include <ir0/fd_get.h>
 #include <ir0/supervise_path.h>
 #include <ir0/path_user.h>
 #include <ir0/permissions.h>
@@ -228,6 +229,23 @@ static int64_t do_readlinkat(int dirfd, const char *pathname, char *buf,
   rc = ir0_resolve_path_at(dirfd, pathname, resolved, sizeof(resolved));
   if (rc != 0)
     return rc;
+
+  if (is_proc_path(resolved))
+  {
+    rc = proc_readlink(resolved, kbuf, sizeof(kbuf));
+    if (rc >= 0)
+    {
+      len = (size_t)rc;
+      copy_len = len;
+      if (copy_len > bufsiz)
+        copy_len = bufsiz;
+      if (copy_to_user(buf, kbuf, copy_len) != 0)
+        return -EFAULT;
+      return (int64_t)len;
+    }
+    if (rc != -ENOENT)
+      return rc;
+  }
 
   rc = vfs_readlink(resolved, kbuf, sizeof(kbuf));
   if (rc >= 0)

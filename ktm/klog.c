@@ -15,7 +15,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <string.h>
-#include <ir0/arch_cpu.h>
+#include <ir0/early_clock.h>
+#include <ir0/clock.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/klog_event.h>
 #include <ir0/kmem.h>
@@ -212,19 +213,56 @@ static size_t klog_render_record(const klog_record_t *record, char *line,
 	return off;
 }
 
+/*
+ * Optional screen sink for the panic dump. klog_* is serial-only by design;
+ * during a panic oops.c installs print_screen_only here so the same text also
+ * reaches the FB/GTK console. NULL in normal operation (no extra work, no
+ * ktm→vga coupling: the sink is a plain callback owned by the caller).
+ */
+static void (*g_klog_screen_sink)(const char *);
+
+void klog_set_screen_sink(void (*sink)(const char *))
+{
+	g_klog_screen_sink = sink;
+}
+
+/* Fixed-width uppercase hex, matching serial_print_hex32/64 (no 0x prefix). */
+static void klog_screen_hex(uint64_t num, int nibbles)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	char buf[17];
+	int i;
+
+	if (nibbles > 16)
+		nibbles = 16;
+	for (i = nibbles - 1; i >= 0; i--)
+	{
+		buf[i] = hex[num & 0xF];
+		num >>= 4;
+	}
+	buf[nibbles] = '\0';
+	g_klog_screen_sink(buf);
+}
+
 void klog_print(const char *str)
 {
 	serial_print(str);
+	if (g_klog_screen_sink)
+		g_klog_screen_sink(str);
 }
 
 void klog_hex32(uint32_t num)
 {
 	serial_print_hex32(num);
+	if (g_klog_screen_sink)
+		klog_screen_hex(num, 8);
 }
 
 void klog_hex64(uint64_t num)
 {
 	serial_print_hex64(num);
+	if (g_klog_screen_sink)
+		klog_screen_hex(num, 16);
 }
 
 void klog_set_level(klog_level_t level)
@@ -316,10 +354,10 @@ static klog_record_t *klog_capture_record(klog_level_t level,
 		record->timestamp_ns =
 			clock_get_uptime_milliseconds() * 1000000ULL;
 	}
-	else if (arch_early_clock_available())
+	else if (early_clock_available())
 	{
 		record->clock_state = KLOG_CLOCK_RAW;
-		record->raw_ticks = arch_early_clock_read();
+		record->raw_ticks = early_clock_read();
 	}
 	else
 	{

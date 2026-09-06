@@ -76,6 +76,7 @@ struct vfs_dirent {
 #define DT_UNKNOWN 0
 #define DT_DIR     4
 #define DT_REG     8
+#define DT_LNK     10
 
 /* Lifecycle */
 int vfs_init(void);

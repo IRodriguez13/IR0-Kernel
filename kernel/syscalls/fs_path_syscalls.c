@@ -430,6 +430,7 @@ int64_t sys_uname(struct utsname *buf)
 {
   char version[64];
   char nodename[64];
+  struct utsname kbuf;
 
   if (!current_process || !buf)
     return -EFAULT;
@@ -437,23 +438,26 @@ int64_t sys_uname(struct utsname *buf)
   if (validate_userspace_buffer(buf, sizeof(struct utsname)) != 0)
     return -EFAULT;
 
-  memset(buf, 0, sizeof(struct utsname));
+  memset(&kbuf, 0, sizeof(kbuf));
   ir0_utsname_fill_version(version, sizeof(version));
   ir0_utsname_fill_nodename(nodename, sizeof(nodename));
   /* sysname nodename release version machine — version/nodename from live state. */
-  strncpy(buf->sysname, "IR0", _UTSNAME_LENGTH - 1);
-  strncpy(buf->nodename, nodename, _UTSNAME_LENGTH - 1);
-  strncpy(buf->release, IR0_VERSION_STRING, _UTSNAME_LENGTH - 1);
-  strncpy(buf->version, version, _UTSNAME_LENGTH - 1);
+  strncpy(kbuf.sysname, "IR0", _UTSNAME_LENGTH - 1);
+  strncpy(kbuf.nodename, nodename, _UTSNAME_LENGTH - 1);
+  strncpy(kbuf.release, IR0_VERSION_STRING, _UTSNAME_LENGTH - 1);
+  strncpy(kbuf.version, version, _UTSNAME_LENGTH - 1);
   /*
    * PER_LINUX32 (set by linux32(1) via personality(2)) makes uname report a
    * 32-bit machine on the same 64-bit kernel, as Linux does in
    * arch/x86/kernel/sys_x86_64.c.
    */
   if (current_process && current_process->personality == 0x0008)
-    strncpy(buf->machine, "i686", _UTSNAME_LENGTH - 1);
+    strncpy(kbuf.machine, "i686", _UTSNAME_LENGTH - 1);
   else
-    strncpy(buf->machine, get_arch_uname_machine(), _UTSNAME_LENGTH - 1);
+    strncpy(kbuf.machine, get_arch_uname_machine(), _UTSNAME_LENGTH - 1);
+
+  if (copy_to_user(buf, &kbuf, sizeof(kbuf)) != 0)
+    return -EFAULT;
   return 0;
 }
 

@@ -1,5 +1,8 @@
 # IR0 Interrupt and Exception Path
 
+> **Last verified:** 2026-09-01  
+> **Source of truth:** `interrupt/arch/isr_handlers.c`, `interrupt/arch/pic.c`, `interrupt/arch/idt.c`
+
 IR0 uses x86-64 IDT + PIC flow with a syscall gateway and exception-to-signal
 integration for process-facing error handling.
 
@@ -14,6 +17,7 @@ integration for process-facing error handling.
 
 - CPU exceptions are routed through ISR handling and mapped to process signals.
 - Hardware IRQs are acknowledged with EOI after handler dispatch.
+- **PIC IRQ map (partial):** 0 timer (PIT), 1 keyboard, 5 SB16 DMA (`CONFIG_ENABLE_SOUND`), 12 PS/2 mouse; networking stack may handle NIC IRQs via `net_stack_handle_irq()`.
 - Syscalls enter through the syscall path and dispatch table in kernel syscall code.
 
 ## Notable Characteristics

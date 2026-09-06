@@ -42,3 +42,21 @@ void mm_copy_kernel_half(uint64_t *dst_root, const uint64_t *src_root)
 			dst_root[i] = src_root[i];
 	}
 }
+
+int mm_user_va_ok(uintptr_t addr, size_t size)
+{
+	uintptr_t end;
+
+	/* ELF load floor … canonical low half (matches historical copy_user). */
+	const uintptr_t user_lo = 0x00400000UL;
+	const uintptr_t user_hi = 0x00007FFFFFFFFFFFUL;
+
+	if (addr == 0)
+		return 0;
+	end = addr + size;
+	if (end < addr)
+		return 0;
+	if (addr < user_lo || end > user_hi)
+		return 0;
+	return 1;
+}

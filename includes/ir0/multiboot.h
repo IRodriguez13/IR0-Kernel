@@ -69,3 +69,10 @@ struct multiboot_info
     uint8_t  framebuffer_type;
     uint8_t  color_info[6];
 } __attribute__((packed));
+
+/*
+ * Boot loader handoff (Multiboot info pointer). Set once from arch entry;
+ * portable code reads via get_boot_params() — not arch_cpu.h.
+ */
+void set_boot_params(void *params);
+void *get_boot_params(void);

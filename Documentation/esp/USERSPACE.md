@@ -1,7 +1,8 @@
 # Acoplamiento IR0 (kernel) ↔ ISD
 
-> **Última verificación:** 2026-07-29  
-> **Fuente de verdad:** este archivo, `scripts/make/isd.mk`, hermano [ISD](https://github.com/IRodriguez13/ISD), [SETUP.md](../../SETUP.md).  
+> **Última verificación:** 2026-09-02  
+> **Fuente de verdad:** este archivo, `scripts/make/isd.mk`, hermano [ISD](https://github.com/IRodriguez13/ISD), [SETUP.md](../../SETUP.md),
+> `ISD/services/runit_console_run.c`.  
 > **English:** [`../USERSPACE.md`](../USERSPACE.md)
 
 ## Por qué dos repositorios
@@ -45,5 +46,14 @@ MINIX (imprime progreso); no está colgado tras el ISO.
 | `make run PROFILE=…` | QEMU con disco ISD |
 | `make run-console PROFILE=…` | Sin GTK |
 | `bootstrap-userspace` | Deprecado → `first-boot` |
+
+### Login / getty (2026-09-02)
+
+El spam `LOGIN_USER_READ` post-firstboot era un busy-loop de getty (`EINTR`/`EOF`
++ tag en cada iteración). Fix en ISD: `ir0_read_line` reintenta `EINTR`; el tag
+solo si el username no está vacío. Detalle: [`../USERSPACE.md`](../USERSPACE.md).
+
+`chown root` con `0755` sigue permitiendo ejecutar a otros (Unix). `/tmp` tmpfs
+es intencional.
 
 Config: `IR0/.config` (kernel) ≠ `ISD/.isdconfig` (extras de distro).

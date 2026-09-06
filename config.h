@@ -223,8 +223,8 @@
 
 /* MEMORY LAYOUT — virtual addresses and segment selectors */
 #define USER_STACK_TOP      0x7FFFF000UL
-/* 512 KiB — nearly-full BusyBox (~2 MiB static) overflows smaller stacks. */
-#define USER_STACK_SIZE     0x80000
+/* 1 MiB — BusyBox tab completion / large ash frames need headroom below guard. */
+#define USER_STACK_SIZE     0x100000
 #define USER_STACK_BASE     (USER_STACK_TOP - USER_STACK_SIZE)
 #define USER_STACK_GUARD    (USER_STACK_BASE - 0x1000UL)
 /*

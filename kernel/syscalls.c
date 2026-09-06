@@ -36,6 +36,13 @@ int64_t syscalls_read_stdio_stdin(void *buf, size_t count)
 	ret = ir0_console_read(kbuf, max_read, 0);
 	if (ret <= 0)
 		return ret;
+	if ((size_t)ret > max_read)
+	{
+		klog_notice_fmt("TTY",
+			      "stdin read clamped: ret=%lld max=%zu\n",
+			      (long long)ret, max_read);
+		ret = (int64_t)max_read;
+	}
 	if (copy_to_user(buf, kbuf, (size_t)ret) != 0)
 		return -EFAULT;
 	return ret;

@@ -27,6 +27,13 @@ void smp_mb(void);
 void enable_interrupts(void);
 void disable_interrupts(void);
 
+/*
+ * Save IRQ state and disable IRQs; restore with irq_restore().
+ * Portable critical sections (spinlock, pipe refcount, …).
+ */
+unsigned long irq_save(void);
+void irq_restore(unsigned long flags);
+
 void cpu_halt(void);
 
 uint64_t timer_read(void);

@@ -47,6 +47,10 @@
 
 // Mixer registers
 #define SB16_MIXER_MASTER_VOL   0x22
+#define SB16_MIXER_IRQ_SEL      0x80
+#define SB16_MIXER_DMA_SEL      0x81
+#define SB16_MIXER_IRQ5_BIT     0x02
+#define SB16_MIXER_DMA1_8BIT_BIT 0x02
 #define SB16_MIXER_PCM_VOL      0x04
 #define SB16_MIXER_CD_VOL       0x28
 #define SB16_MIXER_LINE_VOL     0x2E
@@ -120,11 +124,13 @@ int sb16_create_sample(sb16_sample_t *sample, uint8_t *data, uint32_t size,
 void sb16_destroy_sample(sb16_sample_t *sample);
 
 // Playback control
+int sb16_play_pcm(const void *data, uint32_t size, uint32_t sample_rate);
 int sb16_play_sample(sb16_sample_t *sample);
 int sb16_stop_playback(void);
 int sb16_pause_playback(void);
 int sb16_resume_playback(void);
 bool sb16_is_playing(void);
+void sb16_post_irq_selftest(void);
 
 // Low-level DSP functions
 bool sb16_dsp_write(uint8_t data);

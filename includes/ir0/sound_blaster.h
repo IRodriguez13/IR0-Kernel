@@ -47,4 +47,9 @@ int sb16_create_sample(sb16_sample_t *sample, uint8_t *data, uint32_t size,
 		       uint32_t sample_rate, uint8_t channels,
 		       uint8_t bits_per_sample);
 void sb16_destroy_sample(sb16_sample_t *sample);
+int sb16_play_pcm(const void *data, uint32_t size, uint32_t sample_rate);
 int sb16_play_sample(sb16_sample_t *sample);
+int sb16_stop_playback(void);
+bool sb16_is_playing(void);
+void sb16_post_irq_selftest(void);
+void sb16_irq_handler(void);

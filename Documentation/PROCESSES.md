@@ -1,8 +1,10 @@
 # IR0 Process Model
 
-> **Last verified:** 2026-07-29
+> **Last verified:** 2026-09-02
 > **Source of truth:** `kernel/process/exit.c`, `kernel/process/wait.c`,
-> `kernel/syscalls/process_syscalls.c`, [`releases/PROCESS_LIFECYCLE_SPEC.md`](releases/PROCESS_LIFECYCLE_SPEC.md)
+> `kernel/process/saved_context.c`, `kernel/syscalls/process_syscalls.c`,
+> `kernel/lib/signals.c`, [`uaccess.md`](uaccess.md),
+> [`releases/PROCESS_LIFECYCLE_SPEC.md`](releases/PROCESS_LIFECYCLE_SPEC.md)
 
 IR0 process handling centers on practical lifecycle management plus incremental
 Unix credential semantics.
@@ -21,6 +23,22 @@ Unix credential semantics.
 - File descriptor table and working directory.
 - Credentials: `uid/gid/euid/egid` and `umask`.
 - Pending signal state and termination metadata.
+- **`saved_context`:** kernel copy of user CPU state for `rt_sigreturn(2)` after a handler runs. Access only via `process_saved_context_{peek,attach,clear,init}` in `kernel/process/saved_context.c` (`arch-guard` blocks direct `->saved_context` elsewhere).
+
+## Signal return context (`saved_context`)
+
+| API | Role |
+|-----|------|
+| `process_saved_context_attach(p, ctx)` | Replace any prior copy; owns `ctx` until clear |
+| `process_saved_context_peek(p)` | Read-only for `sys_sigreturn` restore |
+| `process_saved_context_clear(p)` | `kfree` + NULL (exec exit, sigreturn, TCP SIGALRM cleanup) |
+| `process_saved_context_init(p)` | NULL on fork/create/clone without allocation |
+
+`signal_enter_pending` (separate field) gates syscall exit into the handler frame; see `kernel/syscalls/syscall_dispatch.c` and `kernel/lib/signals.c`.
+
+Signal frame / `siginfo` setup **must** use `copy_to_user_region_in_directory`
+(never CR3 + `memcpy` to the user stack). Contract and fault tags:
+[`uaccess.md`](uaccess.md).
 
 ## Exit, reparent, wait
 

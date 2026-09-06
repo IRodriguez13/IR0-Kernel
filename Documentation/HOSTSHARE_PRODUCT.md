@@ -1,9 +1,10 @@
 # Host-share product flow — drop binary → guest exec
 
-> **Last verified:** 2026-07-18  
+> **Last verified:** 2026-09-02  
 > **Source of truth:** `make smoke-hostshare-exec`, `scripts/ktm_userdev_runner.py`,  
+> [`virtio.md`](virtio.md),  
 > [`TREE_CONTRACT.md`](../../IR0-desktop/Documentation/TREE_CONTRACT.md)  
-> **Canonical hypervisor:** QEMU virtio-9p (`-virtfs`). VirtualBox is **not** supported yet.
+> **Canonical hypervisor:** QEMU virtio-9p (`-virtfs` / `-fsdev`+`virtio-9p-pci`). VirtualBox is **not** supported yet.
 
 ## What this is
 
@@ -17,7 +18,10 @@ Kernel role: 9p + exec ABI only. No desktop code in the kernel.
 cd /path/to/IR0
 make -s smoke-hostshare-9p      # mount + write visible on host
 make -s smoke-hostshare-exec    # runit PID1 + payload exec (fork_wait case)
+make -s smoke-session-chaos     # getty login + /dev chaos + 9p R/W
 ```
+
+Full QEMU flag reference and virtio-net: [`virtio.md`](virtio.md).
 
 Under the hood:
 

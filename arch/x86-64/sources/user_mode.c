@@ -126,6 +126,9 @@ void switch_to_user_task(const task_t *task)
     if (!task)
         panic("switch_to_user_task: null task");
 
+    if (current_process && &current_process->task == task)
+        arch_prepare_task_user_iretq(current_process);
+
     arch_audit_iret_frame(task);
     switch_to_user_task_asm(task);
     panic("Returned from switch_to_user_task unexpectedly");

@@ -78,6 +78,13 @@ void klog_print(const char *str);
 void klog_hex32(uint32_t num);
 void klog_hex64(uint64_t num);
 
+/*
+ * Install an optional screen sink so the (serial-only) raw dump also renders on
+ * the active console. Panic path only; pass NULL to detach. Kept as a callback
+ * to avoid ktm→vga coupling.
+ */
+void klog_set_screen_sink(void (*sink)(const char *));
+
 void klog_emit(klog_level_t level, const char *component, const char *message);
 void klog_trace(const char *component, const char *message);
 void klog_debug(const char *component, const char *message);

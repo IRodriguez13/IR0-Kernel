@@ -9,12 +9,13 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/cmdline.h>
-#include <ir0/arch_cpu.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/multiboot.h>
 #include <config.h>
 #include <stddef.h>
 #include <stdint.h>
+
+static int g_ash_smoke_cmdline;
 
 static int cmdline_token_eq(const char *s, const char *key)
 {
@@ -91,6 +92,11 @@ static void apply_kconfig_default(void)
 #endif
 }
 
+int ir0_cmdline_ash_smoke_enabled(void)
+{
+	return g_ash_smoke_cmdline;
+}
+
 void ir0_cmdline_apply_log_profile(void)
 {
 	const struct multiboot_info *mb;
@@ -116,6 +122,10 @@ void ir0_cmdline_apply_log_profile(void)
 		if (val)
 		{
 			apply_loglevel_token(val);
+		}
+		else if (cmdline_token_eq(p, "ir0.ash_smoke=1"))
+		{
+			g_ash_smoke_cmdline = 1;
 		}
 		else
 		{

@@ -58,7 +58,7 @@ static void write_hex_u32(unsigned int v)
 
 static void fase50b_emit_classify(const char *tag)
 {
-	write_str("[FASE50B] CLASSIFY ");
+	write_str("[KTM_BUSYBOX_B] CLASSIFY ");
 	write_str(tag ? tag : "(null)");
 	write_str("\n");
 }
@@ -89,7 +89,7 @@ static int fase50b_probe_before_create(const char *path, int create_flags)
 	char cwd[256];
 	int pre_exists = 0;
 
-	write_str("[FASE50B][PROBE] path=");
+	write_str("[KTM_BUSYBOX_B][PROBE] path=");
 	write_str(path ? path : "(null)");
 	write_str(" linux_flags=0x");
 	write_hex_u32((unsigned int)create_flags);
@@ -98,7 +98,7 @@ static int fase50b_probe_before_create(const char *path, int create_flags)
 	if (stat(path, &st) == 0)
 	{
 		pre_exists = 1;
-		write_str("[FASE50B][PROBE] stat_exists=1 mode=0x");
+		write_str("[KTM_BUSYBOX_B][PROBE] stat_exists=1 mode=0x");
 		write_hex_u32((unsigned int)st.st_mode);
 		write_str(" size=");
 		write_dec_u64((unsigned long long)st.st_size);
@@ -106,20 +106,20 @@ static int fase50b_probe_before_create(const char *path, int create_flags)
 	}
 	else
 	{
-		write_str("[FASE50B][PROBE] stat_exists=0 errno=");
+		write_str("[KTM_BUSYBOX_B][PROBE] stat_exists=0 errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
 	}
 
 	if (getcwd(cwd, sizeof(cwd)))
 	{
-		write_str("[FASE50B][PROBE] cwd=");
+		write_str("[KTM_BUSYBOX_B][PROBE] cwd=");
 		write_str(cwd);
 		write_str("\n");
 	}
 	else
 	{
-		write_str("[FASE50B][PROBE] getcwd_fail errno=");
+		write_str("[KTM_BUSYBOX_B][PROBE] getcwd_fail errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
 		fase50b_emit_classify("FILE_CREATE_FLAKE_HARNESS_SETUP");
@@ -127,31 +127,31 @@ static int fase50b_probe_before_create(const char *path, int create_flags)
 
 	if (stat("/", &st) == 0)
 	{
-		write_str("[FASE50B][PROBE] root_st_mode=0x");
+		write_str("[KTM_BUSYBOX_B][PROBE] root_st_mode=0x");
 		write_hex_u32((unsigned int)st.st_mode);
 		write_str("\n");
 	}
 	else
 	{
-		write_str("[FASE50B][PROBE] root_stat_fail errno=");
+		write_str("[KTM_BUSYBOX_B][PROBE] root_stat_fail errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
 	}
 
 	if (unlink(path) == 0)
 	{
-		write_str("[FASE50B][PROBE] pre_unlink=ok (removed stale entry)\n");
+		write_str("[KTM_BUSYBOX_B][PROBE] pre_unlink=ok (removed stale entry)\n");
 		if (pre_exists)
 			fase50b_emit_classify("FILE_CREATE_FLAKE_STALE_DISK");
 		pre_exists = 0;
 	}
 	else if (errno == ENOENT)
 	{
-		write_str("[FASE50B][PROBE] pre_unlink=skip errno=ENOENT\n");
+		write_str("[KTM_BUSYBOX_B][PROBE] pre_unlink=skip errno=ENOENT\n");
 	}
 	else
 	{
-		write_str("[FASE50B][PROBE] pre_unlink_fail errno=");
+		write_str("[KTM_BUSYBOX_B][PROBE] pre_unlink_fail errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
 	}
@@ -208,9 +208,9 @@ static int read_all(int fd, char *buf, size_t size)
 	return (int)used;
 }
 
-static void fase50d_emit_classify(const char *tag)
+static void ktm_busybox_d_emit_classify(const char *tag)
 {
-	write_str("[FASE50D] CLASSIFY ");
+	write_str("[KTM_BUSYBOX_D] CLASSIFY ");
 	write_str(tag ? tag : "(null)");
 	write_str("\n");
 }
@@ -233,7 +233,7 @@ static void emit_fd_summary(const char *tag, const char *when)
 	int fd;
 	int n = 0;
 
-	write_str("[FASE50D][FD] tag=");
+	write_str("[KTM_BUSYBOX_D][FD] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" when=");
 	write_str(when ? when : "(null)");
@@ -259,7 +259,7 @@ static void emit_cwd(const char *tag)
 
 	if (getcwd(cwd, sizeof(cwd)))
 	{
-		write_str("[FASE50D][CWD] tag=");
+		write_str("[KTM_BUSYBOX_D][CWD] tag=");
 		write_str(tag ? tag : "(null)");
 		write_str(" cwd=");
 		write_str(cwd);
@@ -267,7 +267,7 @@ static void emit_cwd(const char *tag)
 	}
 	else
 	{
-		write_str("[FASE50D][CWD] tag=");
+		write_str("[KTM_BUSYBOX_D][CWD] tag=");
 		write_str(tag ? tag : "(null)");
 		write_str(" getcwd_fail errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
@@ -279,7 +279,7 @@ static void emit_argv(const char *tag, char *const argv[])
 {
 	int i;
 
-	write_str("[FASE50D][STEP] tag=");
+	write_str("[KTM_BUSYBOX_D][STEP] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" argv=");
 	for (i = 0; argv && argv[i]; i++)
@@ -307,7 +307,7 @@ static int reap_pending_children(const char *tag)
 		if (p <= 0)
 			break;
 		n++;
-		write_str("[FASE50D][ZOMBIE] tag=");
+		write_str("[KTM_BUSYBOX_D][ZOMBIE] tag=");
 		write_str(tag ? tag : "(null)");
 		write_str(" unexpected_reap pid=");
 		write_dec_u64((unsigned long long)p);
@@ -320,7 +320,7 @@ static int reap_pending_children(const char *tag)
 
 static void emit_wait_diag(pid_t child_pid, pid_t wait_ret, int status)
 {
-	write_str("[FASE50D][WAIT] child_pid=");
+	write_str("[KTM_BUSYBOX_D][WAIT] child_pid=");
 	write_dec_u64((unsigned long long)child_pid);
 	write_str(" parent_pid=");
 	write_dec_u64((unsigned long long)getpid());
@@ -346,23 +346,23 @@ static void fase50d_classify_capture_fail(const char *step, const char *reason,
 					  int fd_before, int fd_after)
 {
 	if (zomb_before > 0)
-		fase50d_emit_classify("FASE50D_FLAKE_ZOMBIE_LEAK");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_ZOMBIE_LEAK");
 	if (fd_after > fd_before)
-		fase50d_emit_classify("FASE50D_FLAKE_FD_LEAK");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_FD_LEAK");
 	if (got_ec == 127 && out_n == 0 && err_n == 0)
 	{
-		fase50d_emit_classify("FASE50D_FLAKE_EXIT_CODE_MISMATCH");
-		write_str("[FASE50D][HINT] exec_fail_127 grep serial EXEC_VFS_READ_ERR\n");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_EXIT_CODE_MISMATCH");
+		write_str("[KTM_BUSYBOX_D][HINT] exec_fail_127 grep serial EXEC_VFS_READ_ERR\n");
 	}
 	else if (got_ec == 129)
-		fase50d_emit_classify("FASE50D_FLAKE_WAIT_STATUS_BAD");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_WAIT_STATUS_BAD");
 	if (reason && strcmp(reason, "stdout") == 0 && got_ec == 0 && out_n == 0)
-		fase50d_emit_classify("FASE50D_FLAKE_STDOUT_CAPTURE_BAD");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STDOUT_CAPTURE_BAD");
 	else if (reason && strcmp(reason, "exit") == 0 && got_ec != want_ec)
-		fase50d_emit_classify("FASE50D_FLAKE_EXIT_CODE_MISMATCH");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_EXIT_CODE_MISMATCH");
 	if (step)
 	{
-		write_str("[FASE50D] CLASSIFY_CTX step=");
+		write_str("[KTM_BUSYBOX_D] CLASSIFY_CTX step=");
 		write_str(step);
 		write_str(" reason=");
 		write_str(reason ? reason : "(null)");
@@ -404,19 +404,19 @@ static void fase50d_verify_rootfs_bins(void)
 	const char *paths[] = { "/bin/busybox", "/bin/sh", "/bin/cat", NULL };
 	int i;
 
-	write_str("[FASE50D][ROOTFS] fresh_disk=1 verify_elf_regular\n");
+	write_str("[KTM_BUSYBOX_D][ROOTFS] fresh_disk=1 verify_elf_regular\n");
 	for (i = 0; paths[i]; i++)
 	{
 		struct stat st;
 
-		write_str("[FASE50D][ROOTFS] path=");
+		write_str("[KTM_BUSYBOX_D][ROOTFS] path=");
 		write_str(paths[i]);
 		if (stat(paths[i], &st) != 0)
 		{
 			write_str(" stat_fail errno=");
 			write_dec_u64((unsigned long long)(unsigned int)errno);
 			write_str("\n");
-			fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+			ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 			continue;
 		}
 		write_str(" mode=0x");
@@ -428,13 +428,13 @@ static void fase50d_verify_rootfs_bins(void)
 		if (st.st_size == 0)
 		{
 			write_str(" zero_size\n");
-			fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+			ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 			continue;
 		}
 		if (fase50d_verify_elf_regular(paths[i]) != 0)
 		{
 			write_str(" elf_fail\n");
-			fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+			ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 			continue;
 		}
 		write_str(" elf_ok\n");
@@ -456,12 +456,12 @@ static void fase50d_check_stale_temps(const char *tag)
 
 		if (stat(paths[i], &st) == 0)
 		{
-			write_str("[FASE50D][STALE] tag=");
+			write_str("[KTM_BUSYBOX_D][STALE] tag=");
 			write_str(tag ? tag : "(null)");
 			write_str(" path=");
 			write_str(paths[i]);
 			write_str(" exists=1\n");
-			fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+			ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 		}
 	}
 }
@@ -469,7 +469,7 @@ static void fase50d_check_stale_temps(const char *tag)
 static void emit_capture_diag(const char *tag, const char *out, int out_n,
 			      const char *err, int err_n, int exit_code)
 {
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" out_n=");
 	write_dec_u64((unsigned long long)((out_n < 0) ? 0 : out_n));
@@ -479,7 +479,7 @@ static void emit_capture_diag(const char *tag, const char *out, int out_n,
 	write_dec_u64((unsigned long long)exit_code);
 	write_str("\n");
 
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" first_out=");
 	if (out_n > 0)
@@ -503,23 +503,23 @@ static void emit_capture_diag(const char *tag, const char *out, int out_n,
 		write_str("--");
 	write_str("\n");
 
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" out_hex=");
 	write_hex_buf(out, out_n);
 	write_str("\n");
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" err_hex=");
 	write_hex_buf(err, err_n);
 	write_str("\n");
 
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" out_str=");
 	write_str(out ? out : "");
 	write_str("\n");
-	write_str("[FASE50B][CAPTURE] tag=");
+	write_str("[KTM_BUSYBOX_B][CAPTURE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" err_str=");
 	write_str(err ? err : "");
@@ -546,7 +546,7 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 	zomb_before = reap_pending_children(tag);
 	if (zomb_before > 0)
 	{
-		write_str("[FASE50D][ZOMBIE] tag=");
+		write_str("[KTM_BUSYBOX_D][ZOMBIE] tag=");
 		write_str(tag ? tag : "(null)");
 		write_str(" before_step count=");
 		write_dec_u64((unsigned long long)zomb_before);
@@ -560,7 +560,7 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 	if (pipe2(outp, 0) < 0 || pipe2(errp, 0) < 0)
 		return -1;
 
-	write_str("[FASE50D][PIPE] tag=");
+	write_str("[KTM_BUSYBOX_D][PIPE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" out_rd=");
 	write_dec_u64((unsigned long long)outp[0]);
@@ -593,7 +593,7 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 		_exit(127);
 	}
 
-	write_str("[FASE50D][FORK] tag=");
+	write_str("[KTM_BUSYBOX_D][FORK] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" child_pid=");
 	write_dec_u64((unsigned long long)pid);
@@ -607,13 +607,13 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 	close(outp[0]);
 	close(errp[0]);
 
-	write_str("[FASE50D][PIPE] tag=");
+	write_str("[KTM_BUSYBOX_D][PIPE] tag=");
 	write_str(tag ? tag : "(null)");
 	write_str(" closed_read_ends=2 write_ends=2\n");
 
 	if (*out_n < 0 || *err_n < 0)
 	{
-		fase50d_emit_classify("FASE50D_FLAKE_STDOUT_CAPTURE_BAD");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STDOUT_CAPTURE_BAD");
 		return -1;
 	}
 
@@ -631,7 +631,7 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 	fd_after = count_open_fds();
 	emit_fd_summary(tag, "after");
 	if (fd_after > fd_before)
-		fase50d_emit_classify("FASE50D_FLAKE_PIPE_REF_LEAK");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_PIPE_REF_LEAK");
 
 	emit_capture_diag(tag, out, *out_n, err, *err_n, *exit_code);
 	return 0;
@@ -639,7 +639,7 @@ static int run_capture(const char *tag, char *const argv[], char *out,
 
 static void fase50d_fail(const char *step, const char *reason)
 {
-	write_str("[FASE50D][FAIL] step=");
+	write_str("[KTM_BUSYBOX_D][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
@@ -748,8 +748,8 @@ int main(void)
 	int create_flags = O_CREAT | O_TRUNC | O_WRONLY;
 	int pre_exists;
 
-	write_str("FASE50_BUSYBOX_HARNESS_ID=init_fase50_busybox.c\n");
-	write_str("FASE50B_START\n");
+	write_str("KTM_BUSYBOX_HARNESS_ID=ktm_busybox_smoke.c\n");
+	write_str("KTM_BUSYBOX_B_START\n");
 
 	if (run_capture("echo", argv_echo, out, sizeof(out), err, sizeof(err),
 			&ec, &out_n, &err_n) != 0)
@@ -762,7 +762,7 @@ int main(void)
 		write_str("BUSYBOX_FAIL_REASON=echo_exit\n");
 		goto halt;
 	}
-	write_str("[FASE50B][EXPECT] expected=hello\\n|hello received_hex=");
+	write_str("[KTM_BUSYBOX_B][EXPECT] expected=hello\\n|hello received_hex=");
 	write_hex_buf(out, out_n);
 	write_str(" length=");
 	write_dec_u64((unsigned long long)((out_n < 0) ? 0 : out_n));
@@ -775,7 +775,7 @@ int main(void)
 			write_str("BUSYBOX_FAIL_REASON=echo_stdout\n");
 		goto halt;
 	}
-	write_str("[FASE50B] CLASSIFY BUSYBOX_ECHO_CAPTURE_OK\n");
+	write_str("[KTM_BUSYBOX_B] CLASSIFY BUSYBOX_ECHO_CAPTURE_OK\n");
 
 	if (run_capture("ls", argv_ls, out, sizeof(out), err, sizeof(err), &ec,
 			&out_n, &err_n) != 0)
@@ -803,7 +803,7 @@ int main(void)
 		fase50b_classify_open_fail(open_errno, pre_exists);
 		goto halt;
 	}
-	write_str("[FASE50C] CLASSIFY FILE_CREATE_STILL_OK\n");
+	write_str("[KTM_BUSYBOX_C] CLASSIFY FILE_CREATE_STILL_OK\n");
 	(void)write(fd, "archivo-fase50\n", 14);
 	close(fd);
 
@@ -826,7 +826,7 @@ int main(void)
 
 	write_str("BUSYBOX_BOOT_OK\n");
 
-	write_str("FASE50D_START\n");
+	write_str("KTM_BUSYBOX_D_START\n");
 	fase50d_verify_rootfs_bins();
 	fase50d_check_stale_temps("tanda1_pre");
 
@@ -857,9 +857,9 @@ int main(void)
 	if (bb_expect_stdout_prefix("cat_b", argv_cat_b, "copyme") != 0)
 		goto halt;
 
-	write_str("FASE50_BUSYBOX_COREUTILS_MINIMAL_OK\n");
+	write_str("KTM_BUSYBOX_COREUTILS_MINIMAL_OK\n");
 
-	write_str("FASE50D_TANDA2_START\n");
+	write_str("KTM_BUSYBOX_D_TANDA2_START\n");
 
 	if (bb_expect_exit0("true", argv_true) != 0)
 		goto halt;
@@ -888,18 +888,18 @@ int main(void)
 	if (bb_expect_stdout_prefix("cat_mv", argv_cat_mv, "moved") != 0)
 		goto halt;
 
-	write_str("FASE50D_TANDA2_OK\n");
-	write_str("[FASE50D] CLASSIFY VFS_BACKEND_NEUTRAL\n");
+	write_str("KTM_BUSYBOX_D_TANDA2_OK\n");
+	write_str("[KTM_BUSYBOX_D] CLASSIFY VFS_BACKEND_NEUTRAL\n");
 
-	write_str("FASE50D_TANDA3_START\n");
+	write_str("KTM_BUSYBOX_D_TANDA3_START\n");
 
 	fd = open("/f50_grep.txt", O_CREAT | O_TRUNC | O_WRONLY, 0644);
 	if (fd < 0)
 	{
-		write_str("[FASE50D][OPEN] step=grep_setup errno=");
+		write_str("[KTM_BUSYBOX_D][OPEN] step=grep_setup errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
-		fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 		fase50d_fail("grep_setup", "open");
 		goto halt;
 	}
@@ -912,10 +912,10 @@ int main(void)
 	fd = open("/f50_lines.txt", O_CREAT | O_TRUNC | O_WRONLY, 0644);
 	if (fd < 0)
 	{
-		write_str("[FASE50D][OPEN] step=head_tail_setup errno=");
+		write_str("[KTM_BUSYBOX_D][OPEN] step=head_tail_setup errno=");
 		write_dec_u64((unsigned long long)(unsigned int)errno);
 		write_str("\n");
-		fase50d_emit_classify("FASE50D_FLAKE_STALE_ROOTFS");
+		ktm_busybox_d_emit_classify("KTM_BUSYBOX_D_FLAKE_STALE_ROOTFS");
 		fase50d_fail("head_tail_setup", "open");
 		goto halt;
 	}
@@ -928,21 +928,21 @@ int main(void)
 	if (bb_expect_stdout_prefix("tail", argv_tail, "line3") != 0)
 		goto halt;
 
-	write_str("FASE50D_TANDA3_OK\n");
-	write_str("[FASE50D] CLASSIFY SYSCALL_MONOLITH_NOT_GROWN\n");
+	write_str("KTM_BUSYBOX_D_TANDA3_OK\n");
+	write_str("[KTM_BUSYBOX_D] CLASSIFY SYSCALL_MONOLITH_NOT_GROWN\n");
 
-	write_str("FASE50E_START\n");
+	write_str("KTM_BUSYBOX_E_START\n");
 
 	if (bb_expect_stdout_prefix("sh_echo", argv_sh, "hi") != 0)
 		goto halt;
 
-	write_str("FASE50E_OK\n");
-	write_str("[FASE50E] CLASSIFY FASE50E_BASELINE_STABLE\n");
-	write_str("[FASE50E] CLASSIFY OPENAT_RESOLVE_FACADE_OK\n");
-	write_str("[FASE50E] CLASSIFY SYSCALL_FS_SPLIT_CONTINUES\n");
-	write_str("[FASE50E] CLASSIFY DEBUG_LOGS_GATED\n");
-	write_str("[FASE50E] CLASSIFY FASE50E_NO_REGRESSION\n");
-	write_str("[FASE50E] CLASSIFY FASE50E_NO_REGRESSION_VERIFIED\n");
+	write_str("KTM_BUSYBOX_E_OK\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY KTM_BUSYBOX_BASELINE_STABLE\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY OPENAT_RESOLVE_FACADE_OK\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY SYSCALL_FS_SPLIT_CONTINUES\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY DEBUG_LOGS_GATED\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY KTM_BUSYBOX_NO_REGRESSION\n");
+	write_str("[KTM_BUSYBOX_E] CLASSIFY KTM_BUSYBOX_NO_REGRESSION_VERIFIED\n");
 
 halt:
 	for (;;)

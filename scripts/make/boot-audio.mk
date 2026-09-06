@@ -42,17 +42,23 @@ smoke-sb16-probe: kernel-x64-userspace.iso
 	cp -f disk.img $$DISK; \
 	rm -f $(SB16_PROBE_LOG); \
 	$(SMOKE_QEMU_RUN) --log $(SB16_PROBE_LOG) --timeout 90 --stale-sec 60 \
-		--done SB16_DSP_OK -- \
+		--done SB16_SELFTEST_FIRED -- \
 		$(QEMU) -cdrom kernel-x64-userspace.iso \
 		-drive file=$$DISK,format=raw,if=ide,index=0 \
 		$(QEMU_AUDIO_SB16_SILENT) -device adlib,audiodev=snd0 \
 		-serial stdio -display none -m 128M -no-reboot -net none; \
 	rm -f $$DISK; \
 	if grep -q "SB16_DSP_OK" $(SB16_PROBE_LOG) && \
+	    grep -q "SB16_SELFTEST_FIRED" $(SB16_PROBE_LOG) && \
 	    grep -q "DSP Version" $(SB16_PROBE_LOG) && \
 	    ! grep -q "DSP not detected" $(SB16_PROBE_LOG); then \
 		echo "✓ smoke-sb16-probe passed"; \
-		grep -E '\[BOOT\]|\[SB16\]|SB16_DSP|Adlib|Driver .Sound' $(SB16_PROBE_LOG) | head -40; \
+		grep -E '\[BOOT\]|\[SB16\]|SB16_DSP|SB16_IRQ|Adlib|Driver .Sound' $(SB16_PROBE_LOG) | head -40; \
+		if grep -q "SB16_IRQ_OK" $(SB16_PROBE_LOG); then \
+			echo "  note: SB16 IRQ5 ack path OK"; \
+		else \
+			echo "  note: SB16_IRQ_OK absent (check IRQ5 in interactive Doom)"; \
+		fi; \
 		if grep -q "Adlib OPL2' initialized successfully" $(SB16_PROBE_LOG) || \
 		   grep -q "Adlib.*initialized successfully" $(SB16_PROBE_LOG); then \
 			echo "  note: Adlib present"; \

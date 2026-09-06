@@ -12,8 +12,8 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#define EXEC_ONLY_N 50
-#define EXEC_ONLY_PROBE_BYTES 4096
+#define KTM_EXEC_ONLY_N 50
+#define KTM_EXEC_ONLY_PROBE_BYTES 4096
 
 static void write_str(const char *s)
 {
@@ -86,7 +86,7 @@ static int verify_busybox_invariants(int iter, ino_t *ref_ino, off_t *ref_size,
 {
 	struct stat st;
 	unsigned char magic[4];
-	unsigned char probe[EXEC_ONLY_PROBE_BYTES];
+	unsigned char probe[KTM_EXEC_ONLY_PROBE_BYTES];
 	ssize_t nr;
 	int fd;
 	uint32_t hash;
@@ -270,8 +270,8 @@ int main(void)
 	int persistent_leak_iter = -1;
 	int i;
 
-	write_str("EXEC_ONLY_HARNESS_ID=init_fase50_exec_only.c\n");
-	write_str("EXEC_ONLY_START\n");
+	write_str("KTM_KTM_EXEC_ONLY_HARNESS_ID=ktm_exec_only_smoke.c\n");
+	write_str("KTM_EXEC_ONLY_START\n");
 
 	if (read_meminfo_frames(NULL, &baseline_used) == 0)
 	{
@@ -280,7 +280,7 @@ int main(void)
 		write_str("\n");
 	}
 
-	for (i = 0; i < EXEC_ONLY_N; i++)
+	for (i = 0; i < KTM_EXEC_ONLY_N; i++)
 	{
 		pid_t pid;
 		int status;
@@ -293,7 +293,7 @@ int main(void)
 		if (verify_busybox_invariants(i, &ref_ino, &ref_size, &ref_mode,
 					      &ref_hash) != 0)
 		{
-			write_str("EXEC_ONLY_FAIL iter=");
+			write_str("KTM_EXEC_ONLY_FAIL iter=");
 			write_dec_u64((unsigned long long)i);
 			write_str(" reason=invariant\n");
 			goto halt;
@@ -302,7 +302,7 @@ int main(void)
 		pid = fork();
 		if (pid < 0)
 		{
-			write_str("EXEC_ONLY_FAIL iter=");
+			write_str("KTM_EXEC_ONLY_FAIL iter=");
 			write_dec_u64((unsigned long long)i);
 			write_str(" reason=fork errno=");
 			write_dec_u64((unsigned long long)(unsigned int)errno);
@@ -317,7 +317,7 @@ int main(void)
 
 		if (waitpid(pid, &status, 0) < 0)
 		{
-			write_str("EXEC_ONLY_FAIL iter=");
+			write_str("KTM_EXEC_ONLY_FAIL iter=");
 			write_dec_u64((unsigned long long)i);
 			write_str(" reason=wait errno=");
 			write_dec_u64((unsigned long long)(unsigned int)errno);
@@ -341,24 +341,24 @@ int main(void)
 
 		if (ec != 0)
 		{
-			write_str("EXEC_ONLY_FAIL iter=");
+			write_str("KTM_EXEC_ONLY_FAIL iter=");
 			write_dec_u64((unsigned long long)i);
 			write_str(" reason=exec status_raw=0x");
 			write_hex_u32((unsigned int)status);
 			write_str(" ec=");
 			write_dec_u64((unsigned long long)ec);
 			write_str("\n");
-			write_str("[EXEC_ONLY] CLASSIFY EXEC_ONLY_REPRO_OK\n");
+			write_str("[EXEC_ONLY] CLASSIFY KTM_EXEC_ONLY_REPRO_OK\n");
 			goto halt;
 		}
 
-		write_str("EXEC_ONLY_ITER_OK ");
+		write_str("KTM_EXEC_ONLY_ITER_OK ");
 		write_dec_u64((unsigned long long)i);
 		write_str("\n");
 	}
 
-	write_str("EXEC_ONLY_STABLE_OK\n");
-	write_str("[EXEC_ONLY] CLASSIFY EXEC_ONLY_N50_STABLE_OK\n");
+	write_str("KTM_EXEC_ONLY_STABLE_OK\n");
+	write_str("[EXEC_ONLY] CLASSIFY KTM_EXEC_ONLY_N50_STABLE_OK\n");
 	if (persistent_leak_iter >= 0)
 	{
 		write_str("[EXEC_ONLY] CLASSIFY PMM_LEAK_PERSISTENT iter=");

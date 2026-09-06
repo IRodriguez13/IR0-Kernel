@@ -81,12 +81,12 @@ static void write_str(const char *s)
 
 static void fase54a_fail(const char *step, const char *reason)
 {
-	write_str("[FASE54A][FAIL] step=");
+	write_str("[KTM_FBDEV][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
 	write_str("\n");
-	write_str("FASE54A_FAIL_REASON=");
+	write_str("KTM_FBDEV_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
@@ -112,13 +112,13 @@ static int check_fbdev_slice(void)
 	{
 		if (errno == ENODEV)
 		{
-			write_str("FASE54A_FB_UNAVAILABLE\n");
+			write_str("KTM_FBDEV_FB_UNAVAILABLE\n");
 			return 0;
 		}
 		fase54a_fail("open_fb0", "open");
 		return -1;
 	}
-	write_str("FASE54A_FBDEV_PRESENT\n");
+	write_str("KTM_FBDEV_FBDEV_PRESENT\n");
 
 	memset(&var, 0, sizeof(var));
 	if (ioctl(fd, FBIOGET_VSCREENINFO, &var) != 0)
@@ -150,7 +150,7 @@ static int check_fbdev_slice(void)
 		return -1;
 	}
 	write_str("FB_FACADE_OK\n");
-	write_str("FASE54A_FB_GETINFO_OK\n");
+	write_str("KTM_FBDEV_FB_GETINFO_OK\n");
 
 	map_len = (size_t)fix.smem_len;
 	if (map_len > 4096u)
@@ -187,19 +187,19 @@ static int check_fbdev_slice(void)
 	(void)munmap(map, map_len);
 	close(fd);
 
-	write_str("FASE54A_FB_DRAW_OK\n");
+	write_str("KTM_FBDEV_FB_DRAW_OK\n");
 	return 0;
 }
 
 int main(void)
 {
-	write_str("FASE54A_START\n");
-	write_str("FASE54A_FBDEV_HARNESS_ID=init_fase54a_fbdev.c\n");
+	write_str("KTM_FBDEV_START\n");
+	write_str("KTM_FBDEV_HARNESS_ID=ktm_fbdev_smoke.c\n");
 
 	if (check_fbdev_slice() != 0)
 		goto halt;
 
-	write_str("FASE54A_OK\n");
+	write_str("KTM_FBDEV_OK\n");
 
 halt:
 	for (;;)

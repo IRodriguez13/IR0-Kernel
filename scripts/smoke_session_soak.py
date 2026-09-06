@@ -34,7 +34,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PROMPT_RE = re.compile(r"[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+:\S*[#$]")
 NEED_BOOT = ["RUNIT_STAGE1_OK", "GETTY_READY"]
 
-FATAL = ("KERNEL PANIC", "KTM_USER_CANARY_BROKEN", "STACK_TOP_OVERRUN")
+FATAL = (
+    "KERNEL PANIC",
+    "KTM_USER_CANARY_BROKEN",
+    "STACK_TOP_OVERRUN",
+    "KERNEL_UACCESS_FAULT",
+)
 
 # Rotated per round. Mixes pipelines, heavy readdir and set-id exec, which is
 # what the reported session was doing when it came apart.

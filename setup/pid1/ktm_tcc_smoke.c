@@ -23,7 +23,7 @@
 #define F52D_WRITE_CHUNK 32768U
 
 static void write_str(const char *s);
-static void fase52_fail(const char *step, int err);
+static void ktm_tcc_fail(const char *step, int err);
 
 static uint32_t fnv1a_update(uint32_t h, const unsigned char *p, size_t n)
 {
@@ -94,7 +94,7 @@ static int write_large_pattern(const char *path, size_t size)
 	return 0;
 }
 
-static int fase52d_large_file_harness(void)
+static int ktm_tcc_d_large_file_harness(void)
 {
 	uint32_t hash_full;
 	uint32_t hash_after_patch;
@@ -102,32 +102,32 @@ static int fase52d_large_file_harness(void)
 	size_t i;
 	int fd;
 
-	write_str("FASE52D_START\n");
-	write_str("FASE52D_CASE_LARGE_RW\n");
+	write_str("KTM_TCC_D_START\n");
+	write_str("KTM_TCC_D_CASE_LARGE_RW\n");
 
 	if (write_large_pattern(F52D_LARGE_PATH, F52D_LARGE_SZ) != 0)
 	{
-		fase52_fail("large_write", errno);
+		ktm_tcc_fail("large_write", errno);
 		return -1;
 	}
 
 	hash_full = fnv1a_file_limit(F52D_LARGE_PATH, 0);
 	if (hash_full == 2166136261u)
 	{
-		fase52_fail("large_hash", 0);
+		ktm_tcc_fail("large_hash", 0);
 		return -1;
 	}
 
 	fd = open(F52D_LARGE_PATH, O_RDONLY);
 	if (fd < 0)
 	{
-		fase52_fail("large_open_read", errno);
+		ktm_tcc_fail("large_open_read", errno);
 		return -1;
 	}
 	if (lseek(fd, (off_t)F52D_RW_OFF, SEEK_SET) != (off_t)F52D_RW_OFF)
 	{
 		close(fd);
-		fase52_fail("large_lseek", errno);
+		ktm_tcc_fail("large_lseek", errno);
 		return -1;
 	}
 	{
@@ -137,7 +137,7 @@ static int fase52d_large_file_harness(void)
 		    probe[0] != (unsigned char)(F52D_RW_OFF & 0xff))
 		{
 			close(fd);
-			fase52_fail("large_stream_read", EIO);
+			ktm_tcc_fail("large_stream_read", EIO);
 			return -1;
 		}
 	}
@@ -148,14 +148,14 @@ static int fase52d_large_file_harness(void)
 	fd = open(F52D_LARGE_PATH, O_WRONLY);
 	if (fd < 0)
 	{
-		fase52_fail("large_open_write", errno);
+		ktm_tcc_fail("large_open_write", errno);
 		return -1;
 	}
 	if (lseek(fd, (off_t)F52D_RW_OFF, SEEK_SET) != (off_t)F52D_RW_OFF ||
 	    write(fd, patch, F52D_CHUNK) != (ssize_t)F52D_CHUNK)
 	{
 		close(fd);
-		fase52_fail("large_patch_write", errno);
+		ktm_tcc_fail("large_patch_write", errno);
 		return -1;
 	}
 	close(fd);
@@ -163,12 +163,12 @@ static int fase52d_large_file_harness(void)
 	hash_after_patch = fnv1a_file_limit(F52D_LARGE_PATH, 0);
 	if (hash_after_patch == hash_full)
 	{
-		fase52_fail("large_patch_hash", 0);
+		ktm_tcc_fail("large_patch_hash", 0);
 		return -1;
 	}
 
-	write_str("[FASE52] CLASSIFY MINIX_DOUBLE_INDIRECT_OK\n");
-	write_str("[FASE52] CLASSIFY LARGE_FILE_RW_OK\n");
+	write_str("[KTM_TCC] CLASSIFY MINIX_DOUBLE_INDIRECT_OK\n");
+	write_str("[KTM_TCC] CLASSIFY LARGE_FILE_RW_OK\n");
 	return 0;
 }
 
@@ -200,31 +200,31 @@ static void write_dec_u64(unsigned long long v)
 		(void)write(1, &buf[n], 1);
 }
 
-static void fase52_fail(const char *step, int err)
+static void ktm_tcc_fail(const char *step, int err)
 {
-	write_str("[FASE52][FAIL] step=");
+	write_str("[KTM_TCC][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" errno=");
 	write_dec_u64((unsigned long long)(unsigned int)err);
 	write_str("\n");
-	write_str("FASE52_FAIL_REASON=");
+	write_str("KTM_TCC_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
 
-static void fase52_fail_msg(const char *step, const char *msg)
+static void ktm_tcc_fail_msg(const char *step, const char *msg)
 {
-	write_str("[FASE52][FAIL] step=");
+	write_str("[KTM_TCC][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" msg=");
 	write_str(msg ? msg : "(null)");
 	write_str("\n");
-	write_str("FASE52_FAIL_REASON=");
+	write_str("KTM_TCC_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
 
-static int fase52d_large_file_truncate(void)
+static int ktm_tcc_d_large_file_truncate(void)
 {
 	uint32_t hash_trunc;
 	size_t bytes = 0;
@@ -234,14 +234,14 @@ static int fase52d_large_file_truncate(void)
 
 	if (truncate(F52D_LARGE_PATH, (off_t)F52D_TRUNC_SZ) != 0)
 	{
-		fase52_fail("large_truncate", errno);
+		ktm_tcc_fail("large_truncate", errno);
 		return -1;
 	}
 
 	fd = open(F52D_LARGE_PATH, O_RDONLY);
 	if (fd < 0)
 	{
-		fase52_fail("large_open_trunc", errno);
+		ktm_tcc_fail("large_open_trunc", errno);
 		return -1;
 	}
 	for (;;)
@@ -250,7 +250,7 @@ static int fase52d_large_file_truncate(void)
 		if (n < 0)
 		{
 			close(fd);
-			fase52_fail("large_read_trunc", errno);
+			ktm_tcc_fail("large_read_trunc", errno);
 			return -1;
 		}
 		if (n == 0)
@@ -260,20 +260,20 @@ static int fase52d_large_file_truncate(void)
 	close(fd);
 	if (bytes != F52D_TRUNC_SZ)
 	{
-		fase52_fail("large_size_trunc", (int)bytes);
+		ktm_tcc_fail("large_size_trunc", (int)bytes);
 		return -1;
 	}
 
 	hash_trunc = fnv1a_file_limit(F52D_LARGE_PATH, 0);
 	if (hash_trunc == 2166136261u)
 	{
-		fase52_fail("large_trunc_hash", 0);
+		ktm_tcc_fail("large_trunc_hash", 0);
 		return -1;
 	}
 
-	write_str("[FASE52] CLASSIFY LARGE_FILE_TRUNCATE_OK\n");
-	write_str("[FASE52] CLASSIFY PMM_RECLAIM_LARGE_FILE_OK\n");
-	write_str("[FASE52] CLASSIFY ROOTFS_CAPACITY_STABLE\n");
+	write_str("[KTM_TCC] CLASSIFY LARGE_FILE_TRUNCATE_OK\n");
+	write_str("[KTM_TCC] CLASSIFY PMM_RECLAIM_LARGE_FILE_OK\n");
+	write_str("[KTM_TCC] CLASSIFY ROOTFS_CAPACITY_STABLE\n");
 	return 0;
 }
 
@@ -352,7 +352,7 @@ static int run_capture(const char *tag, char *const argv[], char *out, size_t ou
 	else
 		*exit_code = 128;
 
-	write_str("[FASE52][CAPTURE] tag=");
+	write_str("[KTM_TCC][CAPTURE] tag=");
 	write_str(tag);
 	write_str(" ec=");
 	write_dec_u64((unsigned long long)(unsigned int)*exit_code);
@@ -401,15 +401,15 @@ static int static_link(const char *tag, const char *src_path, const char *out_pa
 		return -1;
 	if (ec != 0)
 	{
-		write_str("[FASE52] CLASSIFY ABI_FIX_GENERIC\n");
+		write_str("[KTM_TCC] CLASSIFY ABI_FIX_GENERIC\n");
 		if (out_n && *out_n > 0 && out)
 		{
-			write_str("[FASE52][LINK_ERR] ");
+			write_str("[KTM_TCC][LINK_ERR] ");
 			(void)write(1, out, (size_t)*out_n);
 			if (out[*out_n - 1] != '\n')
 				write_str("\n");
 		}
-		fase52_fail(tag, ec);
+		ktm_tcc_fail(tag, ec);
 		return -1;
 	}
 	return 0;
@@ -436,15 +436,15 @@ static int static_link_multi(const char *tag, const char *out_path,
 		return -1;
 	if (ec != 0)
 	{
-		write_str("[FASE52] CLASSIFY ABI_FIX_GENERIC\n");
+		write_str("[KTM_TCC] CLASSIFY ABI_FIX_GENERIC\n");
 		if (out_n && *out_n > 0 && out)
 		{
-			write_str("[FASE52][LINK_ERR] ");
+			write_str("[KTM_TCC][LINK_ERR] ");
 			(void)write(1, out, (size_t)*out_n);
 			if (out[*out_n - 1] != '\n')
 				write_str("\n");
 		}
-		fase52_fail(tag, ec);
+		ktm_tcc_fail(tag, ec);
 		return -1;
 	}
 	return 0;
@@ -460,7 +460,7 @@ static int exec_expect(const char *tag, const char *bin_path, int expect_ec,
 		return -1;
 	if (ec != expect_ec)
 	{
-		fase52_fail(tag, ec);
+		ktm_tcc_fail(tag, ec);
 		return -1;
 	}
 	return 0;
@@ -475,12 +475,12 @@ static int exec_expect_out(const char *tag, char *const argv[], int expect_ec,
 		return -1;
 	if (ec != expect_ec)
 	{
-		fase52_fail(tag, ec);
+		ktm_tcc_fail(tag, ec);
 		return -1;
 	}
 	if (needle && !strstr(out, needle))
 	{
-		fase52_fail_msg(tag, out);
+		ktm_tcc_fail_msg(tag, out);
 		return -1;
 	}
 	return 0;
@@ -494,45 +494,45 @@ int main(void)
 	int ec;
 	int out_n;
 
-	write_str("FASE52_TCC_HARNESS_ID=init_fase52_tcc.c\n");
-	write_str("FASE52B_START\n");
-	write_str("[FASE52] CLASSIFY FASE52B_ROOTFS_CAPACITY_OK\n");
+	write_str("KTM_TCC_HARNESS_ID=ktm_tcc_smoke.c\n");
+	write_str("KTM_TCC_B_START\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_B_ROOTFS_CAPACITY_OK\n");
 
-	write_str("FASE52_BOOT_START\n");
+	write_str("KTM_TCC_BOOT_START\n");
 	if (run_capture("tcc_v", argv_v, out, sizeof(out), &ec, &out_n) != 0)
 	{
-		fase52_fail("tcc_v_capture", errno);
+		ktm_tcc_fail("tcc_v_capture", errno);
 		goto halt;
 	}
 	if (ec != 0 || out_n <= 0 || !strstr(out, "tcc version"))
 	{
-		fase52_fail("tcc_v", ec);
+		ktm_tcc_fail("tcc_v", ec);
 		goto halt;
 	}
-	write_str("[FASE52] CLASSIFY FASE52_TCC_BOOT_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_TCC_BOOT_OK\n");
 
-	write_str("FASE52B_CASE_A\n");
+	write_str("KTM_TCC_B_CASE_A\n");
 	if (access("/lib/tcc/crt1.o", R_OK) != 0 && access("/usr/lib/crt1.o", R_OK) != 0)
 	{
-		fase52_fail("access_crt1", errno);
+		ktm_tcc_fail("access_crt1", errno);
 		goto halt;
 	}
 	if (write_source("/tmp/a.c", "int main(){return 0;}\n") != 0)
 	{
-		fase52_fail("write_a0_src", errno);
+		ktm_tcc_fail("write_a0_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_a0", "/tmp/a.c", "/tmp/a", out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52B_TCC_STATIC_LINK_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_B_TCC_STATIC_LINK_OK\n");
 	if (exec_expect("exec_a0", "/tmp/a", 0, out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52B_TCC_EXEC_GENERATED_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_B_TCC_EXEC_GENERATED_OK\n");
 
-	write_str("FASE52B_CASE_B\n");
+	write_str("KTM_TCC_B_CASE_B\n");
 	if (write_source("/tmp/b.c", "int main(){return 42;}\n") != 0)
 	{
-		fase52_fail("write_b_src", errno);
+		ktm_tcc_fail("write_b_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_b", "/tmp/b.c", "/tmp/b", out, sizeof(out), &out_n) != 0)
@@ -540,12 +540,12 @@ int main(void)
 	if (exec_expect("exec_b", "/tmp/b", 42, out, sizeof(out), &out_n) != 0)
 		goto halt;
 
-	write_str("FASE52B_CASE_C\n");
+	write_str("KTM_TCC_B_CASE_C\n");
 	if (write_source("/tmp/hello.c",
 			 "#include <stdio.h>\n"
 			 "int main(){ puts(\"hello-tcc\"); return 0; }\n") != 0)
 	{
-		fase52_fail("write_hello_src", errno);
+		ktm_tcc_fail("write_hello_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_hello", "/tmp/hello.c", "/tmp/hello",
@@ -554,24 +554,24 @@ int main(void)
 	if (run_capture("exec_hello", (char *const[]){ (char *)"/tmp/hello", NULL },
 			out, sizeof(out), &ec, &out_n) != 0)
 	{
-		fase52_fail("exec_hello_capture", errno);
+		ktm_tcc_fail("exec_hello_capture", errno);
 		goto halt;
 	}
 	if (ec != 0)
 	{
-		fase52_fail("exec_hello", ec);
+		ktm_tcc_fail("exec_hello", ec);
 		goto halt;
 	}
 	if (!strstr(out, "hello-tcc"))
 	{
-		fase52_fail_msg("stdio_stdout", out);
+		ktm_tcc_fail_msg("stdio_stdout", out);
 		goto halt;
 	}
-	write_str("[FASE52] CLASSIFY FASE52B_TCC_STDIO_HELLO_OK\n");
-	write_str("[FASE52] CLASSIFY FASE52B_BASE_LAYOUT_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_B_TCC_STDIO_HELLO_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_B_BASE_LAYOUT_OK\n");
 
-	write_str("FASE52C_START\n");
-	write_str("FASE52C_CASE_PRINTF\n");
+	write_str("KTM_TCC_C_START\n");
+	write_str("KTM_TCC_C_CASE_PRINTF\n");
 	if (write_source("/tmp/printf.c",
 			 "#include <stdio.h>\n"
 			 "int main(void){\n"
@@ -579,7 +579,7 @@ int main(void)
 			 " return 0;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_printf_src", errno);
+		ktm_tcc_fail("write_printf_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_printf", "/tmp/printf.c", "/tmp/printf",
@@ -589,9 +589,9 @@ int main(void)
 			    (char *const[]){ (char *)"/tmp/printf", NULL },
 			    0, "fmt 42 ok ff", out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52C_PRINTF_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_PRINTF_OK\n");
 
-	write_str("FASE52C_CASE_MALLOC\n");
+	write_str("KTM_TCC_C_CASE_MALLOC\n");
 	if (write_source("/tmp/malloc.c",
 			 "#include <stdlib.h>\n"
 			 "#include <string.h>\n"
@@ -604,7 +604,7 @@ int main(void)
 			 " return 0;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_malloc_src", errno);
+		ktm_tcc_fail("write_malloc_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_malloc", "/tmp/malloc.c", "/tmp/malloc",
@@ -612,9 +612,9 @@ int main(void)
 		goto halt;
 	if (exec_expect("exec_malloc", "/tmp/malloc", 0, out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52C_MALLOC_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_MALLOC_OK\n");
 
-	write_str("FASE52C_CASE_STDIO_FILE\n");
+	write_str("KTM_TCC_C_CASE_STDIO_FILE\n");
 	if (write_source("/tmp/fileio.c",
 			 "#include <stdio.h>\n"
 			 "int main(void){\n"
@@ -630,7 +630,7 @@ int main(void)
 			 " return (b[0]=='d'&&b[5]=='2')?0:5;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_fileio_src", errno);
+		ktm_tcc_fail("write_fileio_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_fileio", "/tmp/fileio.c", "/tmp/fileio",
@@ -638,9 +638,9 @@ int main(void)
 		goto halt;
 	if (exec_expect("exec_fileio", "/tmp/fileio", 0, out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52C_STDIO_FILE_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_STDIO_FILE_OK\n");
 
-	write_str("FASE52C_CASE_ARGV\n");
+	write_str("KTM_TCC_C_CASE_ARGV\n");
 	if (write_source("/tmp/argv.c",
 			 "#include <stdio.h>\n"
 			 "int main(int argc,char **argv){\n"
@@ -651,7 +651,7 @@ int main(void)
 			 " return 0;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_argv_src", errno);
+		ktm_tcc_fail("write_argv_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_argv", "/tmp/argv.c", "/tmp/argvbin",
@@ -662,19 +662,19 @@ int main(void)
 					     (char *)"b", NULL },
 			    0, "args a b", out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52C_ARGV_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_ARGV_OK\n");
 
-	write_str("FASE52C_CASE_MULTI\n");
+	write_str("KTM_TCC_C_CASE_MULTI\n");
 	if (write_source("/tmp/helper.c", "int helper(int x){ return x + 7; }\n") != 0)
 	{
-		fase52_fail("write_helper_src", errno);
+		ktm_tcc_fail("write_helper_src", errno);
 		goto halt;
 	}
 	if (write_source("/tmp/main_multi.c",
 			 "int helper(int x);\n"
 			 "int main(void){ return helper(35); }\n") != 0)
 	{
-		fase52_fail("write_main_multi_src", errno);
+		ktm_tcc_fail("write_main_multi_src", errno);
 		goto halt;
 	}
 	if (static_link_multi("tcc_static_multi", "/tmp/multi",
@@ -683,14 +683,14 @@ int main(void)
 		goto halt;
 	if (exec_expect("exec_multi", "/tmp/multi", 42, out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52C_MULTI_OBJECT_LINK_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_MULTI_OBJECT_LINK_OK\n");
 
-	write_str("[FASE52] CLASSIFY FASE52C_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_C_OK\n");
 
-	if (fase52d_large_file_harness() != 0)
+	if (ktm_tcc_d_large_file_harness() != 0)
 		goto halt;
 
-	write_str("FASE52D_CASE_MEDIUM_COMBO\n");
+	write_str("KTM_TCC_D_CASE_MEDIUM_COMBO\n");
 	if (write_source("/tmp/combo.c",
 			 "#include <stdio.h>\n"
 			 "#include <stdlib.h>\n"
@@ -704,7 +704,7 @@ int main(void)
 			 " return 0;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_combo_src", errno);
+		ktm_tcc_fail("write_combo_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_combo", "/tmp/combo.c", "/tmp/combo",
@@ -713,9 +713,9 @@ int main(void)
 	if (exec_expect_out("exec_combo", (char *const[]){ (char *)"/tmp/combo", NULL },
 			    0, "combo-cccc", out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52D_MEDIUM_PROGRAM_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_D_MEDIUM_PROGRAM_OK\n");
 
-	write_str("FASE52D_CASE_LARGE_READER\n");
+	write_str("KTM_TCC_D_CASE_LARGE_READER\n");
 	if (write_source("/tmp/large_read.c",
 			 "#include <stdio.h>\n"
 			 "int main(void){\n"
@@ -728,7 +728,7 @@ int main(void)
 			 " return (n==532480)?0:2;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_large_read_src", errno);
+		ktm_tcc_fail("write_large_read_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_large_read", "/tmp/large_read.c",
@@ -738,12 +738,12 @@ int main(void)
 			    (char *const[]){ (char *)"/tmp/large_read", NULL },
 			    0, "bytes=532480", out, sizeof(out), &out_n) != 0)
 		goto halt;
-	write_str("[FASE52] CLASSIFY FASE52D_LARGE_FILE_PROGRAM_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_D_LARGE_FILE_PROGRAM_OK\n");
 
-	if (fase52d_large_file_truncate() != 0)
+	if (ktm_tcc_d_large_file_truncate() != 0)
 		goto halt;
 
-	write_str("FASE52D_CASE_COMPILE_STRESS\n");
+	write_str("KTM_TCC_D_CASE_COMPILE_STRESS\n");
 	{
 		int iter;
 
@@ -752,7 +752,7 @@ int main(void)
 			if (write_source("/tmp/stress.c",
 					 "int main(){return 0;}\n") != 0)
 			{
-				fase52_fail("write_stress_src", errno);
+				ktm_tcc_fail("write_stress_src", errno);
 				goto halt;
 			}
 			if (static_link("tcc_static_stress", "/tmp/stress.c",
@@ -763,12 +763,12 @@ int main(void)
 				goto halt;
 		}
 	}
-	write_str("[FASE52] CLASSIFY EXEC_COMPILE_STRESS_OK\n");
+	write_str("[KTM_TCC] CLASSIFY EXEC_COMPILE_STRESS_OK\n");
 
-	write_str("FASE52D_CASE_TXTUTIL\n");
+	write_str("KTM_TCC_D_CASE_TXTUTIL\n");
 	if (write_source("/tmp/lines.txt", "a\nb\nc\n") != 0)
 	{
-		fase52_fail("write_lines_txt", errno);
+		ktm_tcc_fail("write_lines_txt", errno);
 		goto halt;
 	}
 	if (write_source("/tmp/wclines.c",
@@ -784,7 +784,7 @@ int main(void)
 			 " return (lines==3)?0:2;\n"
 			 "}\n") != 0)
 	{
-		fase52_fail("write_wclines_src", errno);
+		ktm_tcc_fail("write_wclines_src", errno);
 		goto halt;
 	}
 	if (static_link("tcc_static_wclines", "/tmp/wclines.c", "/tmp/wclines",
@@ -797,17 +797,17 @@ int main(void)
 
 	if (truncate(F52D_LARGE_PATH, 0) != 0)
 	{
-		fase52_fail("large_truncate_zero", errno);
+		ktm_tcc_fail("large_truncate_zero", errno);
 		goto halt;
 	}
 
-	write_str("[FASE52] CLASSIFY FASE52D_STAGING_INCREMENTAL_OK\n");
-	write_str("[FASE52] CLASSIFY TOOLCHAIN_EXPANDED_OK\n");
-	write_str("[FASE52] CLASSIFY FASE52D_OK\n");
-	write_str("[FASE52] CLASSIFY FASE50E_NO_REGRESSION_VERIFIED\n");
-	write_str("[FASE52] CLASSIFY FASE51_BASELINE_STABLE\n");
-	write_str("[FASE52] CLASSIFY DEBUG_FASE52_GATED\n");
-	write_str("FASE52_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_D_STAGING_INCREMENTAL_OK\n");
+	write_str("[KTM_TCC] CLASSIFY TOOLCHAIN_EXPANDED_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_D_OK\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_BUSYBOX_NO_REGRESSION_VERIFIED\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_SHELL_BASELINE_STABLE\n");
+	write_str("[KTM_TCC] CLASSIFY KTM_TCC_DEBUG_GATED\n");
+	write_str("KTM_TCC_OK\n");
 	goto done;
 
 halt:

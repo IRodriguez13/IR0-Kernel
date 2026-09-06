@@ -16,9 +16,9 @@ static void write_str(const char *s)
 
 int main(void)
 {
-	write_str("FASE58C_BOOT_HALT\n");
-	write_str("FASE58C_BOOT_GUI_HOLD\n");
-	write_str("FASE58C_OK\n");
+	write_str("KTM_BOOT_HALT_TAG\n");
+	write_str("KTM_BOOT_HALT_GUI_HOLD\n");
+	write_str("KTM_BOOT_HALT_OK\n");
 
 	for (;;)
 		(void)pause();

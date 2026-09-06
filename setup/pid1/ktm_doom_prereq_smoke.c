@@ -89,10 +89,10 @@ static void write_str(const char *s)
 
 static void fase55a_fail(const char *step)
 {
-    write_str("[FASE55A][FAIL] step=");
+    write_str("[KTM_DOOM_PREREQ][FAIL] step=");
     write_str(step ? step : "(null)");
     write_str("\n");
-    write_str("FASE55A_FAIL_REASON=");
+    write_str("KTM_DOOM_PREREQ_FAIL_REASON=");
     write_str(step ? step : "unknown");
     write_str("\n");
 }
@@ -160,8 +160,8 @@ int main(void)
     struct input_event ev;
     int tries;
 
-    write_str("FASE55A_START\n");
-    write_str("FASE55A_DOOM_PREREQ_HARNESS_ID=init_fase55a_doom_prereq.c\n");
+    write_str("KTM_DOOM_PREREQ_START\n");
+    write_str("KTM_DOOM_PREREQ_HARNESS_ID=ktm_doom_prereq_smoke.c\n");
 
     fd_fb = open("/dev/fb0", O_RDWR);
     if (fd_fb < 0)
@@ -232,8 +232,8 @@ int main(void)
     }
 
     write_str("DOOM_FRAME_DRAW_OK\n");
-    write_str("FASE55A_DOOM_PREREQ_OK\n");
-    write_str("FASE55A_OK\n");
+    write_str("KTM_DOOM_PREREQ_DOOM_PREREQ_OK\n");
+    write_str("KTM_DOOM_PREREQ_OK\n");
 
     close(fd_in);
     (void)munmap(fb_map, map_len);

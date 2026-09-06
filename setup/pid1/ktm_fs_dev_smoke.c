@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /*
- * FASE53A — Base userspace layout + /dev smoke.
+ * KTM fs/dev — base userspace layout + /dev smoke.
  */
 
 #include <unistd.h>
@@ -45,12 +45,12 @@ static void write_dec_u64(unsigned long long v)
 
 static void fase53a_fail(const char *step, const char *reason)
 {
-	write_str("[FASE53A][FAIL] step=");
+	write_str("[KTM_FS_DEV][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
 	write_str("\n");
-	write_str("FASE53A_FAIL_REASON=");
+	write_str("KTM_FS_DEV_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
@@ -133,7 +133,7 @@ static int run_capture(const char *tag, const char *script,
 	else
 		*exit_code = 128;
 
-	write_str("[FASE53A][CAPTURE] tag=");
+	write_str("[KTM_FS_DEV][CAPTURE] tag=");
 	write_str(tag);
 	write_str(" ec=");
 	write_dec_u64((unsigned long long)(unsigned int)*exit_code);
@@ -162,7 +162,7 @@ static int check_devfs_null_zero(void)
 		return -1;
 	}
 	close(fd);
-	write_str("[FASE53A] CLASSIFY DEVFS_NULL_OK\n");
+	write_str("[KTM_FS_DEV] CLASSIFY DEVFS_NULL_OK\n");
 
 	fd = open("/dev/zero", O_RDONLY);
 	if (fd < 0)
@@ -185,7 +185,7 @@ static int check_devfs_null_zero(void)
 			return -1;
 		}
 	}
-	write_str("[FASE53A] CLASSIFY DEVFS_ZERO_OK\n");
+	write_str("[KTM_FS_DEV] CLASSIFY DEVFS_ZERO_OK\n");
 	return 0;
 }
 
@@ -229,7 +229,7 @@ static int check_tmpdir_rw(void)
 		return -1;
 	}
 
-	write_str("[FASE53A] CLASSIFY TMPDIR_OK\n");
+	write_str("[KTM_FS_DEV] CLASSIFY TMPDIR_OK\n");
 	return 0;
 }
 
@@ -253,7 +253,7 @@ static int check_chdir_pwd(void)
 		return -1;
 	}
 
-	write_str("[FASE53A] CLASSIFY CWD_CHDIR_OK\n");
+	write_str("[KTM_FS_DEV] CLASSIFY CWD_CHDIR_OK\n");
 	return 0;
 }
 
@@ -346,14 +346,14 @@ static int check_tcc_layout(void)
 		return -1;
 	}
 
-	write_str("[FASE53A] CLASSIFY TCC_LAYOUT_NO_REGRESSION\n");
+	write_str("[KTM_FS_DEV] CLASSIFY TCC_LAYOUT_NO_REGRESSION\n");
 	return 0;
 }
 
 int main(void)
 {
-	write_str("FASE53A_START\n");
-	write_str("FASE53A_FS_DEV_HARNESS_ID=init_fase53a_fs_dev.c\n");
+	write_str("KTM_FS_DEV_START\n");
+	write_str("KTM_FS_DEV_HARNESS_ID=ktm_fs_dev_smoke.c\n");
 
 	if (check_devfs_null_zero() != 0)
 		goto halt;
@@ -366,8 +366,8 @@ int main(void)
 	if (check_tcc_layout() != 0)
 		goto halt;
 
-	write_str("[FASE53A] CLASSIFY FASE50_51_52_NO_REGRESSION\n");
-	write_str("FASE53A_OK\n");
+	write_str("[KTM_FS_DEV] CLASSIFY KTM_LEGACY_STACK_NO_REGRESSION\n");
+	write_str("KTM_FS_DEV_OK\n");
 
 halt:
 	for (;;)

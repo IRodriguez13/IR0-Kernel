@@ -39,12 +39,12 @@ static void write_dec_u64(unsigned long long v)
 
 static void fase51_fail(const char *step, const char *reason)
 {
-	write_str("[FASE51][FAIL] step=");
+	write_str("[KTM_SHELL][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
 	write_str("\n");
-	write_str("FASE51_FAIL_REASON=");
+	write_str("KTM_SHELL_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
@@ -126,7 +126,7 @@ static int sh_capture(const char *tag, const char *script, char *out, size_t out
 	else
 		*exit_code = 128;
 
-	write_str("[FASE51][CAPTURE] tag=");
+	write_str("[KTM_SHELL][CAPTURE] tag=");
 	write_str(tag);
 	write_str(" ec=");
 	write_dec_u64((unsigned long long)(unsigned int)*exit_code);
@@ -157,7 +157,7 @@ static int sh_expect_stdout(const char *step, const char *script,
 	}
 	if (!want_prefix || strncmp(out, want_prefix, strlen(want_prefix)) != 0)
 	{
-		write_str("[FASE51] CLASSIFY ");
+		write_str("[KTM_SHELL] CLASSIFY ");
 		write_str(step);
 		write_str("_STDOUT_MISMATCH\n");
 		fase51_fail(step, "stdout");
@@ -177,22 +177,22 @@ int main(void)
 	int ec;
 	int out_n;
 
-	write_str("FASE51_START\n");
+	write_str("KTM_SHELL_START\n");
 
 	(void)unlink("/f51_a.txt");
 
-	write_str("FASE51_PIPE_START\n");
+	write_str("KTM_SHELL_PIPE_START\n");
 	if (sh_expect_stdout("pipe", "echo hi | cat", "hi") != 0)
 		goto halt;
-	write_str("[FASE51] CLASSIFY FASE51_PIPE_OK\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_PIPE_OK\n");
 
-	write_str("FASE51_REDIRECT_START\n");
+	write_str("KTM_SHELL_REDIRECT_START\n");
 	if (sh_expect_stdout("redirect", "echo hello > /f51_a.txt; cat /f51_a.txt",
 			     "hello") != 0)
 		goto halt;
-	write_str("[FASE51] CLASSIFY FASE51_REDIRECT_OK\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_REDIRECT_OK\n");
 
-	write_str("FASE51_FOR_START\n");
+	write_str("KTM_SHELL_FOR_START\n");
 	if (sh_capture("for_loop", "for x in a b c; do echo $x; done",
 		       out, sizeof(out), &ec, &out_n) != 0)
 	{
@@ -201,7 +201,7 @@ int main(void)
 	}
 	if (ec != 0)
 	{
-		write_str("[FASE51] CLASSIFY for_loop_EXIT_STATUS\n");
+		write_str("[KTM_SHELL] CLASSIFY for_loop_EXIT_STATUS\n");
 		fase51_fail("for_loop", "exit");
 		goto halt;
 	}
@@ -210,18 +210,18 @@ int main(void)
 		fase51_fail("for_loop", "stdout");
 		goto halt;
 	}
-	write_str("[FASE51] CLASSIFY FASE51_FOR_LOOP_OK\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_FOR_LOOP_OK\n");
 
-	write_str("FASE51_CONTROL_START\n");
+	write_str("KTM_SHELL_CONTROL_START\n");
 	if (sh_expect_stdout("true_and", "true && echo ok", "ok") != 0)
 		goto halt;
 	if (sh_expect_stdout("false_or", "false || echo ok", "ok") != 0)
 		goto halt;
-	write_str("[FASE51] CLASSIFY FASE51_CONTROL_FLOW_OK\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_CONTROL_FLOW_OK\n");
 
-	write_str("[FASE51] CLASSIFY FASE51_BASELINE_STABLE\n");
-	write_str("[FASE51] CLASSIFY DEBUG_FASE51_GATED\n");
-	write_str("FASE51_OK\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_BASELINE_STABLE\n");
+	write_str("[KTM_SHELL] CLASSIFY KTM_SHELL_DEBUG_GATED\n");
+	write_str("KTM_SHELL_OK\n");
 	goto done;
 
 halt:

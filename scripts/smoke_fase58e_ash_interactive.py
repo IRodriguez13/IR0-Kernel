@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from smoke_qemu_boot import extend_qemu_kernel_boot
 DEFAULT_TIMEOUT = 90
 MONITOR_PORT = 4445
 
@@ -149,6 +151,7 @@ def main() -> int:
         "-no-reboot",
         "-net", "none",
     ]
+    extend_qemu_kernel_boot(qemu_cmd, ROOT, ash_smoke=True)
 
     proc = subprocess.Popen(
         qemu_cmd,

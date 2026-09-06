@@ -31,7 +31,7 @@ if [ ! -f "${DISK}" ]; then
 fi
 
 if [ ! -f "${BIN}" ]; then
-	echo "  WARN    ken/games: missing ${BIN} — build with: make build-fase55e-doom-interactive" >&2
+	echo "  WARN    ken/games: missing ${BIN} — build with: make build-ktm-doom-interactive" >&2
 	exit 0
 fi
 

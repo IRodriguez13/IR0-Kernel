@@ -78,7 +78,7 @@ static void write_str(const char *s)
 
 static void fase58c_fail(const char *step)
 {
-	write_str("[FASE58C][FAIL] step=");
+	write_str("[KTM_FBDEV_GUI][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str("\n");
 }
@@ -123,8 +123,8 @@ int main(void)
 	uint32_t third;
 	int fd;
 
-	write_str("FASE58C_START\n");
-	write_str("FASE58C_FBDEV_HARNESS_ID=init_fase58c_fbdev.c\n");
+	write_str("KTM_FBDEV_GUI_START\n");
+	write_str("KTM_FBDEV_GUI_HARNESS_ID=ktm_fbdev_gui_smoke.c\n");
 
 	if (stat("/dev/fb0", &st) != 0)
 	{
@@ -164,7 +164,7 @@ int main(void)
 		goto halt;
 	}
 
-	write_str("FASE58C_FB_GETINFO_OK\n");
+	write_str("KTM_FBDEV_GUI_FB_GETINFO_OK\n");
 
 	map_len = (size_t)fix.smem_len;
 	if (map_len > (4U * 1024U * 1024U))
@@ -198,7 +198,7 @@ int main(void)
 	close(fd);
 
 	write_str("DEVFB0_DRAW_OK\n");
-	write_str("FASE58C_OK\n");
+	write_str("KTM_FBDEV_GUI_OK\n");
 
 halt:
 	for (;;)

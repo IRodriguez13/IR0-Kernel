@@ -97,12 +97,12 @@ static void write_str(const char *s)
 
 static void fase54b_fail(const char *step, const char *reason)
 {
-	write_str("[FASE54B][FAIL] step=");
+	write_str("[KTM_INPUT][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
 	write_str("\n");
-	write_str("FASE54B_FAIL_REASON=");
+	write_str("KTM_INPUT_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
@@ -202,7 +202,7 @@ static int run_slice(void)
 	fd_in = open("/dev/events0", O_RDONLY | O_NONBLOCK);
 	if (fd_in < 0)
 	{
-		write_str("FASE54B_INPUT_UNAVAILABLE\n");
+		write_str("KTM_INPUT_INPUT_UNAVAILABLE\n");
 		(void)munmap(fb_map, map_len);
 		close(fd_fb);
 		return 0;
@@ -236,9 +236,9 @@ static int run_slice(void)
 	}
 
 	if (got_event)
-		write_str("FASE54B_FB_INTERACTIVE_OK\n");
+		write_str("KTM_INPUT_FB_INTERACTIVE_OK\n");
 	else
-		write_str("FASE54B_INPUT_UNAVAILABLE\n");
+		write_str("KTM_INPUT_INPUT_UNAVAILABLE\n");
 
 	close(fd_in);
 	(void)munmap(fb_map, map_len);
@@ -248,13 +248,13 @@ static int run_slice(void)
 
 int main(void)
 {
-	write_str("FASE54B_START\n");
-	write_str("FASE54B_INPUT_HARNESS_ID=init_fase54b_input.c\n");
+	write_str("KTM_INPUT_START\n");
+	write_str("KTM_INPUT_HARNESS_ID=ktm_input_smoke.c\n");
 
 	if (run_slice() != 0)
 		goto halt;
 
-	write_str("FASE54B_OK\n");
+	write_str("KTM_INPUT_OK\n");
 
 halt:
 	for (;;)

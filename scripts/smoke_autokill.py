@@ -38,10 +38,10 @@ DEFAULT_FAIL_RES: list[str] = [
     r"WAIT_.*_INVALID",
     r"SYSCALL_.*_INVALID",
     r"BUSYBOX_FAIL",
-    r"FASE52_FAIL",
-    r"EXEC_ONLY_FAIL",
-    r"BUSYBOX_FAIL_REASON=|FASE52_FAIL_REASON=|EXEC_ONLY_FAIL=",
-    r"\[FASE[0-9A-Z]+\]\[FAIL\]",
+    r"KTM_TCC_FAIL",
+    r"KTM_EXEC_ONLY_FAIL",
+    r"BUSYBOX_FAIL_REASON=|KTM_TCC_FAIL_REASON=|KTM_EXEC_ONLY_FAIL=",
+    r"\[KTM_[A-Z0-9_]+\]\[FAIL\]",
     r"KSTACK_CANARY_BROKEN",
     r"DESK_SESSION_FAIL",
     r"DESK_CLIENT_FAIL",
@@ -62,12 +62,12 @@ PROFILES: dict[str, dict[str, object]] = {
         "stale_sec": 20,
     },
     "fase50-busybox": {
-        "success": ["FASE50E_NO_REGRESSION"],
+        "success": ["KTM_BUSYBOX_NO_REGRESSION"],
         "timeout": 150,
         "stale_sec": 90,
     },
     "fase52-tcc": {
-        "success": ["FASE52_OK"],
+        "success": ["KTM_TCC_OK"],
         "timeout": 300,
         "stale_sec": 240,
     },
@@ -77,46 +77,46 @@ PROFILES: dict[str, dict[str, object]] = {
         "stale_sec": 45,
     },
     "fase51-shell": {
-        "success": ["DEBUG_FASE51_GATED"],
+        "success": ["KTM_SHELL_DEBUG_GATED"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase55d-doom": {
         # Wait for terminal OK tag — FRAME_LOOP alone used to autokill (mode any)
-        # before FASE55D_DOOMGENERIC_OK was flushed → flaky post-grep FAIL.
+        # before KTM_DOOMGENERIC_OK was flushed → flaky post-grep FAIL.
         # Real IWAD boot + first frames often exceed 120s on loaded hosts.
-        "success": ["FASE55D_DOOMGENERIC_OK"],
+        "success": ["KTM_DOOMGENERIC_OK"],
         "success_mode": "all",
         "timeout": 240,
         "stale_sec": 90,
     },
     "fase50-exec-only": {
-        "success": ["EXEC_ONLY_STABLE_OK"],
+        "success": ["KTM_EXEC_ONLY_STABLE_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase53a-fs-dev": {
-        "success": ["FASE53A_OK"],
+        "success": ["KTM_FS_DEV_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase53b-posix": {
-        "success": ["FASE53B_OK"],
+        "success": ["KTM_POSIX_PSEUDOFS_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase54a-fbdev": {
-        "success": ["FASE54A_OK"],
+        "success": ["KTM_FBDEV_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase54b-input": {
-        "success": ["FASE54B_OK"],
+        "success": ["KTM_INPUT_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
     "fase54c-input-det": {
-        "success": ["FASE54C_OK"],
+        "success": ["KTM_INPUT_DET_OK"],
         "timeout": 120,
         "stale_sec": 60,
     },
@@ -141,7 +141,7 @@ TAG_LINE_RES: list[str] = [
     r"DEBUG_[A-Z_]+",
     r"\[FASE[0-9A-Z]+\]\[CLASSIFY\]",  # legacy
     r"\[FASE[0-9A-Z]+\] CLASSIFY",
-    r"\[FASE[0-9A-Z]+\]\[FAIL\]",
+    r"\[KTM_[A-Z0-9_]+\]\[FAIL\]",
     r"_FAIL_REASON=",
 ]
 

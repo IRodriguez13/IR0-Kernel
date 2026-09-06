@@ -100,10 +100,10 @@ static void write_str(const char *s)
 
 static void fase54c_fail(const char *step)
 {
-    write_str("[FASE54C][FAIL] step=");
+    write_str("[KTM_INPUT_DET][FAIL] step=");
     write_str(step ? step : "(null)");
     write_str("\n");
-    write_str("FASE54C_FAIL_REASON=");
+    write_str("KTM_INPUT_DET_FAIL_REASON=");
     write_str(step ? step : "unknown");
     write_str("\n");
 }
@@ -220,8 +220,8 @@ int main(int argc, char **argv)
     int fd_in;
     int interactive_timeout_ms;
 
-    write_str("FASE54C_START\n");
-    write_str("FASE54C_INPUT_DETERMINISTIC_HARNESS_ID=init_fase54c_input_deterministic.c\n");
+    write_str("KTM_INPUT_DET_START\n");
+    write_str("KTM_INPUT_DET_HARNESS_ID=ktm_input_det_smoke.c\n");
 
     if (stat("/dev/events0", &st) != 0)
     {
@@ -271,15 +271,15 @@ int main(int argc, char **argv)
                 ssize_t n = read(fd_in, &ev, sizeof(ev));
                 if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
                 {
-                    write_str("FASE54C_INPUT_MANUAL_OK\n");
-                    write_str("FASE54C_OK\n");
+                    write_str("KTM_INPUT_DET_INPUT_MANUAL_OK\n");
+                    write_str("KTM_INPUT_DET_OK\n");
                     close(fd_in);
                     goto halt;
                 }
                 usleep(10000);
             }
-            write_str("FASE54C_INPUT_MANUAL_TIMEOUT\n");
-            write_str("FASE54C_OK\n");
+            write_str("KTM_INPUT_DET_INPUT_MANUAL_TIMEOUT\n");
+            write_str("KTM_INPUT_DET_OK\n");
             close(fd_in);
             goto halt;
         }
@@ -298,11 +298,11 @@ int main(int argc, char **argv)
     write_str("INPUT_INJECT_TESTHOOK_OK\n");
     write_str("DEVFS_EVENTS0_READ_OK\n");
     write_str("INPUT_EVENT_READ_OK\n");
-    write_str("FASE54C_INPUT_DETERMINISTIC_OK\n");
+    write_str("KTM_INPUT_DET_OK\n");
 
     draw_ack_if_fb_available();
 
-    write_str("FASE54C_OK\n");
+    write_str("KTM_INPUT_DET_OK\n");
     close(fd_in);
 
 halt:

@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from smoke_qemu_boot import extend_qemu_kernel_boot
 
 SPECIAL = {
     " ": "spc",
@@ -953,6 +955,7 @@ def run_session(
                     "-device",
                     "virtio-9p-pci,fsdev=ir0fs,mount_tag=ir0share,disable-modern=on",
                 ]
+            extend_qemu_kernel_boot(qemu_cmd, ROOT, ash_smoke=True)
 
             proc = subprocess.Popen(
                 qemu_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL

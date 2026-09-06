@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /*
- * FASE58L — headless BusyBox coreutils smoke harness (PID 1, static musl).
+ * KTM busybox manifest — headless BusyBox coreutils smoke harness (PID 1, static musl).
  *
  * Runs applets from fase58_full.config and emits serial tags for make grep.
  */
@@ -83,7 +83,7 @@ static int run_capture(const char *tag, char *const argv[],
 	else
 		*exit_code = 128;
 
-	write_str("[FASE58L][");
+	write_str("[KTM_BB_MANIFEST][");
 	write_str(tag);
 	write_str("] ec=");
 	{
@@ -195,45 +195,45 @@ int main(void)
 	char *argv_uname[] = { "/bin/busybox", "uname", NULL };
 	char *argv_ps[] = { "/bin/busybox", "ps", NULL };
 
-	write_str("FASE58L_HARNESS_ID=fase58l_busybox_smoke.c\n");
-	write_str("FASE58L_START\n");
+	write_str("KTM_BB_MANIFEST_HARNESS_ID=ktm_busybox_manifest_smoke.c\n");
+	write_str("KTM_BB_MANIFEST_START\n");
 
 	kfd = ktm_open();
 	if (kfd >= 0)
 		(void)ktm_case_begin(kfd, "busybox_coreutils");
 
-	if (expect_stdout_has("echo", argv_echo, "hi", "FASE58L_ECHO_OK") != 0)
+	if (expect_stdout_has("echo", argv_echo, "hi", "KTM_BB_MANIFEST_ECHO_OK") != 0)
 		goto fail;
 
-	if (expect_stdout_has("echo_path", argv_echo_path, "hi", "FASE58L_ECHO_PATH_OK") != 0)
+	if (expect_stdout_has("echo_path", argv_echo_path, "hi", "KTM_BB_MANIFEST_ECHO_PATH_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("pwd", argv_pwd, "FASE58L_PWD_OK") != 0)
+	if (expect_ok_tag("pwd", argv_pwd, "KTM_BB_MANIFEST_PWD_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("ls", argv_ls, "FASE58L_LS_ROOT_OK") != 0)
+	if (expect_ok_tag("ls", argv_ls, "KTM_BB_MANIFEST_LS_ROOT_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("ls_path", argv_ls_path, "FASE58L_LS_PATH_OK") != 0)
+	if (expect_ok_tag("ls_path", argv_ls_path, "KTM_BB_MANIFEST_LS_PATH_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("touch", argv_touch, "FASE58L_TOUCH_OK") != 0)
+	if (expect_ok_tag("touch", argv_touch, "KTM_BB_MANIFEST_TOUCH_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("write", argv_write, "FASE58L_WRITE_OK") != 0)
+	if (expect_ok_tag("write", argv_write, "KTM_BB_MANIFEST_WRITE_OK") != 0)
 		goto fail;
 
-	if (expect_stdout_has("cat", argv_cat, "hi", "FASE58L_CAT_OK") != 0)
+	if (expect_stdout_has("cat", argv_cat, "hi", "KTM_BB_MANIFEST_CAT_OK") != 0)
 		goto fail;
 
-	if (expect_stdout_has("cat_path", argv_cat_path, "hi", "FASE58L_CAT_PATH_OK") != 0)
+	if (expect_stdout_has("cat_path", argv_cat_path, "hi", "KTM_BB_MANIFEST_CAT_PATH_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("uname", argv_uname, "FASE58L_UNAME_OK") != 0)
+	if (expect_ok_tag("uname", argv_uname, "KTM_BB_MANIFEST_UNAME_OK") != 0)
 		goto fail;
 
-	if (expect_ok_tag("ps", argv_ps, "FASE58L_PS_OK") != 0)
-		write_str("FASE58L_PS_SKIP\n");
+	if (expect_ok_tag("ps", argv_ps, "KTM_BB_MANIFEST_PS_OK") != 0)
+		write_str("KTM_BB_MANIFEST_PS_SKIP\n");
 
 	if (kfd >= 0)
 	{
@@ -248,7 +248,7 @@ int main(void)
 
 	write_str("BUSYBOX_MANIFEST_OK\n");
 	write_str("KTM_USERDEV_OK\n");
-	write_str("FASE58L_OK\n");
+	write_str("KTM_BB_MANIFEST_OK\n");
 	for (;;)
 		pause();
 	return 0;
@@ -259,7 +259,7 @@ fail:
 		(void)ktm_case_end(kfd, "busybox_coreutils", 1);
 		ktm_close(kfd);
 	}
-	write_str("FASE58L_FAIL\n");
+	write_str("KTM_BB_MANIFEST_FAIL\n");
 	for (;;)
 		pause();
 	return 1;

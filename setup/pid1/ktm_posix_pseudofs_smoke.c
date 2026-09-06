@@ -53,12 +53,12 @@ static void write_dec_u64(unsigned long long v)
 
 static void fase53b_fail(const char *step, const char *reason)
 {
-	write_str("[FASE53B][FAIL] step=");
+	write_str("[KTM_POSIX_PSEUDOFS][FAIL] step=");
 	write_str(step ? step : "(null)");
 	write_str(" reason=");
 	write_str(reason ? reason : "(null)");
 	write_str("\n");
-	write_str("FASE53B_FAIL_REASON=");
+	write_str("KTM_POSIX_PSEUDOFS_FAIL_REASON=");
 	write_str(step ? step : "unknown");
 	write_str("\n");
 }
@@ -141,7 +141,7 @@ static int run_capture(const char *tag, const char *script,
 	else
 		*exit_code = 128;
 
-	write_str("[FASE53B][CAPTURE] tag=");
+	write_str("[KTM_POSIX_PSEUDOFS][CAPTURE] tag=");
 	write_str(tag);
 	write_str(" ec=");
 	write_dec_u64((unsigned long long)(unsigned int)*exit_code);
@@ -246,7 +246,7 @@ static int check_getdents_eof_stable(void)
 		return -1;
 	}
 
-	write_str("FASE53B_GETDENTS_CURSOR_OK\n");
+	write_str("KTM_POSIX_PSEUDOFS_GETDENTS_CURSOR_OK\n");
 	return 0;
 }
 
@@ -272,7 +272,7 @@ static int check_access_faccessat_chdir_stat(void)
 		fase53b_fail("faccessat_bad_flags", "expected_einval");
 		return -1;
 	}
-	write_str("FASE53B_FACCESSAT_OK\n");
+	write_str("KTM_POSIX_PSEUDOFS_FACCESSAT_OK\n");
 
 	if (chdir("/tmp") != 0)
 	{
@@ -284,7 +284,7 @@ static int check_access_faccessat_chdir_stat(void)
 		fase53b_fail("access_dot_after_chdir", "access");
 		return -1;
 	}
-	write_str("FASE53B_ROUTED_PATH_OK\n");
+	write_str("KTM_POSIX_PSEUDOFS_ROUTED_PATH_OK\n");
 
 	proc_exists = (access("/proc", F_OK) == 0);
 	if (proc_exists && stat("/proc", &st) != 0)
@@ -293,14 +293,14 @@ static int check_access_faccessat_chdir_stat(void)
 		return -1;
 	}
 
-	write_str("FASE53B_PSEUDOFS_NO_DUP_OK\n");
+	write_str("KTM_POSIX_PSEUDOFS_PSEUDOFS_NO_DUP_OK\n");
 	return 0;
 }
 
 int main(void)
 {
-	write_str("FASE53B_START\n");
-	write_str("FASE53B_POSIX_PSEUDOFS_HARNESS_ID=init_fase53b_posix_pseudofs.c\n");
+	write_str("KTM_POSIX_PSEUDOFS_START\n");
+	write_str("KTM_POSIX_PSEUDOFS_HARNESS_ID=ktm_posix_pseudofs_smoke.c\n");
 
 	if (check_ls_dev_twice() != 0)
 		goto halt;
@@ -309,7 +309,7 @@ int main(void)
 	if (check_access_faccessat_chdir_stat() != 0)
 		goto halt;
 
-	write_str("FASE53B_OK\n");
+	write_str("KTM_POSIX_PSEUDOFS_OK\n");
 
 halt:
 	for (;;)

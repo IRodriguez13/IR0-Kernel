@@ -7,7 +7,7 @@ Injects firstboot.seed, waits for getty, then runs:
   uname -a
   dmesg | grep -i hyper
   dmesg | cat | head
-  echo pipeok | cat
+  echo pipeok | cat -u
   ls / | grep proc
   id; whoami; date; uptime
 
@@ -29,7 +29,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROMPT_RE = re.compile(r"[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+:\S*[#$]")
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI (colors, cursor)
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC
+    r"|\x1b[@-_]"  # other two-char ESC
+)
 NEED_BOOT = ["RUNIT_STAGE1_OK", "GETTY_READY"]
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def log_for_prompt(log: Path) -> str:
+    return strip_ansi(read_log(log))
 
 
 def read_log(path: Path) -> str:
@@ -104,7 +117,7 @@ def wait_tags(log: Path, tags: list[str], proc: subprocess.Popen[bytes], timeout
 def wait_prompt(log: Path, proc: subprocess.Popen[bytes], timeout: float, after: int = 0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        text = read_log(log)
+        text = log_for_prompt(log)
         if "KERNEL PANIC" in text or "double fault" in text.lower():
             return False
         matches = list(PROMPT_RE.finditer(text))
@@ -129,6 +142,49 @@ def wait_count(log: Path, proc: subprocess.Popen[bytes], needle: str,
         if proc.poll() is not None:
             return False
         time.sleep(0.25)
+    return False
+
+
+def shell_login(port: int, log: Path, proc: subprocess.Popen[bytes],
+                user: str, password: str,
+                baseline: tuple[int, int, int] | None = None) -> bool:
+    """Log in via getty; settle after username prompt (same as session_soak)."""
+    before, user_prompts, pass_prompts = (
+        baseline if baseline is not None else (0, 0, 0))
+    if baseline is None:
+        text = log_for_prompt(log)
+        before = len(list(PROMPT_RE.finditer(text)))
+        user_prompts = text.count("Enter your Unix username")
+        pass_prompts = text.count("Password:")
+
+    for attempt in range(3):
+        if attempt == 0 or user_prompts == 0:
+            if not wait_count(log, proc, "Enter your Unix username",
+                              user_prompts + 1, 60):
+                return False
+        else:
+            # After getty respawn the new prompt is often already in the log;
+            # waiting for another copy causes a 60s timeout (pipe-stress flake).
+            time.sleep(1.0)
+        time.sleep(1.5 if attempt == 0 else 0.5)
+
+        type_str(port, user)
+        mon(port, "sendkey ret", 0.3)
+        if not wait_count(log, proc, "Password:", pass_prompts + 1, 20):
+            text = read_log(log)
+            user_prompts = text.count("Enter your Unix username")
+            pass_prompts = text.count("Password:")
+            continue
+
+        type_str(port, password)
+        mon(port, "sendkey ret", 0.4)
+        if wait_prompt(log, proc, 60, after=before):
+            return True
+
+        text = read_log(log)
+        user_prompts = text.count("Enter your Unix username")
+        pass_prompts = text.count("Password:")
+
     return False
 
 
@@ -202,33 +258,17 @@ def main() -> int:
                 print(read_log(log_path)[-5000:], file=sys.stderr)
                 return 1
 
-        # Login. Wait for each getty prompt instead of sleeping a fixed
-        # amount: typing into a getty that is not reading yet drops the
-        # keystrokes, which showed up as an intermittent "no shell prompt
-        # after login" in 3 of 8 runs and was indistinguishable from the
-        # pipe flake this smoke exists to catch.
-        if not wait_count(log_path, proc, "Enter your Unix username", 1, 60):
+        # Baseline (0,0,0): GETTY_READY may already be in the log; counting
+        # prompts from the file would wait for a second username line that
+        # never comes on first login (session_soak pattern).
+        if not shell_login(args.port, log_path, proc, user, "testpass",
+                           (0, 0, 0)):
             kill_qemu(proc)
-            print("✗ no username prompt from getty", file=sys.stderr)
-            print(read_log(log_path)[-5000:], file=sys.stderr)
-            return 1
-        type_str(args.port, user)
-        mon(args.port, "sendkey ret", 0.3)
-        if not wait_count(log_path, proc, "Password:", 1, 30):
-            kill_qemu(proc)
-            print("✗ no password prompt from getty", file=sys.stderr)
-            print(read_log(log_path)[-5000:], file=sys.stderr)
-            return 1
-        type_str(args.port, "testpass")
-        mon(args.port, "sendkey ret", 0.4)
-
-        if not wait_prompt(log_path, proc, 60):
-            kill_qemu(proc)
-            print("✗ no shell prompt after login", file=sys.stderr)
+            print("✗ login failed (getty prompt / password / shell prompt)", file=sys.stderr)
             print(read_log(log_path)[-5000:], file=sys.stderr)
             return 1
 
-        prompts_before = len(list(PROMPT_RE.finditer(read_log(log_path))))
+        prompts_before = len(list(PROMPT_RE.finditer(log_for_prompt(log_path))))
 
         # Light pipes + builtins: must return prompt without CONSOLE_SESSION_SEGV.
         hard_commands = [
@@ -242,9 +282,11 @@ def main() -> int:
         # Ash pipes: soft (hang after pipeok or CONSOLE_SESSION_SEGV under load).
         soft_commands = [
             "echo pipeok | cat",
-            "echo pipeok | cat | head",
+            # cat between pipes must be unbuffered (-u): stdio block-buffers
+            # pipe stdout and can deadlock with head (middle read before flush).
+            "echo pipeok | cat -u | head",
             "dmesg | cat",
-            "hexdump -C /bin/busybox | head -n 3",
+            "hexdump -C /bin/busybox | cat -u | head -n 3",
             "yes | head -n 20",
             "cat /bin/busybox | head -n 1",
         ]
@@ -259,7 +301,7 @@ def main() -> int:
                 print(f"✗ hang or no prompt after: {cmd!r}", file=sys.stderr)
                 print(read_log(log_path)[-8000:], file=sys.stderr)
                 return 1
-            prompts_before = len(list(PROMPT_RE.finditer(read_log(log_path))))
+            prompts_before = len(list(PROMPT_RE.finditer(log_for_prompt(log_path))))
             text = read_log(log_path)
             if "KERNEL PANIC" in text or "double free" in text.lower():
                 kill_qemu(proc)
@@ -294,14 +336,14 @@ def main() -> int:
                         how = "ctrl-c"
                 timings.append((cmd, round(time.time() - t0, 1), how))
                 soft_skips.append(f"{cmd} [{how}]")
-                prompts_before = len(list(PROMPT_RE.finditer(read_log(log_path))))
+                prompts_before = len(list(PROMPT_RE.finditer(log_for_prompt(log_path))))
                 continue
             timings.append((cmd, round(time.time() - t0, 1), "ok"))
-            prompts_before = len(list(PROMPT_RE.finditer(read_log(log_path))))
+            prompts_before = len(list(PROMPT_RE.finditer(log_for_prompt(log_path))))
             text = read_log(log_path)
             if text.count("CONSOLE_SESSION_SEGV") > segv_base:
                 soft_skips.append(cmd + " [SESSION_SEGV]")
-                prompts_before = len(list(PROMPT_RE.finditer(text)))
+                prompts_before = len(list(PROMPT_RE.finditer(strip_ansi(text))))
 
         text = read_log(log_path)
         kill_qemu(proc)

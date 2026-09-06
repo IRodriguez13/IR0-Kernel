@@ -68,6 +68,20 @@
       "status_doc": "PARTIAL"
     },
     {
+      "id": "sigreturn_blocked_syscall",
+      "enabled": true,
+      "title": "rt_sigreturn after blocked syscall (EINTR/SA_RESTART)",
+      "status_doc": "VERIFIED",
+      "done_tag": "SIGRETURNEINTROK",
+      "host_test": "test_sigreturn_sleep_eintr_frame_abi",
+      "smokes": [
+        "smoke-ctrl-c-spam",
+        "smoke-sigchld-no-false-logout",
+        "smoke-sigchld-sysfs-stress"
+      ],
+      "linux_ref": "kernel/signal.c rt_sigreturn; man7 signal(7) SA_RESTART"
+    },
+    {
       "id": "signals",
       "enabled": false,
       "title": "Signal delivery/rt_sigaction",

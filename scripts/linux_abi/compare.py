@@ -1453,6 +1453,40 @@ def compare_nanosleep(linux: dict, ir0: dict) -> CompareResult:
     return res
 
 
+def compare_sigreturn_blocked_syscall(linux: dict, ir0: dict) -> CompareResult:
+    res = CompareResult(contract="sigreturn_blocked_syscall", ok=True)
+    ops = ("read_eintr", "read_after_eintr", "read_sa_restart")
+    expected = {
+        "read_eintr": {"ret": -1, "errno": 4},
+        "read_after_eintr": {"ret": 1, "errno": 0},
+        "read_sa_restart": {"ret": 1, "errno": 0},
+    }
+
+    for op in ops:
+        l_s = _find_step(linux.get("audit_steps") or [], op)
+        i_s = _find_step(ir0.get("audit_steps") or [], op)
+        if not l_s or not i_s:
+            res.ok = False
+            res.divergences.append(
+                f"missing {op} step (linux={bool(l_s)} ir0={bool(i_s)})"
+            )
+            continue
+        exp = expected[op]
+        for label, step in (("linux", l_s), ("ir0", i_s)):
+            if step.get("ret") != exp["ret"]:
+                res.ok = False
+                res.divergences.append(
+                    f"{label} {op}: ret={step.get('ret')} expected={exp['ret']}"
+                )
+            if step.get("errno") != exp["errno"]:
+                res.ok = False
+                res.divergences.append(
+                    f"{label} {op}: errno={step.get('errno')} expected={exp['errno']}"
+                )
+
+    return res
+
+
 def compare_getcwd(linux: dict, ir0: dict, expected_path: str) -> CompareResult:
     res = CompareResult(contract="getcwd", ok=True)
     l_s = _find_step(linux.get("audit_steps") or [], "getcwd_root")

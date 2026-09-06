@@ -36,6 +36,7 @@ from compare import (  # noqa: E402
     compare_process_lifecycle,
     compare_kill_sigterm,
     compare_read,
+    compare_sigreturn_blocked_syscall,
     compare_stat,
     compare_vfs_write,
     compare_wait4,
@@ -183,6 +184,17 @@ def build_nanosleep_probe(report_dir: Path) -> Path:
     return build_static_probe(
         report_dir / "nanosleep_probe",
         ROOT / "scripts" / "linux_abi" / "workloads" / "nanosleep_probe.c",
+    )
+
+
+def build_sigreturn_blocked_syscall_probe(report_dir: Path) -> Path:
+    return build_static_probe(
+        report_dir / "sigreturn_blocked_syscall_probe",
+        ROOT
+        / "scripts"
+        / "linux_abi"
+        / "workloads"
+        / "sigreturn_blocked_syscall_probe.c",
     )
 
 
@@ -1191,6 +1203,31 @@ def audit_nanosleep(report_dir: Path, cfg: dict) -> CompareResult:
     return compare_nanosleep(linux_trace, ir0_trace)
 
 
+def audit_sigreturn_blocked_syscall(report_dir: Path, cfg: dict) -> CompareResult:
+    linux_dir = report_dir / "linux" / "sigreturn_blocked_syscall"
+    ir0_dir = report_dir / "ir0" / "sigreturn_blocked_syscall"
+
+    build_sigreturn_blocked_syscall_probe(report_dir)
+
+    if not _run_simple_workloads(
+        "sigreturn_blocked_syscall",
+        "sigreturn_blocked_syscall_probe",
+        "SIGRETURNEINTROK",
+        "read,pipe,write,close,kill,fork,wait4,sigaction,rt_sigreturn",
+        linux_dir,
+        ir0_dir,
+    ):
+        return CompareResult(
+            contract="sigreturn_blocked_syscall",
+            ok=False,
+            divergences=["sigreturn_blocked_syscall workload script failed"],
+        )
+
+    linux_trace = json.loads((linux_dir / "trace.json").read_text())
+    ir0_trace = json.loads((ir0_dir / "trace.json").read_text())
+    return compare_sigreturn_blocked_syscall(linux_trace, ir0_trace)
+
+
 def audit_getcwd(report_dir: Path, cfg: dict) -> CompareResult:
     linux_dir = report_dir / "linux" / "getcwd"
     ir0_dir = report_dir / "ir0" / "getcwd"
@@ -1279,6 +1316,7 @@ AUDITORS = {
     "pipe": audit_pipe,
     "poll": audit_poll,
     "nanosleep": audit_nanosleep,
+    "sigreturn_blocked_syscall": audit_sigreturn_blocked_syscall,
     "getcwd": audit_getcwd,
     "chdir": audit_chdir,
     "dup": audit_dup,

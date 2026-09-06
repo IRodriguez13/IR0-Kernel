@@ -49,5 +49,23 @@ void test_sigreturn_sleep_eintr_frame_abi(void)
 	ASSERT(!signal_blocked_syscall_is_console_read(0u, 1));
 	ASSERT(!signal_blocked_syscall_is_console_read(1u, 0));
 
+	memset(&block, 0, sizeof(block));
+	block.rdi = (uint64_t)(int64_t)(-1);
+	block.rsi = 1000ULL;
+	block.rip = 0x4017c2ULL;
+	signal_blocked_syscall_frame_sanitize(&block, 0u);
+	ASSERT_EQ(block.rdi, 0ULL);
+	ASSERT_EQ(block.rsi, 1000ULL);
+
+	signal_resume_blocked_syscall_frame(&out, &rax, &block, 1, 0u);
+	ASSERT_EQ(out.rdi, 0ULL);
+	ASSERT(!signal_syscall_read_fd_suspicious(out.rdi));
+
+	ASSERT(signal_syscall_read_fd_suspicious((uint64_t)(int64_t)(-1)));
+	ASSERT(signal_syscall_read_fd_suspicious(0x3fULL));
+	ASSERT(!signal_syscall_read_fd_suspicious(0ULL));
+	ASSERT(signal_syscall_user_ptr_suspicious(0x3fULL));
+	ASSERT(!signal_syscall_user_ptr_suspicious(0x7fdf8000ULL));
+
 	TEST_END();
 }

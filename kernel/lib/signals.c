@@ -13,6 +13,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include <ir0/signals.h>
+#include <ir0/console.h>
 #include <ir0/abi/signal_contract.h>
 #include <ir0/process.h>
 #include <ir0/sched.h>
@@ -36,6 +37,103 @@
 static int signal_sp_in_stack(process_t *p, uint64_t sp);
 static uint64_t signal_pick_handler_sp(process_t *p, uint64_t saved_sp,
 				       uint64_t *frame_addr_out);
+
+static int signal_rip_is_registered_handler(process_t *p, uint64_t rip)
+{
+	int i;
+
+	if (!p || rip < 0x1000ul)
+		return 0;
+	for (i = 1; i < _NSIG; i++)
+	{
+		void (*h)(int) = p->signal_handlers[i];
+
+		if (!h || h == SIG_DFL || h == SIG_IGN)
+			continue;
+		if ((uint64_t)(uintptr_t)h == rip)
+			return 1;
+	}
+	return 0;
+}
+
+static int signal_delivery_blocked_nested(process_t *p)
+{
+	return process_saved_context_present(p) ||
+	       process_signal_enter_pending(p);
+}
+
+static void signals_apply_handler_mask(process_t *p, int sig, uint32_t sa_flags)
+{
+	if (!p || sig < 1 || sig >= _NSIG)
+		return;
+	if (!p->signal_mask_saved_valid)
+	{
+		p->signal_mask_saved = p->signal_mask;
+		p->signal_mask_saved_valid = 1;
+	}
+	p->signal_mask |= p->signal_sa_mask[sig];
+	if (!(sa_flags & SA_NODEFER))
+		p->signal_mask |= SIGNAL_MASK(sig);
+}
+
+static void signals_restore_handler_mask(process_t *p)
+{
+	if (!p || !p->signal_mask_saved_valid)
+		return;
+	p->signal_mask = p->signal_mask_saved;
+	p->signal_mask_saved_valid = 0;
+}
+
+void signals_on_sigreturn(process_t *p)
+{
+	signals_restore_handler_mask(p);
+	if (p)
+		p->signal_frame_sp = 0;
+}
+
+void signals_try_abandon_sigframe(process_t *p)
+{
+	uint64_t usp;
+	uint64_t frame_sp;
+
+	if (!p)
+		return;
+	frame_sp = p->signal_frame_sp;
+	if (frame_sp == 0)
+		return;
+
+	/*
+	 * Still on the handler stack if SP is at or below the top of the
+	 * sigframe (stack grows down). longjmp back to the interrupted site
+	 * restores a higher SP — that is the Linux "abandoned trampoline"
+	 * case where rt_sigreturn never runs.
+	 */
+	usp = process_syscall_sp(p);
+	if (usp != 0 && usp <= frame_sp + sizeof(struct sigframe) + 128UL)
+		return;
+
+	klog_info_fmt("SIGNAL",
+		      "SIGFRAME_ABANDON pid=%x usp=%llx frame_sp=%llx "
+		      "mask_saved=%x",
+		      (unsigned)((uint32_t)p->task.pid),
+		      (unsigned long long)usp,
+		      (unsigned long long)frame_sp,
+		      (unsigned)(p->signal_mask_saved_valid ? 1U : 0U));
+
+	process_saved_context_clear(p);
+	process_signal_enter_pending_clear(p);
+	/*
+	 * Restore pre-delivery mask. Strict Linux leaves the handler mask
+	 * after longjmp(); with a full sa_mask (ash sigfillset) that would
+	 * mute the process. Restoring matches siglongjmp(... savesigs) and
+	 * keeps the process signable.
+	 *
+	 * Userspace-first: stock BusyBox ash longjmps without rt_sigreturn;
+	 * resync console input so GNU/BusyBox need no kernel-specific patches.
+	 */
+	signals_on_sigreturn(p);
+	ir0_console_after_signal_abandon();
+}
 
 int signals_has_user_handler(process_t *p, int sig)
 {
@@ -72,18 +170,54 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 	if (!frame || p->mode != USER_MODE)
 		return 0;
 
+	/*
+	 * Already in a userspace handler: a nested SEGV must not replace the
+	 * outer saved context (that dropped the interrupted setjmp site and
+	 * left rdi=signum on resume). Treat nested fault as fatal.
+	 */
+	if (signal_delivery_blocked_nested(p))
+	{
+		if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+		    sig == SIGFPE)
+		{
+			p->signal_pending &= ~SIGNAL_MASK(sig);
+			p->exit_signal = sig;
+			process_exit(0);
+		}
+		return 0;
+	}
+
 	handler = p->signal_handlers[sig];
 	sa_flags = p->signal_sa_flags[sig];
-
-	if (process_saved_context_present(p))
-		process_saved_context_clear(p);
 
 	ctx = kmalloc(sizeof(*ctx));
 	if (!ctx)
 		return 0;
 
 	signal_fill_sigcontext_from_irq_frame(ctx, frame);
-	process_saved_context_attach(p, ctx);
+	if (signal_rip_is_registered_handler(p, ctx->rip))
+	{
+		kfree(ctx);
+		if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+		    sig == SIGFPE)
+		{
+			p->signal_pending &= ~SIGNAL_MASK(sig);
+			p->exit_signal = sig;
+			process_exit(0);
+		}
+		return 0;
+	}
+	if (process_saved_context_attach(p, ctx) != 0)
+	{
+		if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+		    sig == SIGFPE)
+		{
+			p->signal_pending &= ~SIGNAL_MASK(sig);
+			p->exit_signal = sig;
+			process_exit(0);
+		}
+		return 0;
+	}
 
 	/*
 	 * Same stack-band policy as handle_signals(): never build the
@@ -147,6 +281,8 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 	if (sa_flags & SA_RESETHAND)
 		p->signal_handlers[sig] = SIG_DFL;
 
+	p->signal_frame_sp = new_rsp;
+	signals_apply_handler_mask(p, sig, sa_flags);
 	p->signal_pending &= ~SIGNAL_MASK(sig);
 
 #if SIGNAL_DELIVER_LOG
@@ -185,6 +321,9 @@ void signals_reset_on_exec(process_t *p)
 	p->signal_pending = 0;
 	p->signal_mask = 0;
 	p->signal_ignored = 0;
+	p->signal_mask_saved = 0;
+	p->signal_mask_saved_valid = 0;
+	p->signal_frame_sp = 0;
 	p->it_real_expire_ms = 0;
 	p->it_real_interval_ms = 0;
 	for (i = 0; i < _NSIG; i++)
@@ -764,6 +903,35 @@ void handle_signals(void)
                         uint64_t restorer;
                         void (*restorer_fn)(void);
 
+                        /*
+                         * Nested catchable delivery while a sigframe is already
+                         * armed corrupts resume (SIGINT handler + nested SEGV
+                         * saved rdi=signum, then setjmp #PF at addr 2). Linux
+                         * keeps the signal blocked in sa_mask; until we honor
+                         * that fully, refuse nested user-handler delivery.
+                         */
+                        if (signal_delivery_blocked_nested(current))
+                        {
+                            klog_info_fmt("SIGNAL",
+                                          "NESTED_BLOCKED sig=%x outer_rip=%llx",
+                                          (unsigned)sig,
+                                          (unsigned long long)
+                                          (process_saved_context_present(current)
+                                           ? sigcontext_ip(
+                                               process_saved_context_peek(
+                                                 current))
+                                           : 0ULL));
+                            if (sig == SIGSEGV || sig == SIGBUS ||
+                                sig == SIGILL || sig == SIGFPE)
+                            {
+                                current->signal_pending &= ~SIGNAL_MASK(sig);
+                                current->exit_signal = sig;
+                                process_exit(0);
+                                return;
+                            }
+                            continue;
+                        }
+
                         ctx = kmalloc(sizeof(struct sigcontext));
                         if (!ctx)
                         {
@@ -775,21 +943,148 @@ void handle_signals(void)
                         /*
                          * Interrupted context: prefer syscall_frame (musl
                          * syscall insn) — task.RSP/RIP are often kernel/stale
-                         * while blocked in recvfrom/nanosleep.
+                         * while blocked in recvfrom/nanosleep/TTY read.
+                         *
+                         * When kernel_syscall_sleep is set the task.arch GPRs
+                         * are kernel-stack residue; never copy them into ctx.
                          */
-                        if (current->syscall_frame_fresh)
+                        if (current->kernel_syscall_sleep &&
+                            current->syscall_frame_fresh)
+                        {
+                            signal_fill_sigcontext_from_syscall_frame(
+                                ctx, &current->kernel_sleep_syscall_frame,
+                                (uint64_t)(int64_t)(-EINTR));
+                        }
+                        else if (current->syscall_frame_fresh)
+                        {
                             signal_fill_sigcontext_from_syscall_frame(
                                 ctx, &current->syscall_frame,
                                 (uint64_t)(int64_t)(-EINTR));
+                            if (ctx->rdi > 0 && ctx->rdi < 64)
+                                task_store_sigcontext(ctx, &current->task);
+                        }
                         else
                             task_store_sigcontext(ctx, &current->task);
 
-                        process_saved_context_attach(current, ctx);
+                        if (ctx->rdi < 0x1000ul)
+                        {
+                            uint64_t snap_rdi = 0;
+
+                            if (current->kernel_syscall_sleep)
+                                snap_rdi = syscall_frame_arg(
+                                    &current->kernel_sleep_syscall_frame, 0);
+                            else if (current->syscall_frame_fresh)
+                                snap_rdi = syscall_frame_arg(
+                                    &current->syscall_frame, 0);
+
+                            if (snap_rdi >= 0x1000ul)
+                                ctx->rdi = snap_rdi;
+                            else
+                            {
+                                uint64_t trdi = task_get_rdi(&current->task);
+
+                                if (trdi >= 0x1000ul)
+                                    ctx->rdi = trdi;
+                            }
+                        }
+
+                        if (current->syscall_entry_nr == 0u &&
+                            ctx->rsi < 0x1000ul)
+                        {
+                            uint64_t snap_rsi = 0;
+
+                            if (current->kernel_syscall_sleep)
+                                snap_rsi = syscall_frame_arg(
+                                    &current->kernel_sleep_syscall_frame, 1);
+                            else if (current->syscall_frame_fresh)
+                                snap_rsi = syscall_frame_arg(
+                                    &current->syscall_frame, 1);
+
+                            if (snap_rsi >= 0x1000ul)
+                                ctx->rsi = snap_rsi;
+                        }
+
+                        /*
+                         * The saved sigcontext must describe a *user* return
+                         * site. A task blocked mid-syscall keeps a kernel
+                         * continuation in task.arch (rip in kernel .text, rsp
+                         * on the kernel stack, rdi=process_t*). Saving that as
+                         * the interrupted context makes rt_sigreturn iretq to
+                         * ring3 with a kernel RIP — panic "invalid RIP for
+                         * ring3 iretq" (SIGCHLD to a shell blocked in wait4,
+                         * delivered on schedule-in before wait4 unwinds).
+                         * Defer: leave the signal pending; the block resumes
+                         * its kernel continuation, returns to a real user
+                         * frame, and delivery retries there.
+                         */
+                        if (ctx->rip < 0x00400000ULL ||
+                            ctx->rip > 0x00007FFFFFFFFFFFULL)
+                        {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_DEFER sig=%x "
+                                          "reason=nonuser_site rip=%llx",
+                                          (unsigned)sig,
+                                          (unsigned long long)ctx->rip);
+                            kfree(ctx);
+                            continue;
+                        }
+
+                        if (ctx->rsp < 0x00400000ULL ||
+                            ctx->rsp > 0x00007FFFFFFFFFFFULL)
+                        {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_DEFER sig=%x "
+                                          "reason=nonuser_rsp rsp=%llx",
+                                          (unsigned)sig,
+                                          (unsigned long long)ctx->rsp);
+                            kfree(ctx);
+                            continue;
+                        }
+
+                        if (signal_rip_is_registered_handler(current,
+                                                             ctx->rip))
+                        {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_ABORT sig=%x "
+                                          "reason=handler_as_site rip=%llx",
+                                          (unsigned)sig,
+                                          (unsigned long long)ctx->rip);
+                            kfree(ctx);
+                            if (sig == SIGSEGV || sig == SIGBUS ||
+                                sig == SIGILL || sig == SIGFPE)
+                            {
+                                current->signal_pending &= ~SIGNAL_MASK(sig);
+                                current->exit_signal = sig;
+                                process_exit(0);
+                                return;
+                            }
+                            continue;
+                        }
+
+                        if (process_saved_context_attach(current, ctx) != 0)
+                        {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_ABORT sig=%x "
+                                          "reason=attach_busy",
+                                          (unsigned)sig);
+                            if (sig == SIGSEGV || sig == SIGBUS ||
+                                sig == SIGILL || sig == SIGFPE)
+                            {
+                                current->signal_pending &= ~SIGNAL_MASK(sig);
+                                current->exit_signal = sig;
+                                process_exit(0);
+                                return;
+                            }
+                            continue;
+                        }
 
                         user_sp = signal_pick_handler_sp(current,
                             sigcontext_sp(ctx), &frame_addr);
                         if (user_sp == 0)
                         {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_ABORT sig=%x reason=bad_sp",
+                                          (unsigned)sig);
                             process_saved_context_clear(current);
                             current->signal_handlers[sig] = SIG_DFL;
                             current->signal_pending &= ~SIGNAL_MASK(sig);
@@ -801,10 +1096,9 @@ void handle_signals(void)
                             !is_user_address((void *)restorer_fn,
                                              sizeof(void *)))
                         {
-                            /*
-                             * No SA_RESTORER: cannot safely return from
-                             * handler. Keep pending; stop scanning this tick.
-                             */
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_ABORT sig=%x reason=no_restorer",
+                                          (unsigned)sig);
                             process_saved_context_clear(current);
                             break;
                         }
@@ -813,6 +1107,7 @@ void handle_signals(void)
                         frame.handler = handler;
                         frame.signum = sig;
                         frame.ctx = *ctx;
+                        frame.oldmask = (uint64_t)current->signal_mask;
 
                         if (copy_to_user_region_in_directory(
 				    process_pgd(current), frame_addr, &frame,
@@ -821,13 +1116,35 @@ void handle_signals(void)
 				    process_pgd(current), user_sp, &restorer,
 				    sizeof(restorer)) != 0)
                         {
+                            klog_info_fmt("SIGNAL",
+                                          "DELIVER_ABORT sig=%d reason=copy",
+                                          sig);
                             process_saved_context_clear(current);
                             break;
                         }
 
+                        current->signal_frame_sp = user_sp;
+
                         signal_prepare_task_handler(&current->task,
                                                          (void *)handler, sig,
                                                          user_sp);
+
+                        klog_info_fmt("SIGNAL",
+                                      "DELIVER_CTX sig=%d saved_rip=%llx "
+                                      "saved_rdi=%llx saved_rsp=%llx "
+                                      "handler=%llx",
+                                      sig,
+                                      (unsigned long long)ctx->rip,
+                                      (unsigned long long)ctx->rdi,
+                                      (unsigned long long)ctx->rsp,
+                                      (unsigned long long)(uintptr_t)handler);
+
+                        /*
+                         * Backup the real syscall entry frame before redirecting
+                         * to the handler. rt_sigreturn uses it when the signal
+                         * interrupted kernel_syscall_sleep (TTY/pipe block).
+                         */
+                        process_kernel_sleep_interrupted_backup_frame(current);
 
                         /*
                          * Always redirect syscall_frame to the handler so
@@ -851,8 +1168,19 @@ void handle_signals(void)
                         process_apply_syscall_frame_to_task(
                             &current->task, &current->syscall_frame,
                             0);
+                        /*
+                         * syscall_frame now mirrors the handler (Class B /
+                         * leak-repair safety). It must NOT stay "fresh" as a
+                         * syscall interrupt site: a later handle_signals()
+                         * fill would save rdi=signum + rip=handler as the
+                         * interrupted context.
+                         */
+                        current->syscall_frame_fresh = 0;
                         restore_user_fs_base();
+                        signals_apply_handler_mask(
+                            current, sig, current->signal_sa_flags[sig]);
                         process_signal_enter_pending_set(current);
+                        process_signal_last_delivered_set(current, sig);
 
                         current->signal_pending &= ~SIGNAL_MASK(sig);
 

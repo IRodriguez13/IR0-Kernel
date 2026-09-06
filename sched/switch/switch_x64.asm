@@ -5,7 +5,7 @@ extern fork_ret_pre_regs
 extern fork_flow_set_tf
 extern fork_restore_audit
 extern _etext
-extern arch_report_bad_kernel_ret_rip
+extern switch_report_bad_ret
 extern process_after_task_save
 
 ; Single source: includes/ir0/asm_offsets.h ↔ asm_offsets.inc
@@ -163,7 +163,7 @@ switch_context_x64:
     push rsi
     mov rsi, rdi
     mov rdi, rax
-    call arch_report_bad_kernel_ret_rip
+    call switch_report_bad_ret
     pop rsi
     pop rdi
     mov rax, [rsp]
@@ -199,13 +199,27 @@ switch_context_x64:
 
     mov r11, rsi
 
-    ; CR3 before GPR restore: rax is scratch until task->rax is loaded below.
-    mov rax, [r11 + TASK_ARCH_CR3_OFFSET]
-    mov cr3, rax
-
+    ;
+    ; CR3 vs stack ordering (x86-64):
+    ; Loading next CR3 while RSP still points at prev's kstack requires every
+    ; process mm to map every kstack (shared kernel-half PDPT). When that link
+    ; is missing, the next push #PF → #DF (seen post-ash in kernel_ret FSBASE
+    ; scratch pushes). For ring-0 resume, switch to next's kstack first while
+    ; prev CR3 still maps it, then load next CR3.
+    ;
     movzx eax, word [r11 + 0x90]
     test al, 3
-    jnz .user_iretq_resume
+    jnz .load_user_cr3
+
+    mov rsp, [r11 + 0x70]
+    mov rax, [r11 + TASK_ARCH_CR3_OFFSET]
+    mov cr3, rax
+    jmp .kernel_ret_resume
+
+.load_user_cr3:
+    mov rax, [r11 + TASK_ARCH_CR3_OFFSET]
+    mov cr3, rax
+    jmp .user_iretq_resume
 
     ; Ring-0 resume (blocked in kernel syscall path): ret to saved RIP/RSP.
 .kernel_ret_resume:
@@ -242,6 +256,8 @@ switch_context_x64:
     lea r8, [rel _etext]
     cmp r10, r8
     jae .bad_ret_rip
+    ; RSP already points at next kstack (see .load_only). Reload from the
+    ; task slot before the final jump so a repaired frame stays coherent.
     mov r8, [r11 + 0x48]
     mov rsp, [r11 + 0x70]
     mov r11, r8
@@ -250,7 +266,7 @@ switch_context_x64:
 .bad_ret_rip:
     mov rdi, r10
     mov rsi, r11
-    call arch_report_bad_kernel_ret_rip
+    call switch_report_bad_ret
     ; fall through unreachable (report panics)
 
 .user_iretq_resume:
@@ -316,7 +332,7 @@ switch_context_x64:
 .bad_user_iret_frame:
     mov rdi, [r11 + TASK_ARCH_RIP_OFFSET]
     mov rsi, r11
-    call arch_report_bad_kernel_ret_rip
+    call switch_report_bad_ret
 
 .skip:
     ret

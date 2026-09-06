@@ -127,3 +127,13 @@ static inline void syscall_frame_set_arg(arch_syscall_frame_t *sf,
 		break;
 	}
 }
+
+/*
+ * Frame capture records RIP after the 2-byte x86-64 syscall insn (0f 05).
+ * SA_RESTART must rewind to the insn, not return with rax=__NR_* as result.
+ */
+static inline void syscall_frame_arm_restart(arch_syscall_frame_t *sf)
+{
+	if (sf && sf->rip >= 2)
+		sf->rip -= 2;
+}

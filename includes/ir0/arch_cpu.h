@@ -22,6 +22,10 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ir0/arch_config.h>
+#include <ir0/early_clock.h>
+#include <ir0/multiboot.h>
+#include <ir0/tlb.h>
+#include <ir0/tls.h>
 
 typedef uintptr_t arch_addr_t;
 typedef uintptr_t arch_size_t;
@@ -223,11 +227,14 @@ uint32_t get_cpu_clflush_size(void);
 void switch_to_user(arch_addr_t entry, arch_addr_t stack);
 
 /*
- * switch_to_user_task - Enter ring 3 with full task register state.
- * Linux ret_from_fork analogue for syscall-block resume paths.
+ * switch_to_user_task — portable contract in context.h; arch backends implement.
  */
 struct task;
 void switch_to_user_task(const struct task *task);
+
+/* Reapply syscall_frame GPRs before ring-3 iretq when task.arch has kstack residue. */
+struct process;
+void arch_prepare_task_user_iretq(struct process *proc);
 
 /*
  * first_switch_to - First transfer from idle/boot into @next.
@@ -237,29 +244,14 @@ void switch_to_user_task(const struct task *task);
 struct process;
 void first_switch_to(struct process *next);
 
-/*
- * set_fs_base - Install the running thread's TLS base.
- * x86-64: IA32_FS_BASE. ARM64: TPIDR_EL0. Prefer set_tls() from portable code.
- */
-void set_fs_base(uint64_t base);
-
-/* Re-apply current_process TLS before returning to userspace. */
-void restore_user_fs_base(void);
+/* TLS: tls.h.  MM activate / TLB: tlb.h. */
 
 /*
- * set_tls - Portable TLS base install (x86: FS base; ARM64: TPIDR_EL0).
+ * irq_save/restore — prefer cpu.h in new portable code; re-declared here for
+ * legacy includes of arch_cpu.h (do not #include cpu.h here — cpuid signature).
  */
-static inline void set_tls(uint64_t base)
-{
-	set_fs_base(base);
-}
-
-/*
- * tls_invalidate - Drop cached TLS view after task switch prep (no-op MSR).
- */
-static inline void tls_invalidate(void)
-{
-}
+unsigned long irq_save(void);
+void irq_restore(unsigned long flags);
 
 /*
  * W10 multi-arch note (2026-07):
@@ -270,29 +262,6 @@ static inline void tls_invalidate(void)
  * - Trap/context: x86-64 IDT + switch_x64.asm stay arch-local; portable code
  *   uses simple facades (switch_to, irq_save, …) — no CPUID in kernel/syscalls.
  */
-
-/**
- * Activate address-space root (x86: CR3; ARM64: TTBR0). Neutral name — no ISA in callers.
- */
-void mm_activate(uintptr_t root);
-
-/** Read current address-space root from hardware. */
-uintptr_t mm_current_root(void);
-
-/** Invalidate one VA in the local TLB. */
-void tlb_invalidate_page(uintptr_t va);
-
-/** Invalidate all non-global TLB entries (local CPU). */
-void tlb_invalidate_all(void);
-
-/**
- * Save IRQ state and disable IRQs. Restore with irq_restore.
- * Portable replacement for pushfq/cli copies in kernel/sched.
- */
-unsigned long irq_save(void);
-
-/** Restore IRQ state from irq_save. */
-void irq_restore(unsigned long flags);
 
 /**
  * MM control registers behind a neutral API (W10b partial).
@@ -396,16 +365,6 @@ void interrupt_init(void);
 void late_init(void);
 
 /**
- * Get boot parameters
- */
-void *get_boot_params(void);
-
-/**
- * Set boot parameters from architecture-specific entry code.
- */
-void set_boot_params(void *params);
-
-/**
  * Get command line arguments
  */
 const char *get_cmdline(void);
@@ -419,22 +378,6 @@ const char *get_arch_name(void);
  * uname(2) machine field (x86_64 / aarch64 / …).
  */
 const char *get_arch_uname_machine(void);
-
-typedef enum
-{
-	ARCH_CLOCK_UNAVAILABLE = 0,
-	ARCH_CLOCK_RAW = 1,
-	ARCH_CLOCK_CALIBRATED = 2,
-	ARCH_CLOCK_MONOTONIC = 3
-} arch_clock_quality_t;
-
-/*
- * Earliest architecture counter. RAW means ordered ticks only: callers must
- * not render duration until the common monotonic clock is calibrated.
- */
-int arch_early_clock_available(void);
-uint64_t arch_early_clock_read(void);
-arch_clock_quality_t arch_early_clock_quality(void);
 
 /**
  * Get architecture bits (32/64)

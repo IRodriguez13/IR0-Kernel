@@ -39,8 +39,8 @@
 #include <ir0/process.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ir0/arch_port.h>
-#include <ir0/arch_cpu.h>
-#include <ir0/sched.h>
+#include <ir0/cpu.h>
+#include <ir0/context.h>
 #include <ir0/sysv_shm.h>
 #include <ir0/memfd.h>
 #include <ir0/eventfd.h>
@@ -188,6 +188,7 @@ WRAP3(sys_setresuid, uid_t, uid_t, uid_t)
 WRAP3(sys_getresuid, uid_t *, uid_t *, uid_t *)
 WRAP3(sys_setresgid, gid_t, gid_t, gid_t)
 WRAP3(sys_getresgid, gid_t *, gid_t *, gid_t *)
+WRAP2(sys_tkill, pid_t, int)
 WRAP3(sys_tgkill, pid_t, pid_t, int)
 WRAP2(sys_arch_prctl, int, unsigned long)
 WRAP1(sys_set_tid_address, int *)
@@ -364,6 +365,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_kill]           = wrap_sys_kill;
   syscall_table_rw[__NR_reboot]         = wrap_sys_reboot;
   syscall_table_rw[__NR_kexec_load]     = wrap_sys_kexec_load;
+  syscall_table_rw[__NR_tkill]          = wrap_sys_tkill;
   syscall_table_rw[__NR_tgkill]         = wrap_sys_tgkill;
   syscall_table_rw[__NR_getdents]       = wrap_sys_getdents;
   syscall_table_rw[__NR_getcwd]         = wrap_sys_getcwd;
@@ -408,6 +410,7 @@ void syscall_table_init(void)
   syscall_table_rw[__NR_newfstatat]     = wrap_sys_newfstatat;
   syscall_table_rw[__NR_futex]          = wrap_sys_futex;
   syscall_table_rw[__NR_clock_gettime]  = wrap_sys_clock_gettime;
+  syscall_table_rw[__NR_clock_gettime64] = wrap_sys_clock_gettime;
   syscall_table_rw[__NR_set_robust_list] = wrap_sys_set_robust_list;
   syscall_table_rw[__NR_get_robust_list] = wrap_sys_get_robust_list;
   syscall_table_rw[__NR_getrandom]      = wrap_sys_getrandom;
@@ -498,6 +501,17 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
     process_capture_syscall_frame(current_process);
 
   if (current_process && current_process->mode == USER_MODE)
+    current_process->syscall_entry_nr = (uint32_t)syscall_num;
+
+  /*
+   * Linux: longjmp from a handler skips rt_sigreturn. Drop stale kernel
+   * sigframe bookkeeping when user SP has left the handler stack.
+   */
+  if (current_process && current_process->mode == USER_MODE &&
+      syscall_num != __NR_rt_sigreturn)
+    signals_try_abandon_sigframe(current_process);
+
+  if (current_process && current_process->mode == USER_MODE)
   {
     fork_ret_first_syscall_entry(syscall_num,
                                  process_syscall_ip(current_process),
@@ -577,10 +591,10 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
      * Iretq into the handler instead (restorer → rt_sigreturn later).
      */
     if (current_process && current_process->mode == USER_MODE &&
-        current_process->saved_context &&
-        current_process->signal_enter_pending)
+        process_saved_context_present(current_process) &&
+        process_signal_enter_pending(current_process))
     {
-      current_process->signal_enter_pending = 0;
+      process_signal_enter_pending_clear(current_process);
       process_restore_user_task_segments(current_process);
       current_process->irq_frame_saved = 0;
       current_process->coop_resched_resume = 0;
@@ -629,6 +643,9 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
    */
   if (current_process && current_process->mode == USER_MODE)
     process_restore_user_task_segments(current_process);
+
+  if (current_process && current_process->mode == USER_MODE)
+    signal_note_syscall_return(current_process, r);
 
   return r;
 }

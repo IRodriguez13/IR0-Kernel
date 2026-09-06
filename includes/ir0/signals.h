@@ -77,6 +77,7 @@ typedef struct
 #define SIG_ERR ((void (*)(int))-1) /* Error return */
 
 #define SA_SIGINFO    4
+#define SA_NODEFER    0x40000000U
 #define SA_RESTORER   0x04000000U
 #define SA_RESTART    0x10000000U
 #define SA_RESETHAND  0x80000000U
@@ -141,7 +142,11 @@ struct sigframe {
     int signum;               /* Signal number */
     int __pad0;
     struct sigcontext ctx;    /* Saved CPU context */
-    uint64_t __align16;       /* pad to multiple of 16 */
+    /*
+     * Pre-delivery signal_mask (Linux ucontext uc_sigmask role, compact).
+     * rt_sigreturn restores this; also used if userspace abandons the frame.
+     */
+    uint64_t oldmask;
 };
 
 _Static_assert((sizeof(struct sigframe) % 16) == 0,
@@ -207,6 +212,16 @@ int signals_has_user_handler(process_t *p, int sig);
 /** POSIX exec: reset handlers, mask, pending; drop saved sigreturn context. */
 void signals_reset_on_exec(process_t *p);
 
+/** Restore process signal_mask after rt_sigreturn (paired with delivery). */
+void signals_on_sigreturn(process_t *p);
+
+/**
+ * Linux-like: if userspace left the handler stack without rt_sigreturn
+ * (e.g. longjmp), drop kernel sigframe bookkeeping. Call on syscall entry
+ * except rt_sigreturn itself.
+ */
+void signals_try_abandon_sigframe(process_t *p);
+
 /*
  * Deliver @sig synchronously from a user #PF IRQ @frame (isr_common_stub layout).
  * @fault_addr is CR2 (stored in siginfo for SA_SIGINFO).
@@ -214,6 +229,12 @@ void signals_reset_on_exec(process_t *p);
  */
 int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 				   uint64_t fault_addr);
+
+/*
+ * While a user handler runs with saved sigreturn context, keep the syscall
+ * return register (x0/rax) in sync with nested syscalls — never the signum.
+ */
+void signal_note_syscall_return(process_t *p, int64_t ret);
 
 static inline uint32_t ir0_sigset_low32(const sigset_t *set)
 {

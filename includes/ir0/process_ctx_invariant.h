@@ -23,7 +23,7 @@
 /* Match includes/ir0/abi/mmap_contract.h — duplicated for host-safe headers. */
 #ifndef IR0_USER_STACK_TOP
 #define IR0_USER_STACK_TOP  0x7FFFF000ULL
-#define IR0_USER_STACK_SIZE 0x80000ULL
+#define IR0_USER_STACK_SIZE 0x100000ULL
 #define IR0_USER_STACK_BASE (IR0_USER_STACK_TOP - IR0_USER_STACK_SIZE)
 #endif
 

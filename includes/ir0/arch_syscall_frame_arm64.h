@@ -155,3 +155,8 @@ static inline void syscall_frame_set_arg(arch_syscall_frame_t *sf,
 		break;
 	}
 }
+
+static inline void syscall_frame_arm_restart(arch_syscall_frame_t *sf)
+{
+	(void)sf;
+}

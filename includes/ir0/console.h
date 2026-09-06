@@ -123,7 +123,20 @@ int ir0_console_fill_termios(struct ir0_termios *out);
 int ir0_console_set_termios(const struct ir0_termios *in);
 void ir0_console_reset_cooked_echo(void);
 void ir0_console_flush_input(void);
+/* Userspace TCFLSH: drop pending LD input and resync the PS/2 decoder so a
+ * session ended mid-modifier (SEGV/logout) does not leak Shift/Ctrl/E0. */
+void ir0_console_flush_input_session(void);
+/*
+ * Linux-like console hygiene after a signal hits stdin read(2).
+ * IR0 adapts to BusyBox/GNU userspace — not the other way around.
+ *  SIGINT/SIGQUIT: flush raw/canonical partial + resync PS/2 mods.
+ *  SIGCHLD/other: resync mods only (EINTR, no spurious EOF).
+ */
+void ir0_console_after_tty_read_signal(int signo);
+/* Ash longjmp without rt_sigreturn (SIGFRAME_ABANDON). */
+void ir0_console_after_signal_abandon(void);
 int ir0_console_set_fg_pgid(int32_t pgid);
+void ir0_console_clear_fg_pgid(int32_t pgid);
 /* TIOCSCTTY on the console: session-leader check + foreground pgrp bind. */
 int ir0_console_ioctl_set_ctty(void);
 int32_t ir0_console_get_fg_pgid(void);

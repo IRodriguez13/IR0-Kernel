@@ -59,6 +59,29 @@ void signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
 #endif
 }
 
+void signal_fill_syscall_frame_from_sigcontext(struct arch_syscall_frame *sf,
+						    const struct sigcontext *ctx)
+{
+	if (!sf || !ctx)
+		return;
+
+	sf->rip = ctx->rip;
+	sf->rsp = ctx->rsp;
+	sf->rflags = ctx->rflags ? ctx->rflags : (uint64_t)RFLAGS_IF;
+	sf->rdi = ctx->rdi;
+	sf->rsi = ctx->rsi;
+	sf->rdx = ctx->rdx;
+	sf->r10 = ctx->r10;
+	sf->r8 = ctx->r8;
+	sf->r9 = ctx->r9;
+	sf->rbx = ctx->rbx;
+	sf->rbp = ctx->rbp;
+	sf->r12 = ctx->r12;
+	sf->r13 = ctx->r13;
+	sf->r14 = ctx->r14;
+	sf->r15 = ctx->r15;
+}
+
 void signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
 						const uint64_t *frame)
 {

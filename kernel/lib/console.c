@@ -135,6 +135,12 @@ int ir0_console_set_fg_pgid(int32_t pgid)
 	return 0;
 }
 
+void ir0_console_clear_fg_pgid(int32_t pgid)
+{
+	if (pgid > 1 && console_fg_pgid == pgid)
+		console_fg_pgid = 0;
+}
+
 int ir0_console_ioctl_set_ctty(void)
 {
 	int32_t pgid;
@@ -557,6 +563,7 @@ void ir0_console_keypress(char c)
 		if ((unsigned char)nc == vintr)
 		{
 			canon_line_len = 0;
+			input_kbd_resync_modifiers();
 			tty_deliver_sig(SIGINT);
 			/*
 			 * Never sched_schedule_next() here: keypress runs under
@@ -568,6 +575,7 @@ void ir0_console_keypress(char c)
 		if ((unsigned char)nc == vquit)
 		{
 			canon_line_len = 0;
+			input_kbd_resync_modifiers();
 			tty_deliver_sig(SIGQUIT);
 			(void)ir0_console_wake_readers();
 			return;
@@ -624,12 +632,20 @@ int64_t tty_read_kernel(char *kbuf, size_t count, int nonblock)
 
 	for (;;)
 	{
-		if (current_process && signals_should_handle_on_run(current_process))
-			return -EINTR;
-
+		/*
+		 * Drain ready input before honouring a pending signal. Otherwise a
+		 * sticky SIGCHLD (runsv/logger) turns every completed canon line into
+		 * EINTR and getty never leaves the username read — no Password:
+		 * after firstboot.
+		 */
 		if (canon_eof_pending && canon_readq_pos >= canon_readq_len)
 		{
 			canon_eof_pending = 0;
+			klog_info_fmt("TTY",
+				      "TTY_EOF pid=%x (VEOF empty line)",
+				      current_process
+					  ? (unsigned)((uint32_t)current_process->task.pid)
+					  : 0u);
 			return 0;
 		}
 
@@ -639,34 +655,37 @@ int64_t tty_read_kernel(char *kbuf, size_t count, int nonblock)
 		if (bytes_read > 0)
 			return (int64_t)bytes_read;
 
+		if (!tty_icanon_on())
+		{
+			while (bytes_read < count && input_kbd_has_data())
+			{
+				char c = input_kbd_get();
+
+				c = tty_normalize_input(c);
+				if (c == 0)
+					continue;
+
+				kbuf[bytes_read++] = c;
+				if (tty_termios.c_cc[IR0_CC_VMIN] == 0)
+					return (int64_t)bytes_read;
+				if (bytes_read >= (size_t)tty_termios.c_cc[IR0_CC_VMIN])
+					return (int64_t)bytes_read;
+			}
+
+			if (bytes_read > 0)
+				return (int64_t)bytes_read;
+		}
+
+		if (current_process && signals_should_handle_on_run(current_process))
+			return -EINTR;
+
 		if (tty_icanon_on())
 		{
 			if (nonblock)
 				return -EAGAIN;
 			(void)tty_sleep_for_input();
-			if (current_process &&
-			    signals_should_handle_on_run(current_process))
-				return -EINTR;
 			continue;
 		}
-
-		while (bytes_read < count && input_kbd_has_data())
-		{
-			char c = input_kbd_get();
-
-			c = tty_normalize_input(c);
-			if (c == 0)
-				continue;
-
-			kbuf[bytes_read++] = c;
-			if (tty_termios.c_cc[IR0_CC_VMIN] == 0)
-				return (int64_t)bytes_read;
-			if (bytes_read >= (size_t)tty_termios.c_cc[IR0_CC_VMIN])
-				return (int64_t)bytes_read;
-		}
-
-		if (bytes_read > 0)
-			return (int64_t)bytes_read;
 
 		if (nonblock)
 			return -EAGAIN;
@@ -681,7 +700,12 @@ int64_t tty_read_kernel(char *kbuf, size_t count, int nonblock)
 			 * tenths of a second then return 0.
 			 */
 			if (vmin == 0 && vtime == 0)
+			{
+				if (current_process &&
+				    signals_should_handle_on_run(current_process))
+					return -EINTR;
 				return 0;
+			}
 			if (vmin == 0 && vtime > 0)
 			{
 				uint64_t now = clock_get_uptime_milliseconds();
@@ -1054,4 +1078,43 @@ int ir0_console_set_termios(const struct ir0_termios *in)
 void ir0_console_flush_input(void)
 {
 	tty_flush_input();
+}
+
+void ir0_console_flush_input_session(void)
+{
+	static int resync_tag;
+
+	tty_flush_input();
+	/*
+	 * Only the momentary decoder state (mods + E0/E1), never the ring:
+	 * clearing bytes here races IRQ1 (login garbage), but a session that
+	 * ended with a modifier held would otherwise stick into the next
+	 * getty (wrong case / stray CSI on the first keystrokes).
+	 */
+	input_kbd_resync_modifiers();
+	if (!resync_tag)
+	{
+		resync_tag = 1;
+		klog_notice_fmt("TTY", "KBD_STATE_RESYNC (session flush)");
+	}
+}
+
+void ir0_console_after_tty_read_signal(int signo)
+{
+	/*
+	 * Decoder modifier state (Ctrl/Shift/E0) must not leak across signal
+	 * boundaries — stock ash, bash, and getty assume Linux PS/2 behaviour.
+	 */
+	input_kbd_resync_modifiers();
+	if (signo == SIGINT || signo == SIGQUIT)
+		tty_flush_input();
+}
+
+void ir0_console_after_signal_abandon(void)
+{
+	/*
+	 * BusyBox ash: raise_interrupt() longjmps without rt_sigreturn
+	 * (SIGFRAME_ABANDON). Same hygiene as VINTR on a cooked tty.
+	 */
+	ir0_console_after_tty_read_signal(SIGINT);
 }

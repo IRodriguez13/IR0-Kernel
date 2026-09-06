@@ -3,5 +3,8 @@
 
 #include <ir0/switch.h>
 
-/* ISA-private; only sched/switch dispatcher and arch_switch.c. */
+/*
+ * ISA-private context switch body. Only sched/switch/arch_context_switch.c and
+ * per-ISA arch_switch.c under arch/ may include this header (arch-guard).
+ */
 void arch_switch_to(task_t *prev, task_t *next);

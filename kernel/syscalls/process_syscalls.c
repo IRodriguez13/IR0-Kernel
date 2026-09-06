@@ -26,6 +26,8 @@
 #include <ir0/debug_runtime.h>
 #include <ir0/ktm/klog.h>
 #include <ir0/task_ops.h>
+#include <ir0/signal_irq.h>
+#include <ir0/signal_syscall_resume.h>
 #include <string.h>
 
 #include <ir0/oops.h>
@@ -52,6 +54,7 @@
 #include <ir0/kexec.h>
 #include <ir0/acpi_pm.h>
 #include <ir0/mm_port.h>
+#include <ir0/console.h>
 
 #define ARCH_SET_FS 0x1002
 #define ARCH_GET_FS 0x1003
@@ -402,12 +405,6 @@ int64_t sys_rt_sigaction(int signum, const struct sigaction *act,
 		current_process->signal_sa_flags[signum] = (uint32_t)kact.sa_flags;
 		current_process->signal_restorer[signum] =
 			(kact.sa_flags & SA_RESTORER) ? kact.sa_restorer : NULL;
-#if defined(SIGNAL_DELIVER_LOG) && SIGNAL_DELIVER_LOG
-		if (signum == SIGSEGV)
-		{
-			klog_debug_fmt("SIGNAL", "[SIGNAL][REG] pid=%x sig=SIGSEGV handler=%llx flags=%x proc_mask=%x", (unsigned)((uint32_t)current_process->task.pid), (unsigned long long)((uint64_t)(uintptr_t)kact.sa_handler), (unsigned)((uint32_t)kact.sa_flags), (unsigned)(current_process->signal_mask));
-		}
-#endif
 	}
 
 	return 0;
@@ -521,14 +518,17 @@ int64_t sys_rt_sigsuspend(const sigset_t *mask, size_t sigsetsize)
 
 	for (;;)
 	{
+		uint32_t catchable;
+
 		/*
 		 * prepare_to_wait: mark BLOCKED before testing signal_pending,
 		 * so a signal delivered between the test and the sleep sets
 		 * READY instead of being clobbered (Linux wait_event order).
 		 */
 		process_set_sched_state(current_process, PROCESS_BLOCKED);
-		if (current_process->signal_pending &
-		    ~current_process->signal_mask)
+		catchable = current_process->signal_pending &
+			    ~current_process->signal_mask;
+		if (catchable || process_has_zombie_child(current_process))
 		{
 			process_set_sched_state(current_process, PROCESS_READY);
 			break;
@@ -545,9 +545,13 @@ int64_t sys_rt_sigsuspend(const sigset_t *mask, size_t sigsetsize)
 			 * BLOCKED: watching only the state left the task
 			 * asleep with its wakeup already spent. Seen as ash
 			 * blocked (state S) holding zombie pipeline stages.
+			 *
+			 * Also wake when a zombie child exists even if SIGCHLD
+			 * was consumed early — ash reaps after sigsuspend.
 			 */
-			if (current_process->signal_pending &
-			    ~current_process->signal_mask)
+			catchable = current_process->signal_pending &
+				    ~current_process->signal_mask;
+			if (catchable || process_has_zombie_child(current_process))
 				break;
 			ir0_clock_wait_service_runqueue();
 			if (current_process->state != PROCESS_BLOCKED)
@@ -567,6 +571,32 @@ int64_t sys_rt_sigsuspend(const sigset_t *mask, size_t sigsetsize)
 	 */
 	current_process->signal_mask = saved_mask;
 	return -EINTR;
+}
+
+/*
+ * sys_tkill — Linux tkill(2) (x86-64 NR 200). musl raise()/abort() use this
+ * rather than kill(2) or tgkill(2). Without it, abort() sees -ENOSYS and falls
+ * through to a_crash() (hlt) → #GP delivered as SIGSEGV.
+ */
+int64_t sys_tkill(pid_t tid, int sig)
+{
+	process_t *p;
+
+	if (!current_process)
+		return -ESRCH;
+	if (sig < 0 || sig >= _NSIG)
+		return -EINVAL;
+	if (tid <= 0)
+		return -EINVAL;
+
+	p = process_find_by_pid(tid);
+	if (!p)
+		return -ESRCH;
+	if (sig == 0)
+		return 0;
+	if (send_signal(tid, sig) != 0)
+		return -ESRCH;
+	return 0;
 }
 
 int64_t sys_tgkill(pid_t tgid, pid_t tid, int sig)
@@ -1435,14 +1465,14 @@ int64_t sys_wait4(pid_t pid, int *status, int options, void *rusage)
     process_clear_in_thread_syscall_block(current_process);
     wait_pid = (pid_t)process_syscall_arg(current_process, 0);
     wait_opts = (int)process_syscall_arg(current_process, 2);
-    current_process->wait_options = wait_opts;
+    process_wait_options_set(current_process, wait_opts);
     pid = wait_pid;
     options = wait_opts;
   }
 
   if (IR0_DEBUG_WAIT)
   {
-    klog_debug_fmt("WAIT", "[WAIT4_WNOHANG_AUDIT] wait_begin parent=%x target=%x options=%x wait_target_pid=%x wait_options=%x wait_resume_child_pid=%x syscall_resume_rax=%llx", (unsigned)((uint32_t)current_process->task.pid), (unsigned)((uint32_t)pid), (unsigned)((uint32_t)options), (unsigned)((uint32_t)current_process->wait_target_pid), (unsigned)((uint32_t)current_process->wait_options), (unsigned)((uint32_t)current_process->wait_resume_child_pid), (unsigned long long)(current_process->syscall_resume_rax));
+    klog_debug_fmt("WAIT", "[WAIT4_WNOHANG_AUDIT] wait_begin parent=%x target=%x options=%x wait_target_pid=%x wait_options=%x wait_resume_child_pid=%x syscall_resume_rax=%llx", (unsigned)((uint32_t)current_process->task.pid), (unsigned)((uint32_t)pid), (unsigned)((uint32_t)options), (unsigned)((uint32_t)process_wait_target_pid(current_process)), (unsigned)((uint32_t)process_wait_options(current_process)), (unsigned)((uint32_t)process_wait_resume_child_pid(current_process)), (unsigned long long)(current_process->syscall_resume_rax));
     klog_debug_fmt("WAIT", "[WAIT_EXIT_AUDIT][sys_wait4] entry parent_pid=%x wait_pid=%x status_ptr=%llx options=%llx", (unsigned)((uint32_t)current_process->task.pid), (unsigned)((uint32_t)pid), (unsigned long long)((uint64_t)(uintptr_t)status), (unsigned long long)((uint64_t)(unsigned int)options));
   }
 
@@ -1458,7 +1488,7 @@ int64_t sys_wait4(pid_t pid, int *status, int options, void *rusage)
 
     if (IR0_DEBUG_WAIT)
     {
-      klog_debug_fmt("WAIT", "[WAIT4_WNOHANG_AUDIT] wait_return parent=%x ret=%llx wait_resume_child_pid=%x syscall_resume_rax=%llx status_write=%s", (unsigned)((uint32_t)current_process->task.pid), (unsigned long long)((uint64_t)ret), (unsigned)((uint32_t)current_process->wait_resume_child_pid), (unsigned long long)(current_process->syscall_resume_rax), ret > 0 ? "yes" : "no");
+      klog_debug_fmt("WAIT", "[WAIT4_WNOHANG_AUDIT] wait_return parent=%x ret=%llx wait_resume_child_pid=%x syscall_resume_rax=%llx status_write=%s", (unsigned)((uint32_t)current_process->task.pid), (unsigned long long)((uint64_t)ret), (unsigned)((uint32_t)process_wait_resume_child_pid(current_process)), (unsigned long long)(current_process->syscall_resume_rax), ret > 0 ? "yes" : "no");
       klog_debug_fmt("WAIT", "[WAIT_EXIT_AUDIT][sys_wait4] return parent_pid=%x ret=%llx", (unsigned)((uint32_t)current_process->task.pid), (unsigned long long)((uint64_t)ret));
     }
     fase50_trace_syscall_proc("sys_wait4-return", current_process);
@@ -1675,8 +1705,6 @@ int64_t sys_futex(int *uaddr, int op, int val, const struct timespec *timeout,
  */
 int64_t sys_getrandom(void *buf, size_t buflen, unsigned int flags)
 {
-  uint8_t *p;
-  size_t i;
   uint64_t seed;
 
   (void)flags;
@@ -1693,11 +1721,26 @@ int64_t sys_getrandom(void *buf, size_t buflen, unsigned int flags)
   seed = clock_get_uptime_milliseconds() ^
          ((uint64_t)current_process->task.pid << 32);
 
-  p = (uint8_t *)buf;
-  for (i = 0; i < buflen; i++)
   {
-    seed = seed * 6364136223846793005ULL + 1;
-    p[i] = (uint8_t)(seed >> 33);
+    uint8_t kchunk[256];
+    size_t done = 0;
+
+    while (done < buflen)
+    {
+      size_t chunk = buflen - done;
+      size_t j;
+
+      if (chunk > sizeof(kchunk))
+        chunk = sizeof(kchunk);
+      for (j = 0; j < chunk; j++)
+      {
+        seed = seed * 6364136223846793005ULL + 1;
+        kchunk[j] = (uint8_t)(seed >> 33);
+      }
+      if (copy_to_user((uint8_t *)buf + done, kchunk, chunk) != 0)
+        return -EFAULT;
+      done += chunk;
+    }
   }
 
   return (int64_t)buflen;
@@ -1758,13 +1801,17 @@ int64_t sys_getrlimit(unsigned int resource, void *rlim)
  *
  * Linux x86-64: musl __restore_rt is just
  *   mov $__NR_rt_sigreturn, %eax; syscall
- * with no sigcontext* in rdi. Requiring a valid user pointer here made
- * rt_sigreturn return -EFAULT into the trampoline → SEGV (addr≈0x79) after
- * BusyBox ping's SIGALRM sendping handler.
+ * with no sigcontext* in rdi. The kernel finds the rt_sigframe from the
+ * user stack pointer (after the handler's `ret` into the restorer, RSP
+ * points at our struct sigframe). Prefer that user copy; fall back to the
+ * kernel cache only if the stack frame is unreadable.
  */
 int64_t sys_sigreturn(struct sigcontext *ctx)
 {
+  struct sigframe user_frame;
   struct sigcontext *restore_ctx;
+  uint64_t user_sp;
+  int from_user = 0;
 
   if (!current_process)
     return -ESRCH;
@@ -1772,36 +1819,124 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
   if (current_process->mode != USER_MODE)
     return 0;
 
-  /*
-   * Prefer the kernel copy from handle_signals(). Only fall back to a
-   * userspace pointer when that copy is missing (legacy/test callers).
-   */
-  restore_ctx = current_process->saved_context;
-  if (!restore_ctx)
+  user_sp = process_syscall_sp(current_process);
+  if (user_sp >= 0x400000UL &&
+      validate_userspace_buffer((const void *)(uintptr_t)user_sp,
+				sizeof(user_frame)) == 0 &&
+      copy_from_user(&user_frame, (const void *)(uintptr_t)user_sp,
+		     sizeof(user_frame)) == 0)
   {
-    if (!ctx ||
-        validate_userspace_buffer(ctx, sizeof(struct sigcontext)) != 0)
-      return -EFAULT;
-    restore_ctx = ctx;
+    restore_ctx = &user_frame.ctx;
+    from_user = 1;
+  }
+  else
+  {
+    restore_ctx = process_saved_context_peek(current_process);
+    if (!restore_ctx)
+    {
+      if (!ctx ||
+          validate_userspace_buffer(ctx, sizeof(struct sigcontext)) != 0)
+        return -EFAULT;
+      restore_ctx = ctx;
+    }
+  }
+
+  process_saved_context_clear(current_process);
+  if (from_user)
+  {
+    current_process->signal_mask = (uint32_t)user_frame.oldmask;
+    current_process->signal_mask_saved_valid = 0;
+    current_process->signal_frame_sp = 0;
+  }
+  else
+    signals_on_sigreturn(current_process);
+
+  /*
+   * Blocked syscall interrupted by signal: resume from kernel_sleep_syscall_frame
+   * only. Do not task_load_sigcontext(restore_ctx) first — handler/stack ctx can
+   * carry rdi=signum and corrupt read(0) before the frame apply (Linux #PF cr2≈signum).
+   */
+  if (process_kernel_sleep_interrupted(current_process))
+  {
+    int delivered = process_signal_last_delivered(current_process);
+    int restart = 1;
+    uint64_t resume_rax;
+    const syscall_user_frame_t *block_sf =
+        &current_process->kernel_sleep_syscall_frame;
+
+    if (delivered > 0 && delivered < _NSIG &&
+        !(current_process->signal_sa_flags[delivered] & SA_RESTART))
+      restart = 0;
+
+    /*
+     * SA_RESTART: re-enter at the musl syscall insn with the snapped block
+     * frame (rax still holds __NR_*). Using restore_ctx->rax == -EINTR here
+     * made read() return failure/EOF after SIGCHLD → false logout + tty corruption.
+     */
+    if (restart)
+    {
+      signal_resume_blocked_syscall_frame(
+          &current_process->syscall_frame, &resume_rax, block_sf, 1,
+          current_process->syscall_block_nr);
+    }
+    else
+    {
+      /*
+       * Linux: -EINTR with saved entry GPRs only — never merge handler
+       * sigcontext (rdi=signum clobbered read(0) → #PF, false ash EOF).
+       */
+      signal_resume_blocked_syscall_frame(
+          &current_process->syscall_frame, &resume_rax, block_sf, 0, 0);
+      if (signal_blocked_syscall_is_console_read(
+              current_process->syscall_block_nr,
+              (int64_t)block_sf->rdi) &&
+          delivered > 0)
+	ir0_console_after_tty_read_signal(delivered);
+    }
+
+    process_apply_syscall_frame_to_task(&current_process->task,
+                                        &current_process->syscall_frame,
+                                        resume_rax);
+    current_process->syscall_resume_rax = resume_rax;
+    current_process->syscall_frame_fresh = 1;
+    current_process->irq_frame_saved = 1;
+    current_process->coop_resched_resume = 0;
+    current_process->want_kernel_ret = 0;
+    current_process->kernel_syscall_sleep = 0;
+    process_kernel_sleep_interrupted_clear(current_process);
+    process_signal_enter_pending_clear(current_process);
+    process_signal_last_delivered_clear(current_process);
+    task_apply_user_segments(&current_process->task);
+    restore_user_fs_base();
+    switch_to_user_task(&current_process->task);
+    return 0;
   }
 
   task_load_sigcontext(&current_process->task, restore_ctx);
 
-  if (current_process->saved_context)
-  {
-    kfree(current_process->saved_context);
-    current_process->saved_context = NULL;
-  }
-
   /*
    * Must iretq into the restored frame. Sysret would return into the
    * restorer trampoline after the syscall insn, not to saved RIP.
+   *
+   * Drop any handler-redirected syscall_frame so USER_RESUME_KSTACK_GPR_LEAK
+   * / Class B cannot re-apply rdi=signum over the restored GPRs.
    */
+  /*
+   * Sync syscall_frame with the restored context so arch_switch leak-repair
+   * cannot re-apply a handler-redirected frame over clean GPRs.
+   */
+  signal_fill_syscall_frame_from_sigcontext(&current_process->syscall_frame,
+                                            restore_ctx);
+  process_apply_syscall_frame_to_task(&current_process->task,
+                                      &current_process->syscall_frame,
+                                      restore_ctx->rax);
   process_restore_user_task_segments(current_process);
   current_process->irq_frame_saved = 0;
   current_process->coop_resched_resume = 0;
   current_process->want_kernel_ret = 0;
-  current_process->signal_enter_pending = 0;
+  current_process->syscall_frame_fresh = 0;
+  process_signal_enter_pending_clear(current_process);
+  process_signal_last_delivered_clear(current_process);
   restore_user_fs_base();
   switch_to_user_task(&current_process->task);
   return 0;

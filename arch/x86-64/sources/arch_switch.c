@@ -28,6 +28,7 @@
 #include <config.h>
 #include <ir0/paging.h>
 #include <pmm.h>
+#include <mm/allocator.h>
 
 extern void switch_context_x64(task_t *prev, task_t *next);
 extern uint64_t get_current_page_directory(void);
@@ -44,19 +45,93 @@ static int arch_va_in_kstack_window(uint64_t v)
 }
 
 /*
- * Ring-3 resume invariant: no GPR handed to user may point into the kernel
- * stack window. A task saved mid-syscall keeps kernel callee-saved values;
- * any path that flips CS back to user without reapplying the entry frame
- * would leak them (user RBP in the kstack → write fault on a supervisor PTE).
+ * Pointer-class kernel VA (not a small syscall retval). Mid-syscall saves leave
+ * kmalloc identity (SIMPLE_HEAP) in callee-saved regs; the old check only
+ * caught the high kstack window, so heap RAX/RBP survived into ring-3
+ * (desk re-login: read() "returned" ~0x1a8120 → SEGV in ir0_read_line).
  */
-static int arch_task_user_gprs_leak_kstack(const task_t *t)
+static int arch_va_kernel_ptr_leak(uint64_t v)
 {
-	return arch_va_in_kstack_window(t->arch.rbp) ||
-	       arch_va_in_kstack_window(t->arch.rbx) ||
-	       arch_va_in_kstack_window(t->arch.r12) ||
-	       arch_va_in_kstack_window(t->arch.r13) ||
-	       arch_va_in_kstack_window(t->arch.r14) ||
-	       arch_va_in_kstack_window(t->arch.r15);
+	if (v == 0)
+		return 0;
+	if (arch_va_in_kstack_window(v))
+		return 1;
+	if (v >= (uint64_t)SIMPLE_HEAP_START && v < (uint64_t)SIMPLE_HEAP_END)
+		return 1;
+	if (v >= 0xffff800000000000ULL)
+		return 1;
+	return 0;
+}
+
+/*
+ * Ring-3 resume invariant: no GPR handed to user may be a kernel pointer.
+ * A task saved mid-syscall keeps kernel callee-saved values; any path that
+ * flips CS back to user without reapplying the entry frame would leak them.
+ */
+static int arch_task_user_gprs_leak(const task_t *t)
+{
+	return arch_va_kernel_ptr_leak(t->arch.rbp) ||
+	       arch_va_kernel_ptr_leak(t->arch.rbx) ||
+	       arch_va_kernel_ptr_leak(t->arch.r12) ||
+	       arch_va_kernel_ptr_leak(t->arch.r13) ||
+	       arch_va_kernel_ptr_leak(t->arch.r14) ||
+	       arch_va_kernel_ptr_leak(t->arch.r15) ||
+	       arch_va_kernel_ptr_leak(t->arch.rax);
+}
+
+/*
+ * Reapply syscall_frame before user iretq when callee-saved GPRs still carry
+ * kernel-stack residue.  Never run on kernel_syscall_sleep / want_kernel_ret:
+ * those tasks resume via kernel_ret inside the syscall handler, not iretq with
+ * task.arch GPRs (TTY read + SIGCHLD was spamming USER_RESUME_KSTACK_GPR_LEAK
+ * and occasionally pushing a user frame onto a kernel_ret waiter → login #PF).
+ */
+static int arch_will_resume_user_iretq(const process_t *proc, const task_t *task)
+{
+	if (!proc || !task || proc->mode != USER_MODE)
+		return 0;
+	if (proc->kernel_syscall_sleep || proc->want_kernel_ret)
+		return 0;
+	if (proc->irq_frame_saved)
+		return 0;
+	if ((proc->wait_blocked || proc->wait_target_pid != 0) &&
+	    proc->wait_resume_child_pid <= 0 && !proc->coop_resched_resume)
+		return 0;
+	if (!task_cs_is_user(task))
+		return 0;
+	if (!process_rip_in_user_range(task_get_ip(task)))
+		return 0;
+	return 1;
+}
+
+static void arch_repair_user_gprs_from_syscall_frame(process_t *proc,
+						     task_t *task)
+{
+	uint64_t rax;
+
+	if (!proc || !task || proc->mode != USER_MODE)
+		return;
+	if (proc->kernel_syscall_sleep || proc->want_kernel_ret)
+		return;
+	if (!proc->syscall_frame_fresh || !task_cs_is_user(task))
+		return;
+	if (!arch_task_user_gprs_leak(task))
+		return;
+
+	rax = proc->syscall_resume_rax;
+	if (rax == 0 && !arch_va_kernel_ptr_leak(task_get_retval(task)))
+		rax = task_get_retval(task);
+	klog_debug("CTX", "CLASSIFY USER_RESUME_KSTACK_GPR_LEAK");
+	process_apply_syscall_frame_to_task(task, &proc->syscall_frame, rax);
+}
+
+void arch_prepare_task_user_iretq(process_t *proc)
+{
+	if (!proc || proc->mode != USER_MODE)
+		return;
+	if (proc->kernel_syscall_sleep || proc->want_kernel_ret)
+		return;
+	arch_repair_user_gprs_from_syscall_frame(proc, &proc->task);
 }
 
 void set_current_kernel_stack(struct process *p)
@@ -85,6 +160,13 @@ static void arch_fixup_user_task_for_iretq(process_t *proc)
 	uint64_t rip;
 
 	if (!proc || proc->mode != USER_MODE)
+		return;
+
+	/*
+	 * Blocked syscalls (TTY read, pipe, poll) resume in-kernel via
+	 * kernel_ret — do not rewrite task.arch to the syscall entry frame.
+	 */
+	if (proc->kernel_syscall_sleep || proc->want_kernel_ret)
 		return;
 
 	/*
@@ -284,15 +366,15 @@ void arch_switch_to(task_t *prev, task_t *next)
             if (nrip < 0x00400000ULL || nrip > 0x00007FFFFFFFFFFFULL)
                 process_arm_kernel_syscall_sleep(next_proc);
         }
-        else if ((next_proc->kernel_syscall_sleep ||
+        else if (!next_proc->coop_resched_resume &&
+                 (next_proc->kernel_syscall_sleep ||
                   next_proc->syscall_resume_rax == 0) &&
                  !(next_proc->wait_blocked &&
                    next_proc->wait_resume_child_pid > 0))
         {
             /*
-             * Stale syscall-frame resume (wait4 placeholder rax=0, coop
-             * reschedule with rax=0). Continue in kernel instead of
-             * iretq with rax=0.
+             * Stale syscall-frame resume (wait4 placeholder rax=0). Continue
+             * in kernel instead of iretq with rax=0.
              *
              * Pipe/TTY/poll must NOT arm blocked_resume(rax=0); they use
              * process_arm_kernel_syscall_sleep only (portable kernel_ret),
@@ -302,6 +384,11 @@ void arch_switch_to(task_t *prev, task_t *next)
              * reader through the user-iret branch below, so it left the read
              * without retrying and reported a short read with bytes still
              * buffered (KTM ring: PIPE_WRITE then no further PIPE_READ).
+             *
+             * Skip when coop_resched_resume is set: that path armed a real
+             * syscall return (possibly after a TTY block that still had
+             * sticky kernel_syscall_sleep until clear_in_thread). Disarming
+             * it forced iretq with mid-syscall GPRs.
              */
             next_proc->irq_frame_saved = 0;
             next_proc->coop_resched_resume = 0;
@@ -360,6 +447,7 @@ void arch_switch_to(task_t *prev, task_t *next)
             process_apply_syscall_frame_to_task(&next_proc->task, frame,
                                                 resume_rax);
         }
+        arch_repair_user_gprs_from_syscall_frame(next_proc, next);
         next_proc->wait_status_ptr = NULL;
         next_proc->wait_blocked = 0;
         next_proc->wait_target_pid = 0;
@@ -367,6 +455,8 @@ void arch_switch_to(task_t *prev, task_t *next)
         next_proc->wait_resume_child_pid = 0;
         next_proc->irq_frame_saved = 0;
         next_proc->coop_resched_resume = 0;
+        next_proc->kernel_syscall_sleep = 0;
+        process_kernel_sleep_interrupted_clear(next_proc);
         if (next)
         {
 #if IR0_DEBUG_WAIT
@@ -523,10 +613,19 @@ void arch_switch_to(task_t *prev, task_t *next)
              * Cannot safely apply syscall_frame (placeholder rax=0). Demote
              * to USER CS so kernel_ret does not jmp to a user VA. Prefer
              * surviving over panic; formation is fixed in process_wait arm.
+             * Still reapply entry GPRs when the frame is fresh — demote alone
+             * left mid-syscall heap pointers in RAX/RBP.
              */
             klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_WAIT_DEMOTE");
             next_proc->irq_frame_saved = 0;
             process_restore_user_task_segments(next_proc);
+            if (next_proc->syscall_frame_fresh &&
+                process_rip_in_user_range(process_syscall_ip(next_proc)) &&
+                process_rip_in_user_range(process_syscall_sp(next_proc)))
+            {
+                process_apply_syscall_frame_to_task(&next_proc->task, sf,
+                                                    next_proc->syscall_resume_rax);
+            }
         }
         else if (process_rip_in_user_range(process_syscall_ip(next_proc)) &&
                  process_rip_in_user_range(process_syscall_sp(next_proc)) &&
@@ -534,26 +633,50 @@ void arch_switch_to(task_t *prev, task_t *next)
         {
             uint64_t rax = next_proc->syscall_resume_rax;
 
-            if (rax == 0)
+            if (rax == 0 && !arch_va_kernel_ptr_leak(task_get_retval(&next_proc->task)))
                 rax = task_get_retval(&next_proc->task);
             klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_REPAIR");
 			process_apply_syscall_frame_to_task(&next_proc->task, sf, rax);
-            if (next_proc->signal_enter_pending && next_proc->saved_context)
-                next_proc->signal_enter_pending = 0;
+            if (process_signal_enter_pending(next_proc) &&
+                process_saved_context_present(next_proc))
+                process_signal_enter_pending_clear(next_proc);
         }
         else
-            klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_UNREPAIRED");
+        {
+            /*
+             * Cannot repair: falling through used to panic as
+             * KERNEL_RET_BAD_RIP (ash banner → silent #DF in dump).
+             * Demote to user segments so iretq path runs instead.
+             */
+            klog_info("CTX", "CLASSIFY KERNEL_CS_USER_RIP_UNREPAIRED_DEMOTE");
+            next_proc->irq_frame_saved = 0;
+            process_restore_user_task_segments(next_proc);
+            if (next_proc->syscall_frame_fresh &&
+                process_rip_in_user_range(process_syscall_ip(next_proc)) &&
+                process_rip_in_user_range(process_syscall_sp(next_proc)))
+            {
+                process_apply_syscall_frame_to_task(&next_proc->task, sf,
+                                                    next_proc->syscall_resume_rax);
+            }
+        }
     }
 #endif
 
-    if (next && next_proc && next_proc->mode == USER_MODE &&
-        task_cs_is_user(next) && arch_task_user_gprs_leak_kstack(next))
+    /*
+     * switch_context_x64 loads next CR3 while still on prev's RSP. Keep
+     * shared kernel-half PDPT links (kstacks) fresh — asm bypasses
+     * load_page_directory().
+     */
+    if (next)
     {
-        klog_info("CTX", "CLASSIFY USER_RESUME_KSTACK_GPR_LEAK");
-        process_apply_syscall_frame_to_task(&next_proc->task,
-                                            &next_proc->syscall_frame,
-                                            task_get_retval(next));
+	uint64_t next_root = task_mm_root(next);
+
+	if (next_root)
+		paging_sync_kernel_half((uint64_t *)(uintptr_t)next_root);
     }
+
+    if (next_proc && next && arch_will_resume_user_iretq(next_proc, next))
+        arch_repair_user_gprs_from_syscall_frame(next_proc, next);
 
     switch_context_x64(prev, next);
 }

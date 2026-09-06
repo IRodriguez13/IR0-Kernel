@@ -33,6 +33,9 @@ void signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
 						    const arch_syscall_frame_t *sf,
 						    uint64_t retval);
 
+void signal_fill_syscall_frame_from_sigcontext(arch_syscall_frame_t *sf,
+						    const struct sigcontext *ctx);
+
 void signal_fill_sigcontext_from_irq_frame(struct sigcontext *ctx,
 						const uint64_t *frame);
 
@@ -47,6 +50,8 @@ void signal_redirect_irq_frame(uint64_t *frame, void *handler, int sig,
 /* Read user SP from an IRQ frame (for stack-window policy). */
 uint64_t irq_frame_sp(const uint64_t *frame);
 
-/* Async delivery: set IP/SP and first arg for a user signal handler. */
+/* Async delivery: set IP/SP and first arg for a user signal handler.
+ * Syscall return register (x0/rax) must stay 0 on entry; signum only in arg0.
+ */
 void signal_prepare_task_handler(task_t *t, void *handler, int sig,
 				      uint64_t frame_sp);

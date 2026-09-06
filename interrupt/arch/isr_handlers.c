@@ -22,9 +22,15 @@
 #include <ir0/debug_trap.h>
 #include <kernel/process.h>
 #include <ir0/sched.h>
+#include <ir0/cpu.h>
+#include <ir0/arch_io.h>
 #include <config.h>
 #include <ir0/input_backend.h>
+#include <mm/paging.h>
 #include <string.h>
+#if CONFIG_ENABLE_SOUND
+#include <ir0/sound_blaster.h>
+#endif
 #if CONFIG_ENABLE_NETWORKING
 #include <ir0/net.h>
 #endif
@@ -242,6 +248,24 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
         uint64_t fault_cs = stack[3];
         uint64_t fault_rsp = stack[5];
 
+	/*
+	 * Nested CPU exception while panicex is already running (typically
+	 * #DF after a primary #PF). Do not start a second panic banner that
+	 * greps as a fresh DOUBLE FAULT — halt quietly; primary frame kept.
+	 */
+	if (ir0_panic_in_progress())
+	{
+		klog_print("\nCLASSIFY NESTED_CPU_EXCEPTION_DURING_PANIC int=");
+		klog_hex64(interrupt_number);
+		klog_print(" rip=");
+		klog_hex64(fault_rip);
+		klog_print(" rsp=");
+		klog_hex64(fault_rsp);
+		klog_print("\nPRIMARY_FAULT_FRAME_KEPT\n");
+		for (;;)
+			cpu_halt();
+	}
+
         klog_debug_fmt("ISR", "[ISR] int=%llx current=%llx cr3=%llx rip=%llx cs=%llx rsp=%llx ss=%llx frame=%llx user=%llx", (unsigned long long)(interrupt_number), (unsigned long long)((uint64_t)(uintptr_t)current), (unsigned long long)(get_current_page_directory()), (unsigned long long)(fault_rip), (unsigned long long)(fault_cs), (unsigned long long)(fault_rsp), (unsigned long long)(stack[6]), (unsigned long long)((uint64_t)(uintptr_t)stack), (unsigned long long)(user));
 
         /*
@@ -301,7 +325,9 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
             gpf_audit_from_isr(stack);
         }
 
-        /* Map CPU exceptions to signals for user-space faults */
+        /* Map CPU exceptions to signals for user-space faults.
+	 * #DF (8) is never a recoverable userspace signal — IST fatal only.
+	 */
         switch (interrupt_number)
         {
             case 0:  /* Divide by Zero */
@@ -313,32 +339,43 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
             case 6:  /* Invalid Opcode */
                 signal_to_send = SIGILL;
                 break;
-            case 8:  /* Double Fault - severe error */
-                signal_to_send = SIGSEGV;
-                break;
             case 11: /* Segment Not Present */
                 signal_to_send = SIGSEGV;
                 break;
             case 13: /* General Protection Fault */
                 signal_to_send = SIGSEGV;
                 break;
-            case 14: /* Page Fault */
+            case 14: /* Page Fault — handled above; keep for clarity */
                 signal_to_send = SIGSEGV;
                 break;
             case 19: /* SIMD FPU Exception */
                 signal_to_send = SIGFPE;
+                break;
+            case 8:  /* Double Fault — fall through to kernel panic path */
+                signal_to_send = 0;
                 break;
             default:
                 signal_to_send = SIGSEGV;
                 break;
         }
 
-        /*
-         * User-mode exceptions are converted to signals.
-         * Kernel exceptions are fatal to avoid endless fault loops.
-         */
+	/*
+	 * Kernel CPU exceptions are fatal. User-mode faults become signals.
+	 * #DF (vector 8) always uses IST1 and never returns as SIGSEGV.
+	 */
         if (is_user_exception_frame(stack) && current && signal_to_send != 0)
         {
+	    uintptr_t cr2 = 0;
+
+	    if (interrupt_number == 14)
+		    cr2 = read_fault_address();
+	    ir0_log_user_fault_frame(
+		    (unsigned)interrupt_number, (unsigned long long)cr2,
+		    (unsigned long long)stack[1], (unsigned long long)stack[2],
+		    (unsigned long long)stack[3], (unsigned long long)stack[5],
+		    0, 0, 0,
+		    (unsigned)((uint32_t)current->task.pid),
+		    current->comm);
             klog_notice_fmt("ISR",
                             "user_exception int=%llx -> sig=%x pid=%x rip=%llx cs=%llx err=%llx",
                             (unsigned long long)interrupt_number,
@@ -353,26 +390,101 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
 
 	/*
 	 * Frame at stack: [int_no, err, RIP, CS, RFLAGS, RSP, SS].
-	 * Printing stack[0] as RIP was wrong (always showed the vector).
+	 * panicex(__func__) only names the reporter; FAULT FRAME is the cause.
 	 */
-	print("[ISR64] int=");
-	print_hex64(interrupt_number);
-	print(" current=");
-	print_hex64((uint64_t)(uintptr_t)current);
-	print(" user=");
-	print_hex((uintptr_t)is_user_exception_frame(stack));
-	print(" cs=");
-	print_hex64(stack[3]);
-	print(" rip=");
-	print_hex64(stack[2]);
-	print(" err=");
-	print_hex64(stack[1]);
-	print(" rsp=");
-	print_hex64(stack[5]);
-	print("\n");
+	{
+		uint64_t fault_err = stack[1];
+		uint64_t fault_rip = stack[2];
+		uint64_t fault_cs = stack[3];
+		uint64_t fault_rflags = stack[4];
+		uint64_t fault_rsp = stack[5];
+		uint64_t fault_ss = stack[6];
+		int stack_overflow = 0;
+		panic_level_t level = PANIC_KERNEL_BUG;
+		const char *vec_name = "CPU_EXCEPTION";
+		const char *msg;
 
-	panicex("Unhandled kernel CPU exception", PANIC_KERNEL_BUG, __FILE__,
-		__LINE__, __func__);
+		if (fault_rsp >= IR0_KSTACK_VA_BASE)
+		{
+			uint64_t off = fault_rsp - IR0_KSTACK_VA_BASE;
+			uint64_t in_slot = off % (uint64_t)IR0_KSTACK_SLOT_SIZE;
+
+			/*
+			 * Bottom PAGE of each kstack slot is unmapped guard.
+			 * RSP there (or barely into the stack) means overflow
+			 * or failed exception delivery → typically escalates to #DF.
+			 */
+			if (in_slot < (uint64_t)PAGE_SIZE_4KB)
+				stack_overflow = 1;
+		}
+
+		switch ((unsigned)interrupt_number)
+		{
+		case 0:
+			vec_name = "DIVIDE_ERROR";
+			break;
+		case 6:
+			vec_name = "INVALID_OPCODE";
+			break;
+		case 8:
+			vec_name = "DOUBLE_FAULT";
+			level = stack_overflow ? PANIC_STACK_OVERFLOW
+					       : PANIC_HARDWARE_FAULT;
+			break;
+		case 13:
+			vec_name = "GENERAL_PROTECTION";
+			break;
+		case 14:
+			vec_name = "PAGE_FAULT";
+			break;
+		default:
+			break;
+		}
+		if (stack_overflow && interrupt_number != 8)
+			level = PANIC_STACK_OVERFLOW;
+
+		print("[ISR64] int=");
+		print_hex64(interrupt_number);
+		print(" (");
+		print(vec_name);
+		print(") current=");
+		print_hex64((uint64_t)(uintptr_t)current);
+		print(" user=");
+		print_hex((uintptr_t)is_user_exception_frame(stack));
+		print(" cs=");
+		print_hex64(fault_cs);
+		print(" rip=");
+		print_hex64(fault_rip);
+		print(" err=");
+		print_hex64(fault_err);
+		print(" rsp=");
+		print_hex64(fault_rsp);
+		print("\n");
+
+		if (stack_overflow)
+		{
+			klog_notice_fmt("ISR",
+					"CLASSIFY KERNEL_STACK_OVERFLOW "
+					"fault_rsp=%llx in_kstack_va",
+					(unsigned long long)fault_rsp);
+		}
+
+		panic_note_exception_frame(
+			(unsigned)interrupt_number, fault_err, fault_rip,
+			fault_cs, fault_rflags, fault_rsp, fault_ss,
+			stack_overflow,
+			current ? (uint32_t)current->task.pid : 0,
+			current ? current->comm : "(none)");
+
+		if (interrupt_number == 8)
+			msg = "DOUBLE FAULT — see FAULT FRAME (fault_rip/rsp); "
+			      "panic site below is reporter only";
+		else
+			msg = "Unhandled kernel CPU exception — see FAULT FRAME; "
+			      "panic site below is reporter only";
+
+		panicex(msg, level, __FILE__, __LINE__, "exception_frame");
+	}
     }
 
     /* Manejar syscall (0x80) */
@@ -404,6 +516,13 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
             input_mouse_handle_interrupt();
             break;
         }
+
+#if CONFIG_ENABLE_SOUND
+        case 5: /* SB16 8-bit DMA */
+            if (sb16_is_available())
+                sb16_irq_handler();
+            break;
+#endif
 
         default:
             break;

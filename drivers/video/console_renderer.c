@@ -9,6 +9,7 @@
 #include <ir0/serial_io.h>
 #include <ir0/vga.h>
 #include <stdint.h>
+#include <string.h>
 
 #define CSI_NONE    0
 #define CSI_ESC     1
@@ -26,6 +27,98 @@ static int csi_params[4];
 static int csi_param_count;
 static int csi_priv; /* ESC[? … private mode */
 static int render_cursor_enabled = 1; /* DECTCEM: 0 = civis, 1 = cnorm */
+
+/*
+ * Alternate screen (xterm 1049 / legacy 47): ncurses/nano smcup/rmcup. Serial
+ * terminals emulate this; without it GTK/FB keeps scrollback under the TUI and
+ * nano looks garbled while vi (no smcup) still works.
+ */
+static uint16_t alt_saved_screen[CONSOLE_MAX_HEIGHT][CONSOLE_MAX_WIDTH];
+static int alt_saved_cursor_pos;
+static int alt_saved_rows;
+static int alt_saved_cols;
+static int alt_screen_active;
+
+static void sgr_reset_attrs(void);
+static void sgr_compose(uint8_t *color);
+static void csi_clear_screen(int cols, int rows, uint8_t color);
+
+static void alt_screen_save(int cols, int rows)
+{
+	extern int cursor_pos;
+	int r;
+	int c;
+
+	if (cols > CONSOLE_MAX_WIDTH)
+		cols = CONSOLE_MAX_WIDTH;
+	if (rows > CONSOLE_MAX_HEIGHT)
+		rows = CONSOLE_MAX_HEIGHT;
+
+	for (r = 0; r < rows; r++)
+	{
+		for (c = 0; c < cols; c++)
+			alt_saved_screen[r][c] = console_get_cell(r, c);
+	}
+
+	alt_saved_cursor_pos = cursor_pos;
+	alt_saved_rows = rows;
+	alt_saved_cols = cols;
+}
+
+static void alt_screen_restore(int cols, int rows)
+{
+	extern int cursor_pos;
+	int r;
+	int c;
+	int sr = alt_saved_rows;
+	int sc = alt_saved_cols;
+
+	if (sr <= 0 || sc <= 0)
+		return;
+	if (sr > rows)
+		sr = rows;
+	if (sc > cols)
+		sc = cols;
+
+	for (r = 0; r < sr; r++)
+	{
+		for (c = 0; c < sc; c++)
+		{
+			uint16_t cell = alt_saved_screen[r][c];
+
+			console_put_cell(r, c, (char)(cell & 0xFF),
+					 (uint8_t)(cell >> 8));
+		}
+	}
+
+	cursor_pos = alt_saved_cursor_pos;
+	if (cursor_pos < 0 || cursor_pos >= cols * rows)
+		cursor_pos = (sr - 1) * cols;
+}
+
+static void alt_screen_enter(int cols, int rows, uint8_t color)
+{
+	extern int cursor_pos;
+
+	if (!alt_screen_active)
+	{
+		alt_screen_save(cols, rows);
+		alt_screen_active = 1;
+	}
+	csi_clear_screen(cols, rows, color);
+	cursor_pos = 0;
+	sgr_reset_attrs();
+	sgr_compose(&render_color);
+}
+
+static void alt_screen_leave(int cols, int rows)
+{
+	if (!alt_screen_active)
+		return;
+
+	alt_screen_restore(cols, rows);
+	alt_screen_active = 0;
+}
 
 static void csi_reset(void)
 {
@@ -193,6 +286,14 @@ static void csi_apply(char cmd, int cols, int rows, uint8_t *color)
 		/* ESC[?25h / ESC[?25l — show / hide cursor (DECTCEM). */
 		if (csi_priv && n == 25)
 			render_cursor_enabled = (cmd == 'h') ? 1 : 0;
+		/* ESC[?47h/l and ESC[?1049h/l — alternate screen (nano/vi). */
+		else if (csi_priv && (n == 47 || n == 1049))
+		{
+			if (cmd == 'h')
+				alt_screen_enter(cols, rows, *color);
+			else
+				alt_screen_leave(cols, rows);
+		}
 		break;
 	case 'J':
 	{
@@ -381,6 +482,10 @@ void console_renderer_reset(uint8_t color)
 	render_cursor_row = 0;
 	render_cursor_col = 0;
 	cursor_pos = 0;
+	alt_screen_active = 0;
+	alt_saved_rows = 0;
+	alt_saved_cols = 0;
+	alt_saved_cursor_pos = 0;
 	console_clear(color);
 }
 

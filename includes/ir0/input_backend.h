@@ -48,6 +48,8 @@ bool input_mouse_set_sensitivity(uint8_t sensitivity);
 char input_kbd_get(void);
 int input_kbd_has_data(void);
 void input_kbd_clear(void);
+/* Drop half-decoded scancode state (momentary mods + E0/E1); keep the ring. */
+void input_kbd_resync_modifiers(void);
 void input_kbd_poll_ps2(void);
 int input_kbd_set_layout(int layout);
 int input_kbd_get_layout(void);

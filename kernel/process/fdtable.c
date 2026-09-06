@@ -13,9 +13,56 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 #include "process_internal.h"
+#include <ir0/fd_get.h>
 #include <ir0/memfd.h>
 #include <ir0/eventfd.h>
 #include <ir0/timerfd.h>
+
+int ir0_fd_get(process_t *proc, int fd, ir0_fd_t *out)
+{
+	files_struct_t *f;
+	fd_entry_t *e;
+
+	if (!out)
+		return -EINVAL;
+
+	out->files = NULL;
+	out->entry = NULL;
+	out->fd = -1;
+
+	if (!proc)
+		return -ESRCH;
+	if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+		return -EBADF;
+
+	f = proc->files;
+	if (!files_struct_live(f))
+		return -EBADF;
+	if (!files_get(f))
+		return -EBADF;
+
+	e = &f->fd_table[fd];
+	if (!e->in_use)
+	{
+		files_put(f);
+		return -EBADF;
+	}
+
+	out->files = f;
+	out->entry = e;
+	out->fd = fd;
+	return 0;
+}
+
+void ir0_fd_put(ir0_fd_t *h)
+{
+	if (!h || !h->files)
+		return;
+	files_put(h->files);
+	h->files = NULL;
+	h->entry = NULL;
+	h->fd = -1;
+}
 
 void process_release_fds(process_t *p, const char *pipe_trace_op)
 {
@@ -24,7 +71,7 @@ void process_release_fds(process_t *p, const char *pipe_trace_op)
 
 	(void)pipe_trace_op;
 
-	if (!p || !p->files)
+	if (!p || !files_struct_live(p->files))
 		return;
 
 	/*
@@ -55,8 +102,6 @@ void process_release_fds(process_t *p, const char *pipe_trace_op)
 			pipe_close_end(pip, e->pipe_end);
 			e->vfs_file = NULL;
 		}
-		else if (i <= 2)
-			goto clear_fd;
 		else if (e->is_socket && e->vfs_file)
 		{
 			if (sock_stream_is(e->vfs_file))
@@ -121,8 +166,11 @@ void process_release_fds(process_t *p, const char *pipe_trace_op)
 			vfs_close((struct vfs_file *)e->vfs_file);
 			e->vfs_file = NULL;
 		}
+		/*
+		 * Console stdio (0/1/2) with no backend: fall through and clear.
+		 * Redirected stdio must take the branches above (Linux closes all).
+		 */
 
-clear_fd:
 		e->in_use = false;
 		e->is_pipe = false;
 		e->is_socket = false;

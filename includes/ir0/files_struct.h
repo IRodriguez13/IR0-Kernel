@@ -21,14 +21,27 @@
 #pragma once
 
 #include <ir0/fd_types.h>
+#include <stdint.h>
 
 struct process;
 
+/* Live object cookie; files_put poisons to IR0_FILES_MAGIC_DEAD before free. */
+#define IR0_FILES_MAGIC		0x46494C45u /* 'FILE' */
+#define IR0_FILES_MAGIC_DEAD	0xDEADF11Eu
+
 typedef struct files_struct
 {
+	uint32_t magic;
 	int refcount;
 	fd_entry_t fd_table[MAX_FDS_PER_PROCESS];
 } files_struct_t;
+
+/*
+ * True if @f is a live kernel files_struct. Rejects NULL, non-heap pointers
+ * (garbage like 0x220000000b), bad magic, and dead refcount before any
+ * fd_table[] load. IR0 kmalloc uses identity heap — do not use mm_user_va_ok.
+ */
+int files_struct_live(const files_struct_t *f);
 
 files_struct_t *files_create(void);
 files_struct_t *files_get(files_struct_t *f);

@@ -18,7 +18,30 @@
 #include <ir0/memfd.h>
 #include <ir0/eventfd.h>
 #include <ir0/timerfd.h>
+#include <mm/allocator.h>
 #include <string.h>
+
+int files_struct_live(const files_struct_t *f)
+{
+	uintptr_t p = (uintptr_t)f;
+	uintptr_t end;
+
+	if (!f)
+		return 0;
+
+	/* IR0 kmalloc identity window — see mm/allocator.h. */
+	if (p < (uintptr_t)SIMPLE_HEAP_START)
+		return 0;
+	end = p + sizeof(*f);
+	if (end < p || end > (uintptr_t)SIMPLE_HEAP_END)
+		return 0;
+
+	if (f->magic != IR0_FILES_MAGIC)
+		return 0;
+	if (f->refcount <= 0)
+		return 0;
+	return 1;
+}
 
 files_struct_t *files_create(void)
 {
@@ -29,6 +52,7 @@ files_struct_t *files_create(void)
 		return NULL;
 
 	memset(f, 0, sizeof(*f));
+	f->magic = IR0_FILES_MAGIC;
 	f->refcount = 1;
 	return f;
 }
@@ -37,7 +61,7 @@ files_struct_t *files_get(files_struct_t *f)
 {
 	uint64_t irq_flags;
 
-	if (!f)
+	if (!files_struct_live(f))
 		return NULL;
 
 	irq_flags = process_irq_save();
@@ -52,6 +76,13 @@ void files_put(files_struct_t *f)
 	int last;
 
 	if (!f)
+		return;
+
+	/*
+	 * Refuse userspace / dead / corrupt pointers before touching refcount.
+	 * Already-freed objects are not safely detectable after kfree.
+	 */
+	if (!files_struct_live(f))
 		return;
 
 	irq_flags = process_irq_save();
@@ -69,6 +100,8 @@ void files_put(files_struct_t *f)
 	if (!last)
 		return;
 
+	f->magic = IR0_FILES_MAGIC_DEAD;
+	memset(f->fd_table, 0xA5, sizeof(f->fd_table));
 	kfree(f);
 }
 
@@ -144,10 +177,11 @@ int process_files_share(process_t *child, process_t *parent)
 		return -EINVAL;
 
 	f = parent->files;
-	if (!f)
+	if (!files_struct_live(f))
 		return -EINVAL;
 
-	(void)files_get(f);
+	if (!files_get(f))
+		return -EINVAL;
 	process_files_bind(child, f);
 	return 0;
 }
@@ -156,7 +190,7 @@ int process_files_clone(process_t *child, process_t *parent)
 {
 	files_struct_t *nf;
 
-	if (!child || !parent || !parent->files)
+	if (!child || !parent || !files_struct_live(parent->files))
 		return -EINVAL;
 
 	nf = files_create();
@@ -166,7 +200,7 @@ int process_files_clone(process_t *child, process_t *parent)
 	memcpy(nf->fd_table, parent->files->fd_table, sizeof(nf->fd_table));
 	if (process_files_acquire_entries(nf) != 0)
 	{
-		kfree(nf);
+		files_put(nf);
 		return -ENOMEM;
 	}
 

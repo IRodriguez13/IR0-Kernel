@@ -23,6 +23,7 @@
 extern char keyboard_buffer_get(void);
 extern int keyboard_buffer_has_data(void);
 extern void keyboard_buffer_clear(void);
+extern void keyboard_all_keys_up(void);
 extern int keyboard_set_layout(int layout);
 extern int keyboard_get_layout(void);
 extern const char *keyboard_get_layout_name(int layout);
@@ -109,6 +110,11 @@ int input_kbd_has_data(void)
 void input_kbd_clear(void)
 {
 	keyboard_buffer_clear();
+}
+
+void input_kbd_resync_modifiers(void)
+{
+	keyboard_all_keys_up();
 }
 
 void input_kbd_poll_ps2(void)

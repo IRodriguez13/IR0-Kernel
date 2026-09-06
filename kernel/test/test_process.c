@@ -102,13 +102,12 @@ void ktest_wait4_specific_reaps_requested_child(void)
 	child_b->exit_code = 20;
 	sched_remove_process(child_b);
 
-	current_process->wait_blocked = 1;
-	current_process->wait_target_pid = pid_a;
+	process_wait_blocked_set(current_process);
+	process_wait_target_pid_set(current_process, pid_a);
 	current_process->irq_frame_saved = 1;
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process, pid_b), 0);
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process, pid_a), 1);
-	current_process->wait_blocked = 0;
-	current_process->wait_target_pid = 0;
+	process_wait_state_clear(current_process);
 	current_process->irq_frame_saved = 0;
 
 	child_a = process_find_by_pid(pid_a);
@@ -280,23 +279,22 @@ void ktest_wait4_pgrp(void)
 	child_same->pgid = current_process->pgid;
 	child_other->pgid = pid_other;
 
-	current_process->wait_blocked = 1;
-	current_process->wait_target_pid = 0;
+	process_wait_blocked_set(current_process);
+	process_wait_target_pid_set(current_process, 0);
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
 							     pid_same),
 		   1);
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
 							     pid_other),
 		   0);
-	current_process->wait_target_pid = (pid_t)(-pid_other);
+	process_wait_target_pid_set(current_process, (pid_t)(-pid_other));
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
 							     pid_other),
 		   1);
 	KASSERT_EQ(process_wait_child_matches_blocked_target(current_process,
 							     pid_same),
 		   0);
-	current_process->wait_blocked = 0;
-	current_process->wait_target_pid = 0;
+	process_wait_state_clear(current_process);
 
 	process_mark_zombie(child_same);
 	child_same->exit_code = 10;

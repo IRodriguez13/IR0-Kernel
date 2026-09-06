@@ -50,6 +50,7 @@
 #include <ir0/ktm/klog.h>
 #include <ir0/copy_user.h>
 #include <ir0/paging.h>
+#include <ir0/fd_get.h>
 #include <string.h>
 
 static int devfs_initialized;
@@ -104,76 +105,120 @@ int64_t syscall_sleep_ms_locked(uint64_t ms)
  */
 int fd_can_read_for(process_t *proc, int fd)
 {
-  fd_entry_t *fd_table = proc ? process_fd_table(proc) : get_process_fd_table();
-  pid_t pid = proc ? proc->task.pid : 0;
+  ir0_fd_t h;
+  fd_entry_t *e;
+  pid_t pid;
+  int ready = 0;
 
-  if (fd == STDIN_FILENO && !stdio_is_redirected(fd_table, fd))
-    return ir0_console_input_ready() ? 1 : 0;
-  if ((fd == STDOUT_FILENO || fd == STDERR_FILENO) && !stdio_is_redirected(fd_table, fd))
+  if (!proc)
+    proc = current_process;
+  if (!proc)
     return 0;
-  if (!fd_table || fd < 0 || fd >= MAX_FDS_PER_PROCESS || !fd_table[fd].in_use)
+  pid = proc->task.pid;
+
+  if (ir0_fd_get(proc, fd, &h) != 0)
     return 0;
-  if (fd_table[fd].is_pseudo)
-    return 1;
-  if (fd_table[fd].is_devfs)
-    return devfs_fd_can_read(fd_table[fd].dev_device_id, pid) ? 1 : 0;
-  if (fd_table[fd].is_pipe && fd_table[fd].pipe_end == 0) {
-    pipe_t *pipe = (pipe_t *)fd_table[fd].vfs_file;
-    return (pipe && (pipe->count > 0 || pipe->writers <= 0)) ? 1 : 0;
+  e = h.entry;
+
+  if (fd == STDIN_FILENO && !fd_entry_is_redirected(e))
+  {
+    ready = ir0_console_input_ready() ? 1 : 0;
+    goto out;
   }
-  if (fd_table[fd].is_socket && fd_table[fd].vfs_file &&
-      sock_stream_is(fd_table[fd].vfs_file))
-    return sock_stream_poll_readable((struct sock_stream *)fd_table[fd].vfs_file);
-  if (fd_table[fd].is_socket && fd_table[fd].vfs_file &&
-      sock_icmp_is(fd_table[fd].vfs_file))
-    return sock_icmp_poll_readable((struct sock_icmp *)fd_table[fd].vfs_file);
-  if (fd_table[fd].is_eventfd && fd_table[fd].vfs_file)
-    return ir0_eventfd_poll_readable((struct ir0_eventfd *)fd_table[fd].vfs_file);
-  if (fd_table[fd].is_timerfd && fd_table[fd].vfs_file)
-    return ir0_timerfd_poll_readable((struct ir0_timerfd *)fd_table[fd].vfs_file);
+  if ((fd == STDOUT_FILENO || fd == STDERR_FILENO) && !fd_entry_is_redirected(e))
+    goto out;
+
+  if (e->is_pseudo)
+  {
+    ready = 1;
+    goto out;
+  }
+  if (e->is_devfs)
+  {
+    ready = devfs_fd_can_read(e->dev_device_id, pid) ? 1 : 0;
+    goto out;
+  }
+  if (e->is_pipe && e->pipe_end == 0)
+  {
+    pipe_t *pipe = (pipe_t *)e->vfs_file;
+
+    ready = (pipe && (pipe->count > 0 || pipe->writers <= 0)) ? 1 : 0;
+    goto out;
+  }
+  if (e->is_socket && e->vfs_file && sock_stream_is(e->vfs_file))
+  {
+    ready = sock_stream_poll_readable((struct sock_stream *)e->vfs_file);
+    goto out;
+  }
+  if (e->is_socket && e->vfs_file && sock_icmp_is(e->vfs_file))
+  {
+    ready = sock_icmp_poll_readable((struct sock_icmp *)e->vfs_file);
+    goto out;
+  }
+  if (e->is_eventfd && e->vfs_file)
+  {
+    ready = ir0_eventfd_poll_readable((struct ir0_eventfd *)e->vfs_file);
+    goto out;
+  }
+  if (e->is_timerfd && e->vfs_file)
+  {
+    ready = ir0_timerfd_poll_readable((struct ir0_timerfd *)e->vfs_file);
+    goto out;
+  }
   /*
    * Regular VFS / redirected files: poll-readable unless write-only.
    * O_RDONLY is 0 — never use `flags & O_RDONLY` (always false).
    */
-  if ((fd_table[fd].flags & O_ACCMODE) != O_WRONLY)
-    return 1;
-  return 0;
+  if ((e->flags & O_ACCMODE) != O_WRONLY)
+    ready = 1;
+
+out:
+  ir0_fd_put(&h);
+  return ready;
 }
 
 /**
  * fd_can_write - Comprueba si se puede escribir en el fd.
  */
-static int fd_can_write_table(fd_entry_t *fd_table, int fd)
+static int fd_can_write_entry(const fd_entry_t *e, int fd)
 {
-  if (fd == STDIN_FILENO && !stdio_is_redirected(fd_table, fd))
+  if (!e)
     return 0;
-  if ((fd == STDOUT_FILENO || fd == STDERR_FILENO) && !stdio_is_redirected(fd_table, fd))
+  if (fd == STDIN_FILENO && !fd_entry_is_redirected(e))
+    return 0;
+  if ((fd == STDOUT_FILENO || fd == STDERR_FILENO) && !fd_entry_is_redirected(e))
     return 1;
-  if (!fd_table || fd < 0 || fd >= MAX_FDS_PER_PROCESS || !fd_table[fd].in_use)
-    return 0;
-  if (fd_table[fd].is_pseudo)
-    return (fd_table[fd].flags & (O_WRONLY | O_RDWR)) ? 1 : 0;
-  if (fd_table[fd].is_pipe && fd_table[fd].pipe_end == 1) {
-    pipe_t *pipe = (pipe_t *)fd_table[fd].vfs_file;
+  if (e->is_pseudo)
+    return (e->flags & (O_WRONLY | O_RDWR)) ? 1 : 0;
+  if (e->is_pipe && e->pipe_end == 1)
+  {
+    pipe_t *pipe = (pipe_t *)e->vfs_file;
+
     return (pipe && pipe->readers > 0 && pipe->count < PIPE_SIZE) ? 1 : 0;
   }
-  if (fd_table[fd].is_socket && fd_table[fd].vfs_file &&
-      sock_stream_is(fd_table[fd].vfs_file))
-    return sock_stream_poll_writable((struct sock_stream *)fd_table[fd].vfs_file);
-  if (fd_table[fd].is_eventfd && fd_table[fd].vfs_file)
-    return ir0_eventfd_poll_writable((struct ir0_eventfd *)fd_table[fd].vfs_file);
-  if (fd_table[fd].is_timerfd && fd_table[fd].vfs_file)
+  if (e->is_socket && e->vfs_file && sock_stream_is(e->vfs_file))
+    return sock_stream_poll_writable((struct sock_stream *)e->vfs_file);
+  if (e->is_eventfd && e->vfs_file)
+    return ir0_eventfd_poll_writable((struct ir0_eventfd *)e->vfs_file);
+  if (e->is_timerfd && e->vfs_file)
     return 1;
-  if (fd_table[fd].flags & (O_WRONLY | O_RDWR))
+  if (e->flags & (O_WRONLY | O_RDWR))
     return 1;
   return 0;
 }
 
 int fd_can_write_for(process_t *proc, int fd)
 {
-  fd_entry_t *fd_table = proc ? process_fd_table(proc) : get_process_fd_table();
+  ir0_fd_t h;
+  int ready;
 
-  return fd_can_write_table(fd_table, fd);
+  if (!proc)
+    proc = current_process;
+  if (ir0_fd_get(proc, fd, &h) != 0)
+    return 0;
+  ready = fd_can_write_entry(h.entry, fd);
+  ir0_fd_put(&h);
+  return ready;
 }
 
 /**
@@ -1080,15 +1125,7 @@ int stdio_is_redirected(fd_entry_t *fd_table, int fd)
 {
   if (!fd_table || fd < STDIN_FILENO || fd > STDERR_FILENO)
     return 0;
-  if (!fd_table[fd].in_use)
-    return 0;
-  if (fd_table[fd].is_devfs)
-    return 1;
-  if (fd_table[fd].is_pipe)
-    return 1;
-  if (fd_table[fd].vfs_file)
-    return 1;
-  return 0;
+  return fd_entry_is_redirected(&fd_table[fd]);
 }
 int64_t sys_dup(int oldfd)
 {
@@ -1118,254 +1155,309 @@ fd_entry_t *get_process_fd_table(void)
    * La tabla se inicializa en spawn() / process create; no usar un
    * flag estático global (rompía si el primer syscall no era del proceso init).
    */
+  if (current_process->files && !files_struct_live(current_process->files))
+  {
+    klog_info_fmt("FD",
+		  "FILES_STRUCT_BAD ptr=%llx pid=%x",
+		  (unsigned long long)(uintptr_t)current_process->files,
+		  (unsigned)((uint32_t)current_process->task.pid));
+    return NULL;
+  }
   return process_fd_table(current_process);
 }
 int64_t sys_ioctl(int fd, uint64_t request, void *arg)
 {
+  ir0_fd_t h;
+  fd_entry_t *e;
+  int64_t ret;
+
   /* Linux ioctl cmd is 32-bit; musl may sign-extend into the register. */
   request = (uint32_t)request;
 
   if (!current_process)
     return -ESRCH;
 
-  if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
-    return -EBADF;
+  ret = ir0_fd_get(current_process, fd, &h);
+  if (ret != 0)
+    return ret;
+  e = h.entry;
 
-  fd_entry_t *fd_table = get_process_fd_table();
-  if (!fd_table[fd].in_use)
-    return -EBADF;
-
-  if (fd_table[fd].is_devfs)
+  if (e->is_devfs)
   {
     ensure_devfs_init();
-    devfs_node_t *node = devfs_find_node_by_id(fd_table[fd].dev_device_id);
+    {
+      devfs_node_t *node = devfs_find_node_by_id(e->dev_device_id);
 
-    if (!node || !node->ops || !node->ops->ioctl)
-      return -ENOTTY;
-    /* Handlers perform sized copy_to/from_user; do not require 256B here
-     * (stack ioctl args near page end would false-fail). */
-    return node->ops->ioctl(&node->entry, request, arg);
+      if (!node || !node->ops || !node->ops->ioctl)
+	ret = -ENOTTY;
+      else
+	/* Handlers perform sized copy_to/from_user; do not require 256B here
+	 * (stack ioctl args near page end would false-fail). */
+	ret = node->ops->ioctl(&node->entry, request, arg);
+    }
+    goto out;
   }
 
   /* AF_INET socket: Linux SIOCGIF* for BusyBox ifconfig (read-only). */
-  if (fd_table[fd].is_socket)
+  if (e->is_socket)
   {
-    int64_t rc = sock_inet_ioctl(request, arg);
-
-    if (rc != -ENOTTY)
-      return rc;
+    ret = sock_inet_ioctl(request, arg);
+    if (ret != -ENOTTY)
+      goto out;
   }
 
   /* Unredirected stdio: console tty ioctls (TIOCGWINSZ / termios). */
-  if (fd >= STDIN_FILENO && fd <= STDERR_FILENO &&
-      !stdio_is_redirected(fd_table, fd))
+  if (fd >= STDIN_FILENO && fd <= STDERR_FILENO && !fd_entry_is_redirected(e))
   {
     if (request == IR0_CONSOLE_TIOCGWINSZ)
-      return ir0_console_ioctl_winsize(arg);
+    {
+      ret = ir0_console_ioctl_winsize(arg);
+      goto out;
+    }
     if (request == IR0_CONSOLE_TIOCSWINSZ)
-      return ir0_console_ioctl_winsize_set(arg);
+    {
+      ret = ir0_console_ioctl_winsize_set(arg);
+      goto out;
+    }
     if (request == IR0_TIOCSCTTY)
-      return ir0_console_ioctl_set_ctty();
+    {
+      ret = ir0_console_ioctl_set_ctty();
+      goto out;
+    }
     if (request == IR0_TIOCSPGRP)
     {
       pid_t pg;
 
       if (!arg)
-	return -EINVAL;
+      {
+	ret = -EINVAL;
+	goto out;
+      }
       if (copy_from_user(&pg, arg, sizeof(pg)) != 0)
-	return -EFAULT;
-      return ir0_console_set_fg_pgid((int32_t)pg);
+      {
+	ret = -EFAULT;
+	goto out;
+      }
+      ret = ir0_console_set_fg_pgid((int32_t)pg);
+      goto out;
     }
     if (request == IR0_TIOCGPGRP)
     {
       pid_t pg;
 
       if (!arg)
-	return -EINVAL;
+      {
+	ret = -EINVAL;
+	goto out;
+      }
       pg = current_process->pgid > 0 ? current_process->pgid
 				     : (pid_t)current_process->task.pid;
       if (copy_to_user(arg, &pg, sizeof(pg)) != 0)
-	return -EFAULT;
-      return 0;
+      {
+	ret = -EFAULT;
+	goto out;
+      }
+      ret = 0;
+      goto out;
     }
     if (request == IR0_CONSOLE_TCFLSH)
     {
-      tty_flush_input();
-      return 0;
+      ir0_console_flush_input_session();
+      ret = 0;
+      goto out;
     }
     if (request == IR0_CONSOLE_FIONREAD)
     {
       int avail;
 
       if (!arg)
-	return -EINVAL;
+      {
+	ret = -EINVAL;
+	goto out;
+      }
       avail = tty_input_bytes_available();
       if (copy_to_user(arg, &avail, sizeof(avail)) != 0)
-	return -EFAULT;
-      return 0;
+      {
+	ret = -EFAULT;
+	goto out;
+      }
+      ret = 0;
+      goto out;
     }
     if (request == IR0_CONSOLE_TCGETS || request == IR0_CONSOLE_TCSETS ||
 	request == IR0_CONSOLE_TCSETSW || request == IR0_CONSOLE_TCSETSF)
     {
       struct ir0_termios termios;
-      int ret;
 
       if (request == IR0_CONSOLE_TCGETS)
       {
 	if (!arg)
-	  return -EINVAL;
+	{
+	  ret = -EINVAL;
+	  goto out;
+	}
 	ret = tty_ioctl_termios_kernel(IR0_CONSOLE_TCGETS, &termios);
 	if (ret != 0)
-	  return ret;
+	  goto out;
 	if (copy_to_user(arg, &termios, sizeof(termios)) != 0)
-	  return -EFAULT;
-	return 0;
+	{
+	  ret = -EFAULT;
+	  goto out;
+	}
+	ret = 0;
+	goto out;
       }
       if (!arg)
-	return -EINVAL;
+      {
+	ret = -EINVAL;
+	goto out;
+      }
       if (copy_from_user(&termios, arg, sizeof(termios)) != 0)
-	return -EFAULT;
-      return tty_ioctl_termios_kernel(request, &termios);
+      {
+	ret = -EFAULT;
+	goto out;
+      }
+      ret = tty_ioctl_termios_kernel(request, &termios);
+      goto out;
     }
   }
 
-  return -ENOTTY;
+  ret = -ENOTTY;
+out:
+  ir0_fd_put(&h);
+  return ret;
 }
 
 int64_t sys_close(int fd)
 {
+  ir0_fd_t h;
+  fd_entry_t *e;
+  int ret;
+  int was_pipe;
+  int was_devfs;
+
   if (!current_process)
     return -ESRCH;
 
-  /* Prefer process fd_table (is_pseudo binds) over legacy global FD bases. */
-  if (fd >= 0 && fd < MAX_FDS_PER_PROCESS)
+  ret = ir0_fd_get(current_process, fd, &h);
+  if (ret != 0)
   {
-    fd_entry_t *fd_table = get_process_fd_table();
+    /* Legacy host/registry virtual fds (PSEUDO_FS_*_FD_BASE). */
+    if (pseudo_fs_find_by_fd(fd))
+      return pseudo_fs_close_fd(fd);
+    return ret;
+  }
+  e = h.entry;
 
-    if (fd_table && fd_table[fd].in_use && fd_table[fd].is_pseudo &&
-	fd_table[fd].vfs_file)
+  if (e->is_pseudo && e->vfs_file)
+  {
+    pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)e->vfs_file;
+
+    if (pseudo_fd_bind_release(bind))
     {
-      pseudo_fd_bind_t *bind = (pseudo_fd_bind_t *)fd_table[fd].vfs_file;
-
-      if (pseudo_fd_bind_release(bind))
-      {
-	(void)pseudo_fs_release_ops((const pseudo_fs_ops_t *)bind->ops,
-				    bind->ctx, bind->dynamic);
-	kfree(bind);
-      }
-      fd_table[fd].vfs_file = NULL;
-      fd_table[fd].in_use = false;
-      fd_table[fd].is_pseudo = false;
-      fd_table[fd].path[0] = '\0';
-      return 0;
+      (void)pseudo_fs_release_ops((const pseudo_fs_ops_t *)bind->ops,
+				  bind->ctx, bind->dynamic);
+      kfree(bind);
     }
+    e->vfs_file = NULL;
+    e->in_use = false;
+    e->is_pseudo = false;
+    e->path[0] = '\0';
+    ir0_fd_put(&h);
+    return 0;
   }
 
-  /* Legacy host/registry virtual fds (PSEUDO_FS_*_FD_BASE). */
-  if (pseudo_fs_find_by_fd(fd))
-    return pseudo_fs_close_fd(fd);
+  was_pipe = e->is_pipe ? 1 : 0;
+  was_devfs = e->is_devfs ? 1 : 0;
 
-  if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
-    return -EBADF;
-
-  fd_entry_t *fd_table = get_process_fd_table();
-  if (!fd_table[fd].in_use)
-    return -EBADF;
-
+  /*
+   * Linux allows close(0/1/2) on the console slots. BusyBox wget -O -
+   * ends with xclose(1); refusing with EBADF prints "close failed".
+   */
+  if (fd <= 2 && !was_pipe && !was_devfs && !e->vfs_file)
   {
-    int was_pipe = fd_table[fd].is_pipe ? 1 : 0;
-    int was_devfs = fd_table[fd].is_devfs ? 1 : 0;
-
-    /*
-     * Linux allows close(0/1/2) on the console slots. BusyBox wget -O -
-     * ends with xclose(1); refusing with EBADF prints "close failed".
-     */
-    if (fd <= 2 && !was_pipe && !was_devfs && !fd_table[fd].vfs_file)
-    {
-      fd_table[fd].in_use = false;
-      fd_table[fd].flags = 0;
-      return 0;
-    }
-
-    if (was_devfs)
-    {
-      devfs_node_t *node = devfs_find_node_by_id(fd_table[fd].dev_device_id);
-
-      if (fd_table[fd].vfs_file &&
-	  devfs_node_wants_text_snap(fd_table[fd].dev_device_id))
-      {
-	devfs_text_snap_release((devfs_text_snap_t *)fd_table[fd].vfs_file);
-	fd_table[fd].vfs_file = NULL;
-      }
-      if (node)
-        devfs_close_node(node);
-    }
-    /* Check if this is a pipe */
-    else if (fd_table[fd].is_pipe && fd_table[fd].vfs_file)
-    {
-      pipe_t *pipe = (pipe_t *)fd_table[fd].vfs_file;
-
-      /* pipe_close_end wakes waiters then frees on last ref. */
-      pipe_close_end(pipe, fd_table[fd].pipe_end);
-      fd_table[fd].vfs_file = NULL;
-    }
-    else if (fd_table[fd].is_socket && fd_table[fd].vfs_file)
-    {
-      if (sock_stream_is(fd_table[fd].vfs_file))
-        sock_stream_release((struct sock_stream *)fd_table[fd].vfs_file);
-      else if (sock_icmp_is(fd_table[fd].vfs_file))
-        sock_icmp_release((struct sock_icmp *)fd_table[fd].vfs_file);
-      else if (!sock_stream_is_slot(fd_table[fd].vfs_file))
-        sock_udp_release((struct sock_udp *)fd_table[fd].vfs_file);
-      fd_table[fd].vfs_file = NULL;
-    }
-    else if (fd_table[fd].is_epoll && fd_table[fd].vfs_file)
-    {
-      epoll_release_fd(fd_table[fd].vfs_file);
-      fd_table[fd].vfs_file = NULL;
-      fd_table[fd].is_epoll = false;
-    }
-    else if (fd_table[fd].is_memfd && fd_table[fd].vfs_file)
-    {
-      ir0_memfd_release((struct ir0_memfd *)fd_table[fd].vfs_file);
-      fd_table[fd].vfs_file = NULL;
-    }
-    else if (fd_table[fd].is_eventfd && fd_table[fd].vfs_file)
-    {
-      ir0_eventfd_release((struct ir0_eventfd *)fd_table[fd].vfs_file);
-      fd_table[fd].vfs_file = NULL;
-    }
-    else if (fd_table[fd].is_timerfd && fd_table[fd].vfs_file)
-    {
-      ir0_timerfd_release((struct ir0_timerfd *)fd_table[fd].vfs_file);
-      fd_table[fd].vfs_file = NULL;
-    }
-    else if (fd_table[fd].vfs_file)
-    {
-      struct vfs_file *vfs_file = (struct vfs_file *)fd_table[fd].vfs_file;
-
-      vfs_close(vfs_file);
-      fd_table[fd].vfs_file = NULL;
-    }
-
-    fd_table[fd].in_use = false;
-    fd_table[fd].is_pipe = false;
-    fd_table[fd].is_socket = false;
-    fd_table[fd].is_epoll = false;
-    fd_table[fd].is_memfd = false;
-    fd_table[fd].is_eventfd = false;
-    fd_table[fd].is_timerfd = false;
-    fd_table[fd].pipe_end = -1;
-    fd_table[fd].is_devfs = false;
-    fd_table[fd].is_pseudo = false;
-    fd_table[fd].dev_device_id = 0;
-    fd_table[fd].path[0] = '\0';
-    fd_table[fd].flags = 0;
-    fd_table[fd].fd_flags = 0;
-    fd_table[fd].offset = 0;
-    fd_slot_note_destroyed();
+    e->in_use = false;
+    e->flags = 0;
+    ir0_fd_put(&h);
+    return 0;
   }
 
+  if (was_devfs)
+  {
+    devfs_node_t *node = devfs_find_node_by_id(e->dev_device_id);
+
+    if (e->vfs_file &&
+	devfs_node_wants_text_snap(e->dev_device_id))
+    {
+      devfs_text_snap_release((devfs_text_snap_t *)e->vfs_file);
+      e->vfs_file = NULL;
+    }
+    if (node)
+      devfs_close_node(node);
+  }
+  else if (e->is_pipe && e->vfs_file)
+  {
+    pipe_t *pipe = (pipe_t *)e->vfs_file;
+
+    pipe_close_end(pipe, e->pipe_end);
+    e->vfs_file = NULL;
+  }
+  else if (e->is_socket && e->vfs_file)
+  {
+    if (sock_stream_is(e->vfs_file))
+      sock_stream_release((struct sock_stream *)e->vfs_file);
+    else if (sock_icmp_is(e->vfs_file))
+      sock_icmp_release((struct sock_icmp *)e->vfs_file);
+    else if (!sock_stream_is_slot(e->vfs_file))
+      sock_udp_release((struct sock_udp *)e->vfs_file);
+    e->vfs_file = NULL;
+  }
+  else if (e->is_epoll && e->vfs_file)
+  {
+    epoll_release_fd(e->vfs_file);
+    e->vfs_file = NULL;
+    e->is_epoll = false;
+  }
+  else if (e->is_memfd && e->vfs_file)
+  {
+    ir0_memfd_release((struct ir0_memfd *)e->vfs_file);
+    e->vfs_file = NULL;
+  }
+  else if (e->is_eventfd && e->vfs_file)
+  {
+    ir0_eventfd_release((struct ir0_eventfd *)e->vfs_file);
+    e->vfs_file = NULL;
+  }
+  else if (e->is_timerfd && e->vfs_file)
+  {
+    ir0_timerfd_release((struct ir0_timerfd *)e->vfs_file);
+    e->vfs_file = NULL;
+  }
+  else if (e->vfs_file)
+  {
+    struct vfs_file *vfs_file = (struct vfs_file *)e->vfs_file;
+
+    vfs_close(vfs_file);
+    e->vfs_file = NULL;
+  }
+
+  e->in_use = false;
+  e->is_pipe = false;
+  e->is_socket = false;
+  e->is_epoll = false;
+  e->is_memfd = false;
+  e->is_eventfd = false;
+  e->is_timerfd = false;
+  e->pipe_end = -1;
+  e->is_devfs = false;
+  e->is_pseudo = false;
+  e->dev_device_id = 0;
+  e->path[0] = '\0';
+  e->flags = 0;
+  e->fd_flags = 0;
+  e->offset = 0;
+  fd_slot_note_destroyed();
+  ir0_fd_put(&h);
   return 0;
 }
 
@@ -1385,72 +1477,109 @@ int64_t process_close_fd(process_t *proc, int fd)
 
 int64_t sys_lseek(int fd, off_t offset, int whence)
 {
+  ir0_fd_t h;
+  fd_entry_t *e;
+  int64_t ret;
+  off_t new_offset;
+
   if (!current_process)
     return -ESRCH;
 
-  if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
-    return -EBADF;
+  ret = ir0_fd_get(current_process, fd, &h);
+  if (ret != 0)
+    return ret;
+  e = h.entry;
 
-  fd_entry_t *fd_table = get_process_fd_table();
-  if (!fd_table[fd].in_use)
-    return -EBADF;
-
-  /* Pseudo-fs binds use fd_table.offset via sys_read; allow SEEK_SET/CUR. */
-  if (fd_table[fd].is_pseudo)
+  /* Pseudo-fs binds use fd offset via sys_read; allow SEEK_SET/CUR. */
+  if (e->is_pseudo)
   {
-    off_t new_offset;
-
     if (whence == SEEK_SET)
       new_offset = offset;
     else if (whence == SEEK_CUR)
-      new_offset = (off_t)fd_table[fd].offset + offset;
+      new_offset = (off_t)e->offset + offset;
     else
-      return -ESPIPE;
+    {
+      ret = -ESPIPE;
+      goto out;
+    }
     if (new_offset < 0)
-      return -EINVAL;
-    fd_table[fd].offset = (uint64_t)new_offset;
-    return new_offset;
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+    e->offset = (uint64_t)new_offset;
+    ret = new_offset;
+    goto out;
   }
 
-  if (fd <= 2) {
-    off_t new_offset;
+  if (fd <= 2)
+  {
     if (whence == SEEK_SET)
       new_offset = offset;
     else if (whence == SEEK_CUR)
-      new_offset = (off_t)fd_table[fd].offset + offset;
+      new_offset = (off_t)e->offset + offset;
     else
-      return -ESPIPE;
+    {
+      ret = -ESPIPE;
+      goto out;
+    }
     if (new_offset < 0)
-      return -EINVAL;
-    fd_table[fd].offset = (uint64_t)new_offset;
-    return new_offset;
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+    e->offset = (uint64_t)new_offset;
+    ret = new_offset;
+    goto out;
   }
 
-  if (fd_table[fd].vfs_file) {
-    struct vfs_file *vfs_file = (struct vfs_file *)fd_table[fd].vfs_file;
-    off_t result = vfs_lseek(vfs_file, offset, whence);
-    if (result < 0)
-      return result;
-    fd_table[fd].offset = (uint64_t)result;
-    return result;
+  if (e->vfs_file)
+  {
+    struct vfs_file *vfs_file = (struct vfs_file *)e->vfs_file;
+
+    ret = vfs_lseek(vfs_file, offset, whence);
+    if (ret < 0)
+      goto out;
+    e->offset = (uint64_t)ret;
+    goto out;
   }
 
   /* No VFS handle: stat-based fallback */
-  stat_t st;
-  if (vfs_stat(fd_table[fd].path, &st) != 0)
-    return -EBADF;
+  {
+    stat_t st;
 
-  off_t new_offset;
-  switch (whence) {
-  case SEEK_SET: new_offset = offset; break;
-  case SEEK_CUR: new_offset = (off_t)fd_table[fd].offset + offset; break;
-  case SEEK_END: new_offset = st.st_size + offset; break;
-  default: return -EINVAL;
+    if (vfs_stat(e->path, &st) != 0)
+    {
+      ret = -EBADF;
+      goto out;
+    }
+    switch (whence)
+    {
+    case SEEK_SET:
+      new_offset = offset;
+      break;
+    case SEEK_CUR:
+      new_offset = (off_t)e->offset + offset;
+      break;
+    case SEEK_END:
+      new_offset = st.st_size + offset;
+      break;
+    default:
+      ret = -EINVAL;
+      goto out;
+    }
+    if (new_offset < 0)
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+    e->offset = (uint64_t)new_offset;
+    ret = new_offset;
   }
-  if (new_offset < 0)
-    return -EINVAL;
-  fd_table[fd].offset = (uint64_t)new_offset;
-  return new_offset;
+
+out:
+  ir0_fd_put(&h);
+  return ret;
 }
 
 int64_t sys_dup2(int oldfd, int newfd)
@@ -1467,7 +1596,7 @@ int64_t sys_dup2(int oldfd, int newfd)
     return newfd;
 
   fd_entry_t *fd_table = get_process_fd_table();
-  if (!fd_table[oldfd].in_use)
+  if (!fd_table || !fd_table[oldfd].in_use)
     return -EBADF;
 
   if (fd_table[newfd].in_use && newfd != oldfd)
@@ -1654,27 +1783,32 @@ int64_t sys_dup2(int oldfd, int newfd)
 }
 int64_t sys_fcntl(int fd, int cmd, unsigned long arg)
 {
+  ir0_fd_t h;
+  fd_entry_t *e;
   fd_entry_t *fd_table;
+  int64_t ret;
 
   if (!current_process)
     return -ESRCH;
 
-  if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
-    return -EBADF;
-
-  fd_table = get_process_fd_table();
-  if (!fd_table[fd].in_use)
-    return -EBADF;
+  ret = ir0_fd_get(current_process, fd, &h);
+  if (ret != 0)
+    return ret;
+  e = h.entry;
+  fd_table = h.files->fd_table;
 
   switch (cmd)
   {
   case F_GETFD:
-    return (fd_table[fd].fd_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0;
+    ret = (e->fd_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0;
+    break;
   case F_SETFD:
-    fd_table[fd].fd_flags = (uint8_t)(arg & FD_CLOEXEC);
-    return 0;
+    e->fd_flags = (uint8_t)(arg & FD_CLOEXEC);
+    ret = 0;
+    break;
   case F_GETFL:
-    return fd_table[fd].flags;
+    ret = e->flags;
+    break;
   case F_SETFL:
     /*
      * Linux: preserve O_ACCMODE; only status flags are mutable.
@@ -1682,35 +1816,50 @@ int64_t sys_fcntl(int fd, int cmd, unsigned long arg)
      * broke BusyBox less (ndelay_on → flags became O_NONBLOCK alone).
      */
     {
-      int keep = fd_table[fd].flags & O_ACCMODE;
+      int keep = e->flags & O_ACCMODE;
       int settable = (int)arg & (O_APPEND | O_NONBLOCK);
 
-      fd_table[fd].flags = keep | settable;
+      e->flags = keep | settable;
     }
-    return 0;
+    ret = 0;
+    break;
   case F_GETOWN:
-    return current_process->task.pid;
+    ret = current_process->task.pid;
+    break;
   case F_SETOWN:
     /* Owner recorded as current pid only; no SIGIO wiring yet. */
     (void)arg;
-    return 0;
+    ret = 0;
+    break;
   case F_DUPFD:
   {
     int start = (int)arg;
     int i;
 
     if (start < 0 || start >= MAX_FDS_PER_PROCESS)
-      return -EINVAL;
+    {
+      ret = -EINVAL;
+      break;
+    }
     for (i = start; i < MAX_FDS_PER_PROCESS; i++)
     {
       if (!fd_table[i].in_use)
-        return sys_dup2(fd, i);
+      {
+	/* Drop pin before dup2 (re-enters fd table). */
+	ir0_fd_put(&h);
+	return sys_dup2(fd, i);
+      }
     }
-    return -EMFILE;
+    ret = -EMFILE;
+    break;
   }
   default:
-    return -EINVAL;
+    ret = -EINVAL;
+    break;
   }
+
+  ir0_fd_put(&h);
+  return ret;
 }
 int64_t sys_pipe(int pipefd[2])
 {

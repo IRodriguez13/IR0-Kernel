@@ -89,12 +89,20 @@ static int serial_is_transmit_empty(void)
 
 /**
  * serial_putchar - write a character to the serial port
+ *
+ * Bounded wait: if the host side of -serial stdio stops draining (full pipe
+ * while the user watches only the GTK window), an infinite THRE spin freezes
+ * the guest — including getty after LOGIN_USER_READ, before "Password:" is
+ * painted on the framebuffer.
  */
 void serial_putchar(char c)
 {
+    unsigned spins = 0;
+
     while (serial_is_transmit_empty() == 0)
     {
-        /* Wait for transmitter buffer to be empty */
+        if (++spins > 100000u)
+            return;
     }
 
     outb(SERIAL_PORT_COM1, (uint8_t)c);

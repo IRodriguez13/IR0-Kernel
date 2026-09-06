@@ -111,6 +111,38 @@ static int check_getdents_dev(void)
 	return 0;
 }
 
+/* Regression: session soak ls /proc | head SIGSEGV (proc_readdir UAF). */
+static int check_getdents_proc(void)
+{
+	char buf[2048];
+	long nread;
+	int fd;
+	int batches = 0;
+
+	fd = open("/proc", O_RDONLY | O_DIRECTORY);
+	if (fd < 0)
+		return -1;
+
+	for (;;)
+	{
+		nread = syscall(SYS_getdents64, fd, buf, sizeof(buf));
+		if (nread < 0)
+		{
+			close(fd);
+			return -1;
+		}
+		if (nread == 0)
+			break;
+		batches++;
+	}
+	close(fd);
+	if (batches < 1)
+		return -1;
+
+	say("KTM_GETDENTS_PROC_OK\n");
+	return 0;
+}
+
 static void try_hostshare_report(int ok)
 {
 	const char *payload = ok ? "KTM_USERDEV_POSIX_PSEUDOFS_OK\n" : "KTM_USERDEV_POSIX_PSEUDOFS_FAIL\n";
@@ -125,6 +157,7 @@ int main(void)
 	int nodes_ok;
 	int acc_ok;
 	int gd_ok;
+	int proc_gd_ok;
 	ktm_user_caps_t caps;
 
 	kfd = ktm_open();
@@ -166,6 +199,13 @@ int main(void)
 	if (!gd_ok)
 		fails++;
 	if (ktm_assert_true(kfd, "getdents_dev", gd_ok) != 0)
+		fails++;
+
+	(void)ktm_checkpoint(kfd, "getdents_proc");
+	proc_gd_ok = (check_getdents_proc() == 0);
+	if (!proc_gd_ok)
+		fails++;
+	if (ktm_assert_true(kfd, "getdents_proc", proc_gd_ok) != 0)
 		fails++;
 
 	(void)ktm_case_end(kfd, "posix_pseudofs", fails == 0 ? 0 : 1);

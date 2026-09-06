@@ -23,6 +23,7 @@
 #include <ir0/input_backend.h>
 #include <string.h>
 #include <ir0/arch_port.h>
+#include <ir0/spinlock.h>
 
 /* Ring buffer: 64 input_event entries */
 #define INPUT_EVENT_QUEUE_SIZE 64
@@ -31,33 +32,25 @@ static volatile unsigned int ev_head;
 static volatile unsigned int ev_tail;
 static volatile int events_readers;
 
-static inline uint64_t input_events_irq_save(void)
-{
-	return (uint64_t)irq_save();
-}
-
-static inline void input_events_irq_restore(uint64_t flags)
-{
-	irq_restore((unsigned long)flags);
-}
-
 void input_events_reader_open(void)
 {
-	uint64_t irq_flags = input_events_irq_save();
+	ir0_spinlock_t lock;
 
+	ir0_spin_lock(&lock);
 	events_readers++;
-	input_events_irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 }
 
 void input_events_reader_close(void)
 {
 	int do_flush = 0;
-	uint64_t irq_flags = input_events_irq_save();
+	ir0_spinlock_t lock;
 
+	ir0_spin_lock(&lock);
 	if (events_readers > 0)
 		events_readers--;
 	do_flush = (events_readers == 0);
-	input_events_irq_restore(irq_flags);
+	ir0_spin_unlock(&lock);
 	if (do_flush)
 	{
 		/*
@@ -96,19 +89,19 @@ void input_event_push(uint16_t type, uint16_t code, int32_t value)
 size_t input_event_read(struct input_event *buf, size_t count)
 {
     size_t n = 0;
-    uint64_t irq_flags;
+    ir0_spinlock_t lock;
 
     if (!buf || count == 0)
         return 0;
 
-    irq_flags = input_events_irq_save();
+    ir0_spin_lock(&lock);
     while (n < count && ev_tail != ev_head)
     {
         buf[n] = event_queue[ev_tail];
         ev_tail = (ev_tail + 1) % INPUT_EVENT_QUEUE_SIZE;
         n++;
     }
-    input_events_irq_restore(irq_flags);
+    ir0_spin_unlock(&lock);
     return n;
 }
 
@@ -121,12 +114,12 @@ size_t input_event_queue_depth(void)
 {
     size_t head;
     size_t tail;
-    uint64_t irq_flags;
+    ir0_spinlock_t lock;
 
-    irq_flags = input_events_irq_save();
+    ir0_spin_lock(&lock);
     head = ev_head;
     tail = ev_tail;
-    input_events_irq_restore(irq_flags);
+    ir0_spin_unlock(&lock);
 
     if (head >= tail)
     {

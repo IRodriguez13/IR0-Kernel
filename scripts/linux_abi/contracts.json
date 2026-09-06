@@ -140,9 +140,15 @@
     },
     {
       "id": "ioctl",
-      "enabled": false,
-      "title": "ioctl",
-      "status_doc": "PARTIAL"
+      "enabled": true,
+      "title": "ioctl(2) console TTY",
+      "status_doc": "LINUX-LIKE"
+    },
+    {
+      "id": "fcntl",
+      "enabled": true,
+      "title": "fcntl(2) F_GETFD/F_SETFD",
+      "status_doc": "LINUX-LIKE"
     },
     {
       "id": "read",
@@ -264,7 +270,7 @@
     },
     {
       "id": "kill_sigterm",
-      "enabled": false,
+      "enabled": true,
       "title": "SIGTERM default action and wait status",
       "status_doc": "LINUX-LIKE",
       "ktest": "kill_sigterm_wait_status",

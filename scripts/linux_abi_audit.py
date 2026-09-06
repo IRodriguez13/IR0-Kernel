@@ -26,7 +26,9 @@ from compare import (  # noqa: E402
     compare_chdir,
     compare_dup,
     compare_execve,
+    compare_fcntl,
     compare_getcwd,
+    compare_ioctl,
     compare_mmap,
     compare_mount,
     compare_nanosleep,
@@ -202,6 +204,20 @@ def build_getcwd_probe(report_dir: Path) -> Path:
     return build_static_probe(
         report_dir / "getcwd_probe",
         ROOT / "scripts" / "linux_abi" / "workloads" / "getcwd_probe.c",
+    )
+
+
+def build_ioctl_tty_probe(report_dir: Path) -> Path:
+    return build_static_probe(
+        report_dir / "ioctl_tty_probe",
+        ROOT / "scripts" / "linux_abi" / "workloads" / "ioctl_tty_probe.c",
+    )
+
+
+def build_fcntl_probe(report_dir: Path) -> Path:
+    return build_static_probe(
+        report_dir / "fcntl_probe",
+        ROOT / "scripts" / "linux_abi" / "workloads" / "fcntl_probe.c",
     )
 
 
@@ -1307,6 +1323,56 @@ def audit_dup(report_dir: Path, cfg: dict) -> CompareResult:
     return compare_dup(linux_trace, ir0_trace, ebadf_errno)
 
 
+def audit_ioctl(report_dir: Path, cfg: dict) -> CompareResult:
+    linux_dir = report_dir / "linux" / "ioctl"
+    ir0_dir = report_dir / "ir0" / "ioctl"
+
+    build_ioctl_tty_probe(report_dir)
+
+    if not _run_simple_workloads(
+        "ioctl",
+        "ioctl_tty_probe",
+        "IOCTLTTYOK",
+        "ioctl,write",
+        linux_dir,
+        ir0_dir,
+    ):
+        return CompareResult(
+            contract="ioctl",
+            ok=False,
+            divergences=["ioctl workload script failed"],
+        )
+
+    linux_trace = json.loads((linux_dir / "trace.json").read_text())
+    ir0_trace = json.loads((ir0_dir / "trace.json").read_text())
+    return compare_ioctl(linux_trace, ir0_trace)
+
+
+def audit_fcntl(report_dir: Path, cfg: dict) -> CompareResult:
+    linux_dir = report_dir / "linux" / "fcntl"
+    ir0_dir = report_dir / "ir0" / "fcntl"
+
+    build_fcntl_probe(report_dir)
+
+    if not _run_simple_workloads(
+        "fcntl",
+        "fcntl_probe",
+        "FCNTLOK",
+        "open,fcntl,close,write",
+        linux_dir,
+        ir0_dir,
+    ):
+        return CompareResult(
+            contract="fcntl",
+            ok=False,
+            divergences=["fcntl workload script failed"],
+        )
+
+    linux_trace = json.loads((linux_dir / "trace.json").read_text())
+    ir0_trace = json.loads((ir0_dir / "trace.json").read_text())
+    return compare_fcntl(linux_trace, ir0_trace)
+
+
 AUDITORS = {
     "brk": audit_brk,
     "wait4": audit_wait4,
@@ -1320,6 +1386,8 @@ AUDITORS = {
     "getcwd": audit_getcwd,
     "chdir": audit_chdir,
     "dup": audit_dup,
+    "ioctl": audit_ioctl,
+    "fcntl": audit_fcntl,
     "mmap": audit_mmap,
     "mount": audit_mount,
     "execve": audit_execve,

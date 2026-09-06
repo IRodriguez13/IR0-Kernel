@@ -1613,6 +1613,93 @@ def compare_dup(linux: dict, ir0: dict, ebadf_errno: int) -> CompareResult:
     return res
 
 
+def compare_ioctl(linux: dict, ir0: dict) -> CompareResult:
+    res = CompareResult(contract="ioctl", ok=True)
+    required = ("tcgets", "tiocgwinsz", "tiocgpgrp")
+
+    for op in required:
+        l_s = _find_step(linux.get("audit_steps") or [], op)
+        i_s = _find_step(ir0.get("audit_steps") or [], op)
+        if not l_s or not i_s:
+            res.ok = False
+            res.divergences.append(
+                f"missing {op} step (linux={bool(l_s)} ir0={bool(i_s)})"
+            )
+            continue
+        for label, step in (("linux", l_s), ("ir0", i_s)):
+            if step.get("ret", -1) != 0:
+                res.ok = False
+                res.divergences.append(
+                    f"{label} {op}: ret={step.get('ret')} errno={step.get('errno')} expected 0"
+                )
+        if l_s.get("ret") != i_s.get("ret"):
+            res.ok = False
+            res.divergences.append(
+                f"{op} ret mismatch linux={l_s.get('ret')} ir0={i_s.get('ret')}"
+            )
+
+    res.notes.append("console TTY ioctl(TCGETS/TIOCGWINSZ/TIOCGPGRP) on fd 0")
+    return res
+
+
+def compare_fcntl(linux: dict, ir0: dict) -> CompareResult:
+    res = CompareResult(contract="fcntl", ok=True)
+    required = (
+        ("open", None, None),
+        ("fcntl_getfd", 0, None),
+        ("fcntl_setfd", 0, None),
+        ("fcntl_getfd_cloexec", None, None),
+    )
+
+    for op, exp_ret, exp_errno in required:
+        l_s = _find_step(linux.get("audit_steps") or [], op)
+        i_s = _find_step(ir0.get("audit_steps") or [], op)
+        if not l_s or not i_s:
+            res.ok = False
+            res.divergences.append(
+                f"missing {op} step (linux={bool(l_s)} ir0={bool(i_s)})"
+            )
+            continue
+
+        if op == "open":
+            for label, step in (("linux", l_s), ("ir0", i_s)):
+                if step.get("ret", -1) < 0:
+                    res.ok = False
+                    res.divergences.append(f"{label} open: ret={step.get('ret')}")
+            continue
+
+        if op == "fcntl_getfd_cloexec":
+            for label, step in (("linux", l_s), ("ir0", i_s)):
+                flags = step.get("ret")
+                if flags is None or (int(flags) & 1) == 0:
+                    res.ok = False
+                    res.divergences.append(
+                        f"{label} {op}: flags={flags} expected FD_CLOEXEC"
+                    )
+            continue
+
+        for label, step in (("linux", l_s), ("ir0", i_s)):
+            if exp_ret is not None and step.get("ret") != exp_ret:
+                res.ok = False
+                res.divergences.append(
+                    f"{label} {op}: ret={step.get('ret')} expected={exp_ret}"
+                )
+            if exp_errno is not None and step.get("errno") != exp_errno:
+                res.ok = False
+                res.divergences.append(
+                    f"{label} {op}: errno={step.get('errno')} expected={exp_errno}"
+                )
+
+        if l_s.get("ret") != i_s.get("ret"):
+            res.ok = False
+            res.divergences.append(
+                f"{op} ret mismatch linux={l_s.get('ret')} ir0={i_s.get('ret')}"
+            )
+
+    res.notes.append("fcntl(F_GETFD/F_SETFD) FD_CLOEXEC on /proc/uptime")
+    return res
+
+
 def render_markdown(results: list[CompareResult], meta: dict) -> str:
     lines = [
         "# Linux ABI audit report",

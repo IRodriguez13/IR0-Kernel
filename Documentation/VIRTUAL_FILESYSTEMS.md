@@ -1,10 +1,11 @@
 # IR0 Virtual Filesystems
 
-> **Last verified:** 2026-08-30
+> **Last verified:** 2026-09-04
 > **Source of truth:** `fs/procfs.c`, `fs/sysfs.c`, `fs/devfs.c`, `fs/heartfs.c`,
 > `fs/pseudo_fs_registry.c`, `fs/pseudo_fs_nodes.c`,
 > `kernel/syscalls/mm_syscalls.c` (`sys_sysinfo`),
 > `fs/vfs.c` (`vfs_statfs`), `includes/ir0/statfs.h`,
+> `kernel/test/test_procfs.c` (`procfs_pid_maps` ktest),
 > [`PSEUDO_FS_HEART.md`](PSEUDO_FS_HEART.md),
 > [`KLOG.md`](KLOG.md) (`/proc/kmsg`, `/dev/kmsg`)
 
@@ -36,6 +37,82 @@ See [`PSEUDO_FS_HEART.md`](PSEUDO_FS_HEART.md) for layout, gates, and ARCH-3 not
 - `/proc/[pid]/status`
 - `/proc/[pid]/cmdline`
 - `/proc/[pid]/stat` — Linux `proc(5)` field order (CPU counters still mostly 0)
+- `/proc/[pid]/maps` — mapped memory regions (heap, mmap, stack) from `mm_struct`
+- `/proc/[pid]/statm` — page-count summary (`size resident shared text lib data dt`)
+- `/proc/self/...` — resolves to the calling process PID (Linux style)
+- `/proc/self` — symlink (`DT_LNK` in `ls /proc`); `readlink` target is the
+  decimal PID string (Linux `proc(5)`)
+- `/proc/[pid]/exe` — symlink to the absolute path last passed to `execve`
+  (`process_t.exe_path`, set in `elf_loader.c`)
+
+### `/proc/[pid]/maps` and `/proc/[pid]/statm`
+
+Both files are served by the dynamic `/proc` matcher
+(`proc_pid_file_match` in `fs/pseudo_fs_nodes.c`) and read a locked snapshot of
+`mm_struct` (`proc_fs_snap_acquire` in `fs/procfs.c`).
+
+`maps` uses the Linux `proc(5)` line layout
+`start-end perms offset dev inode  pathname` and emits only regions IR0
+actually tracks, with real bounds and prot bits:
+
+```text
+<heap_start>-<heap_end> rw-p 00000000 00:00 0          [heap]
+<mmap_addr>-<mmap_end>  <r/w/x><p|s> 00000000 00:00 0
+<stack_start>-<end>     rw-p 00000000 00:00 0          [stack]
+```
+
+`offset`/`dev`/`inode` are `0`/`00:00`/`0` because user mappings are not backed
+by on-disk inodes yet. Nothing is fabricated — a kernel thread with no user
+`mm` produces an empty `maps`.
+
+`statm` reports real total virtual size (`size`, in pages) and resident pages
+(`resident`, from `mm_count_resident_user_pages`); `shared`, `text`, `lib`,
+`data` and `dt` are `0` (no per-segment accounting yet).
+
+Runnable proof: the `procfs_pid_maps` ktest (`kernel/test/test_procfs.c`) opens
+`/proc/self/maps` and `/proc/self/statm` via `sys_open`/`sys_read` and asserts
+the format under `make kernel-tests`.
+
+### `/proc/[pid]/fd` and `/proc/[pid]/environ`
+
+- **`/proc/<pid>/fd/`** — directory listing numeric symlinks `0..63` for in-use
+  `fd_table` slots (`proc_readdir` + `DT_LNK`). Each `/proc/<pid>/fd/N` resolves
+  via `readlink(2)` / `proc_readlink()` to `fd_entry.path` when set, or honest
+  synthetics such as `[pipe]` / `[socket]` when the slot has no path string.
+- **`/proc/<pid>/environ`** — NUL-separated environment blob copied at exec into
+  `process_t.saved_environ` (`process_saved_environ_set` in `elf_loader.c`);
+  inherited on fork. Empty for kernel threads with no exec-time env.
+
+Runnable proof: `procfs_pid_fd` and `procfs_pid_environ` ktests in
+`kernel/test/test_procfs.c`.
+
+### `/proc/self` and `/proc/[pid]/exe` symlinks
+
+- **`/proc/self`** — visible in `ls /proc` as `self` (`proc_readdir` +
+  `DT_LNK`). `readlink("/proc/self")` returns the caller's PID as decimal text;
+  `stat` reports `S_IFLNK`. Opening `/proc/self` as a directory lists the same
+  entries as `/proc/<pid>/` for the calling task.
+- **`/proc/<pid>/exe`** — listed under each live PID directory (`DT_LNK`).
+  `readlink` returns `process_t.exe_path` when set at exec; `-ENOENT` when the
+  task has no recorded executable (e.g. kernel thread).
+
+Runnable proof: `procfs_self_symlink` and `procfs_pid_exe` ktests in
+`kernel/test/test_procfs.c`.
+
+### `/sys/kernel/mm`
+
+Read-only kernel MM snapshot (same PMM + heap sources as `/proc/meminfo`):
+`MemTotal`, `MemFree`, `MemAvailable`, `MemUsed`, raw frame counters
+(`PmmTotalFrames`, `PmmUsedFrames`, `PmmFreeFrames`), `Slab`, `SlabTotal`,
+`SlabAllocs`, `PageSize`, `KStackMinFree`, `IrqNestMax`, `KStackPeak`.
+Registered in `fs/pseudo_fs_nodes.c` as `/sys/kernel/mm`.
+
+### `/proc` intermediate directories
+
+Registry subdirectories such as `/proc/net` and `/proc/bluetooth` have no exact
+node but hold registered leaves. `proc_stat()` reports them as real directories
+(`S_IFDIR | 0555`) with a live timestamp via `pseudo_fs_path_has_children()`, so
+`stat`/`ls -ld` behave like Linux instead of returning `ENOENT`.
 
 ### `/proc/stat` (BusyBox `top`)
 
@@ -144,11 +221,32 @@ listed.
 ## `/sys`
 
 `sysfs` exposes kernel/system data in a structured filesystem namespace.
+Nodes are registered in `pseudo_fs_nodes_register_all()` (`fs/pseudo_fs_nodes.c`)
+and backed by handlers in `fs/sysfs.c`.
+
+### Common Endpoints
+
+- `/sys/kernel/hostname` — live hostname (read/write)
+- `/sys/kernel/version` / `/sys/kernel/osrelease` / `/sys/kernel/build`
+- `/sys/kernel/features` — compiled-in feature summary
+- `/sys/kernel/max_processes` — configured process table limit
+- `/sys/kernel/panic` — **write** any byte to force `panicex(TESTING)`
+  (root-only, `0644`); read returns help text
+- `/sys/devices/system/cpu<N>` and `/sys/devices/system/cpu<N>/online`
+- `/sys/devices/system` / `/sys/devices/block`
+- `/sys/console/mode`
+- `/sys/class/net` and `/sys/class/net/<iface>/...` (dynamic per interface)
+- `/sys/class/bluetooth/hci0/{address,state}`,
+  `/sys/class/bluetooth/{topology/neighbors,sessions}`
 
 ### Notes
 
 - Error handling paths use consistent negative errno returns.
 - Console and backend exposure route through facade-backed interfaces.
+- Directory `stat` uses `pseudo_fs_stat_now()` so `ls -l` shows wall-clock dates.
+- `/sys/kernel/panic` mirrors the full panic dump to VGA/serial **and** the GTK
+  framebuffer (`console_backend_panic_screen_on` + `klog` screen sink); guest
+  check: `python3 scripts/smoke_sys_panic.py`.
 
 ## In-Memory Pseudo Backends
 

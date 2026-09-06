@@ -65,7 +65,7 @@ uint64_t *process_pt_child(uint64_t *table, size_t index)
 	return (uint64_t *)(table[index] & PAGE_FRAME_MASK);
 }
 
-uint64_t process_count_resident_user_pages(const process_t *p)
+uint64_t mm_count_resident_user_pages(const mm_struct_t *mm)
 {
 	size_t i4;
 	size_t i3;
@@ -74,10 +74,10 @@ uint64_t process_count_resident_user_pages(const process_t *p)
 	uint64_t count = 0;
 	uint64_t *pml4;
 
-	if (!p || !process_pgd(p))
+	if (!mm || !mm->page_directory)
 		return 0;
 
-	pml4 = process_pgd(p);
+	pml4 = mm->page_directory;
 	for (i4 = 0; i4 < (size_t)mm_user_root_slots(); i4++)
 	{
 		uint64_t *pdpt = process_pt_child(pml4, i4);
@@ -128,6 +128,14 @@ uint64_t process_count_resident_user_pages(const process_t *p)
 	}
 
 	return count;
+}
+
+uint64_t process_count_resident_user_pages(const process_t *p)
+{
+	if (!p || !p->mm)
+		return 0;
+
+	return mm_count_resident_user_pages(p->mm);
 }
 
 /*

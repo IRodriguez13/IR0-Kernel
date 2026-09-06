@@ -32,6 +32,8 @@
 #include <ir0/klog.h>
 #include <ir0/ktm/stack_watch.h>
 #include <ir0/process.h>
+#include <ir0/mm_struct.h>
+#include <ir0/syscall.h>
 #include <ir0/credentials.h>
 #include <config.h>
 #include <ir0/version.h>
@@ -46,6 +48,8 @@
 #include <ir0/validation.h>
 #include <ir0/resource_registry.h>
 #include <ir0/pseudo_fs.h>
+#include <ir0/fd_types.h>
+#include <ir0/files_struct.h>
 #include <ir0/logging.h>
 #include <ir0/sock_stream.h>
 #include <ir0/sock_udp.h>
@@ -64,54 +68,182 @@
 static void proc_u64_to_dec(uint64_t value, char *out, size_t out_len);
 
 /*
+ * Snapshot scalar /proc fields and pin the address space while a read path
+ * walks page tables. process_find_by_pid() drops the irq lock before return;
+ * a concurrent reap could free process_t and mm while stat/cmdline still run.
+ */
+typedef struct proc_fs_snap
+{
+	char comm[16];
+	pid_t pid;
+	pid_t ppid;
+	pid_t pgid;
+	pid_t sid;
+	int sched_prio;
+	uint64_t start_ticks;
+	int state;
+	uid_t uid;
+	gid_t gid;
+	uint64_t heap_start;
+	uint64_t heap_end;
+	uint64_t stack_start;
+	uint64_t stack_size;
+	struct mmap_region *mmap_list;
+	mm_struct_t *mm;
+} proc_fs_snap_t;
+
+static int proc_fs_snap_acquire(pid_t pid, proc_fs_snap_t *snap)
+{
+	process_t *proc;
+	uint64_t irqf;
+
+	if (!snap)
+		return -EINVAL;
+
+	memset(snap, 0, sizeof(*snap));
+
+	irqf = (uint64_t)irq_save();
+	if (pid == -1)
+		proc = current_process;
+	else
+	{
+		proc = process_list;
+		while (proc && proc->task.pid != pid)
+			proc = proc->next;
+	}
+
+	if (!proc)
+	{
+		irq_restore((unsigned long)irqf);
+		return 0;
+	}
+
+	strncpy(snap->comm, proc->comm, sizeof(snap->comm) - 1);
+	snap->comm[sizeof(snap->comm) - 1] = '\0';
+	snap->pid = proc->task.pid;
+	snap->ppid = proc->ppid;
+	snap->pgid = proc->pgid;
+	snap->sid = proc->sid;
+	snap->sched_prio = proc->sched_prio;
+	snap->start_ticks = proc->start_ticks;
+	snap->state = (int)proc->state;
+	snap->uid = proc->uid;
+	snap->gid = proc->gid;
+
+	if (proc->mm)
+	{
+		snap->mm = mm_get(proc->mm);
+		if (snap->mm)
+		{
+			snap->heap_start = snap->mm->heap_start;
+			snap->heap_end = snap->mm->heap_end;
+			snap->stack_start = snap->mm->stack_start;
+			snap->stack_size = snap->mm->stack_size;
+			snap->mmap_list = snap->mm->mmap_list;
+		}
+	}
+
+	irq_restore((unsigned long)irqf);
+	return 1;
+}
+
+static void proc_fs_snap_release(proc_fs_snap_t *snap)
+{
+	if (!snap || !snap->mm)
+		return;
+
+	mm_put(snap->mm);
+	snap->mm = NULL;
+}
+
+/*
  * /proc/ps: one line header then one line per process, tab-separated.
  * Header: PID\tPPID\tS\tUID\tCMD
  * State: R=runnable/running, S=sleeping(blocked), Z=zombie (§8).
  */
 int proc_ps_read(char *buf, size_t count)
 {
-    if (VALIDATE_BUFFER(buf, count) != 0)
-        return -1;
-    memset(buf, 0, count);
-    size_t off = 0;
-    int n;
+	typedef struct
+	{
+		pid_t pid;
+		pid_t ppid;
+		uid_t uid;
+		char comm[16];
+		int state;
+	} proc_ps_row_t;
 
-    n = snprintf(buf + off, count - off, "PID\tPPID\tS\tUID\tCMD\n");
-    if (n < 0)
-        return -1;
-    if (n >= (int)(count - off))
-        n = (int)(count - off) - 1;
-    off += (size_t)n;
+	proc_ps_row_t rows[64];
+	int row_count = 0;
+	process_t *p;
+	uint64_t irqf;
+	size_t off = 0;
+	int n;
+	int i;
 
-    process_t *p = process_list;
-    while (p && off < count - 1)
-    {
-        const char *state_str;
-        if (process_is_zombie(p))
-            state_str = "Z";
-        else
-        {
-            switch (p->state)
-            {
-            case PROCESS_READY:   state_str = "R"; break;
-            case PROCESS_RUNNING: state_str = "R"; break;
-            case PROCESS_BLOCKED: state_str = "S"; break;
-            case PROCESS_ZOMBIE:  state_str = "Z"; break;
-            default:              state_str = "?"; break;
-            }
-        }
-        const char *name = p->comm[0] ? p->comm : "(none)";
-        n = snprintf(buf + off, count - off,
-                         "%d\t%d\t%s\t%u\t%s\n",
-                         (int)p->task.pid, (int)p->ppid, state_str,
-                         (unsigned)p->uid, name);
-        if (n < 0) break;
-        if (n >= (int)(count - off)) n = (int)(count - off) - 1;
-        off += (size_t)n;
-        p = p->next;
-    }
-    if (off < count) buf[off] = '\0';
-    return (int)off;
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+
+	n = snprintf(buf, count, "PID\tPPID\tS\tUID\tCMD\n");
+	if (n < 0)
+		return -1;
+	if (n >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	off += (size_t)n;
+
+	irqf = (uint64_t)irq_save();
+	for (p = process_list; p && row_count < (int)(sizeof(rows) / sizeof(rows[0]));
+	     p = p->next)
+	{
+		rows[row_count].pid = p->task.pid;
+		rows[row_count].ppid = p->ppid;
+		rows[row_count].uid = p->uid;
+		rows[row_count].state = (int)p->state;
+		strncpy(rows[row_count].comm, p->comm, sizeof(rows[row_count].comm) - 1);
+		rows[row_count].comm[sizeof(rows[row_count].comm) - 1] = '\0';
+		row_count++;
+	}
+	irq_restore((unsigned long)irqf);
+
+	for (i = 0; i < row_count && off < count - 1; i++)
+	{
+		const char *state_str = "?";
+		const char *name = rows[i].comm[0] ? rows[i].comm : "(none)";
+
+		if (rows[i].state == PROCESS_ZOMBIE)
+			state_str = "Z";
+		else
+		{
+			switch (rows[i].state)
+			{
+			case PROCESS_READY:   state_str = "R"; break;
+			case PROCESS_RUNNING: state_str = "R"; break;
+			case PROCESS_BLOCKED: state_str = "S"; break;
+			default:              state_str = "?"; break;
+			}
+		}
+
+		n = snprintf(buf + off, count - off,
+			     "%d\t%d\t%s\t%u\t%s\n",
+			     (int)rows[i].pid, (int)rows[i].ppid, state_str,
+			     (unsigned)rows[i].uid, name);
+		if (n < 0)
+			break;
+		if (n >= (int)(count - off))
+		{
+			n = (int)(count - off) - 1;
+			off += (size_t)n;
+			break;
+		}
+		off += (size_t)n;
+	}
+
+	if (off < count)
+		buf[off] = '\0';
+	return (int)off;
 }
 
 /*
@@ -656,6 +788,15 @@ static const char *proc_parse_path(const char *path, pid_t *pid_out)
     /* Skip "/proc/" prefix */
     const char *after_proc = walk + 6;
 
+    /* /proc/self — Linux symlink to /proc/<current-pid> (bare path). */
+    if (strcmp(after_proc, "self") == 0)
+    {
+        if (!current_process)
+            return NULL;
+        *pid_out = current_process->task.pid;
+        return "self_link";
+    }
+
     /* Check if it's /proc/status (current process) */
     if (strncmp(after_proc, "status", 6) == 0)
     {
@@ -690,6 +831,22 @@ static const char *proc_parse_path(const char *path, pid_t *pid_out)
             return "status";
         if (strncmp(slash + 1, "cmdline", 7) == 0)
             return "cmdline";
+        if (strncmp(slash + 1, "maps", 4) == 0)
+            return "maps";
+        if (strncmp(slash + 1, "statm", 5) == 0)
+            return "statm";
+        if (strncmp(slash + 1, "fd", 2) == 0 &&
+            (slash[3] == '\0' || slash[3] == '/'))
+        {
+            if (slash[3] == '\0')
+                return "fd_dir";
+            if (slash[4] >= '0' && slash[4] <= '9')
+                return "fd_link";
+        }
+        if (strncmp(slash + 1, "environ", 7) == 0)
+            return "environ";
+        if (strncmp(slash + 1, "exe", 3) == 0 && slash[4] == '\0')
+            return "exe_link";
         if (strncmp(slash + 1, "stat", 4) == 0)
             return "stat";
         return NULL;
@@ -711,6 +868,22 @@ static const char *proc_parse_path(const char *path, pid_t *pid_out)
                 return "status";
             if (strncmp(slash + 1, "cmdline", 7) == 0)
                 return "cmdline";
+            if (strncmp(slash + 1, "maps", 4) == 0)
+                return "maps";
+            if (strncmp(slash + 1, "statm", 5) == 0)
+                return "statm";
+            if (strncmp(slash + 1, "fd", 2) == 0 &&
+                (slash[3] == '\0' || slash[3] == '/'))
+            {
+                if (slash[3] == '\0')
+                    return "fd_dir";
+                if (slash[4] >= '0' && slash[4] <= '9')
+                    return "fd_link";
+            }
+            if (strncmp(slash + 1, "environ", 7) == 0)
+                return "environ";
+            if (strncmp(slash + 1, "exe", 3) == 0 && slash[4] == '\0')
+                return "exe_link";
             if (strncmp(slash + 1, "stat", 4) == 0)
                 return "stat";
         }
@@ -756,7 +929,9 @@ int proc_is_virtual_subdir(const char *path)
         return 0;
 
     return strcmp(filename, "pid_dir") == 0 ||
-           strcmp(filename, "pid_subdir") == 0;
+           strcmp(filename, "pid_subdir") == 0 ||
+           strcmp(filename, "fd_dir") == 0 ||
+           strcmp(filename, "self_link") == 0;
 }
 
 /*
@@ -841,27 +1016,39 @@ int proc_meminfo_read(char *buf, size_t count)
 /* /proc/[pid]/status: raw data only. One line: name\tstate\tpid\tppid\tuid\tgid */
 int proc_status_read(char *buf, size_t count, pid_t pid)
 {
-    if (VALIDATE_BUFFER(buf, count) != 0)
-        return -1;
-    memset(buf, 0, count);
-    process_t *proc = (pid == -1) ? current_process : process_find_by_pid(pid);
-    if (!proc)
-        return 0;
-    const char *state_str = "?";
-    switch (proc->state) {
-        case PROCESS_READY:   state_str = "R"; break;
-        case PROCESS_RUNNING: state_str = "R"; break;
-        case PROCESS_BLOCKED: state_str = "S"; break;
-        case PROCESS_ZOMBIE:  state_str = "Z"; break;
-    }
-    int len = snprintf(buf, count, "%s\t%s\t%d\t%d\t%d\t%d\n",
-                       proc->comm[0] ? proc->comm : "(none)",
-                       state_str, (int)proc->task.pid, (int)proc->ppid,
-                       (int)proc->uid, (int)proc->gid);
-    if (len < 0) return -1;
-    if (len >= (int)count) { buf[count - 1] = '\0'; return (int)(count - 1); }
-    buf[len] = '\0';
-    return len;
+	proc_fs_snap_t snap;
+	const char *state_str = "?";
+	int len;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+
+	if (!proc_fs_snap_acquire(pid, &snap))
+		return 0;
+
+	switch (snap.state)
+	{
+		case PROCESS_READY:   state_str = "R"; break;
+		case PROCESS_RUNNING: state_str = "R"; break;
+		case PROCESS_BLOCKED: state_str = "S"; break;
+		case PROCESS_ZOMBIE:  state_str = "Z"; break;
+	}
+
+	len = snprintf(buf, count, "%s\t%s\t%d\t%d\t%d\t%d\n",
+		       snap.comm[0] ? snap.comm : "(none)",
+		       state_str, (int)snap.pid, (int)snap.ppid,
+		       (int)snap.uid, (int)snap.gid);
+	proc_fs_snap_release(&snap);
+	if (len < 0)
+		return -1;
+	if (len >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	buf[len] = '\0';
+	return len;
 }
 
 /*
@@ -875,84 +1062,432 @@ int proc_status_read(char *buf, size_t count, pid_t pid)
  */
 int proc_pid_stat_read(char *buf, size_t count, pid_t pid)
 {
-    process_t *proc;
-    const char *state_str = "?";
-    int tty_nr = IR0_PROC_CONSOLE_TTY_NR;
-    uint64_t vsize = 0;
-    uint64_t rss = 0;
-    int len;
+	proc_fs_snap_t snap;
+	const char *state_str = "?";
+	int tty_nr = IR0_PROC_CONSOLE_TTY_NR;
+	uint64_t vsize = 0;
+	uint64_t rss = 0;
+	int len;
 
-    if (VALIDATE_BUFFER(buf, count) != 0)
-        return -1;
-    memset(buf, 0, count);
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
 
-    proc = (pid == -1) ? current_process : process_find_by_pid(pid);
-    if (!proc)
-        return 0;
+	if (!proc_fs_snap_acquire(pid, &snap))
+		return 0;
 
-    switch (proc->state)
-    {
-        case PROCESS_READY:   state_str = "R"; break;
-        case PROCESS_RUNNING: state_str = "R"; break;
-        case PROCESS_BLOCKED: state_str = "S"; break;
-        case PROCESS_ZOMBIE:  state_str = "Z"; break;
-    }
+	switch (snap.state)
+	{
+		case PROCESS_READY:   state_str = "R"; break;
+		case PROCESS_RUNNING: state_str = "R"; break;
+		case PROCESS_BLOCKED: state_str = "S"; break;
+		case PROCESS_ZOMBIE:  state_str = "Z"; break;
+	}
 
-    /*
-     * vsize (field 23) is the sum of the address-space regions IR0 actually
-     * tracks: heap, user stack, and every mmap() region. The ELF image is not
-     * on mmap_list — elf_load_segments maps it straight into the page tables —
-     * so this undercounts by the binary's text and data. Still real accounting,
-     * and reporting 0 made ps and top print VSZ 0 for every process.
-     */
-    {
-        const struct mmap_region *r;
-        uint64_t heap_start = process_heap_start(proc);
-        uint64_t heap_end = process_heap_end(proc);
+	if (snap.heap_end > snap.heap_start)
+		vsize = snap.heap_end - snap.heap_start;
+	vsize += snap.stack_size;
+	{
+		const struct mmap_region *r;
 
-        if (heap_end > heap_start)
-            vsize = heap_end - heap_start;
-        vsize += process_stack_size(proc);
-        for (r = process_mmap_list(proc); r; r = r->next)
-            vsize += (uint64_t)r->length;
-    }
+		for (r = snap.mmap_list; r; r = r->next)
+			vsize += (uint64_t)r->length;
+	}
 
-    rss = process_count_resident_user_pages(proc);
+	if (snap.mm)
+		rss = mm_count_resident_user_pages(snap.mm);
 
-    /*
-     * Linux proc(5) after ") ": state … tpgid, then flags..priority (10
-     * fields), nice, num_threads, itrealvalue, starttime, vsize, rss, …
-     * Misplacing starttime as field 21 made BusyBox FAST_TOP see nice≠0
-     * and vsz=0 → STAT "RWN" instead of "R".
-     *
-     * rss (field 24) is resident user pages (4 KiB units), from a read-only
-     * page-table walk — not bytes, matching Linux proc(5).
-     */
-    len = snprintf(buf, count,
-                   "%d (%s) %s %d %d %d %d %d "     /*  1-8  */
-                   "0 0 0 0 0 0 0 0 0 %d "          /*  9-18 (18=priority) */
-                   "0 1 0 %llu %llu %llu 0 0 0 0 0 0 0 0 0 0 0 0\n", /* 19-36 */
-                   (int)proc->task.pid,
-                   proc->comm[0] ? proc->comm : "none",
-                   state_str,
-                   (int)proc->ppid,
-                   (int)proc->pgid,
-                   (int)proc->sid,
-                   tty_nr,
-                   (int)proc->pgid,               /* tpgid: fg group on tty */
-                   (int)proc->sched_prio,         /* 18: priority */
-                   (unsigned long long)proc->start_ticks, /* 22: starttime */
-                   (unsigned long long)vsize,               /* 23: vsize */
-                   (unsigned long long)rss);                /* 24: rss pages */
-    if (len < 0)
-        return -1;
-    if (len >= (int)count)
-    {
-        buf[count - 1] = '\0';
-        return (int)(count - 1);
-    }
-    buf[len] = '\0';
-    return len;
+	len = snprintf(buf, count,
+		       "%d (%s) %s %d %d %d %d %d "     /*  1-8  */
+		       "0 0 0 0 0 0 0 0 0 %d "          /*  9-18 (18=priority) */
+		       "0 1 0 %llu %llu %llu 0 0 0 0 0 0 0 0 0 0 0 0\n", /* 19-36 */
+		       (int)snap.pid,
+		       snap.comm[0] ? snap.comm : "none",
+		       state_str,
+		       (int)snap.ppid,
+		       (int)snap.pgid,
+		       (int)snap.sid,
+		       tty_nr,
+		       (int)snap.pgid,               /* tpgid: fg group on tty */
+		       snap.sched_prio,               /* 18: priority */
+		       (unsigned long long)snap.start_ticks, /* 22: starttime */
+		       (unsigned long long)vsize,               /* 23: vsize */
+		       (unsigned long long)rss);                /* 24: rss pages */
+	proc_fs_snap_release(&snap);
+	if (len < 0)
+		return -1;
+	if (len >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	buf[len] = '\0';
+	return len;
+}
+
+/*
+ * /proc/[pid]/maps — Linux proc(5) layout:
+ *   <start>-<end> <perms> <offset> <dev> <inode>    <pathname>
+ *
+ * IR0 emits the regions it actually tracks in mm_struct: the brk heap, the
+ * demand-paged mmap regions (with their real prot/shared bits), and the user
+ * stack. offset/dev/inode are 0/00:00/0 because user mappings are not backed
+ * by on-disk inodes yet; nothing here is fabricated.
+ */
+int proc_pid_maps_read(char *buf, size_t count, pid_t pid)
+{
+	proc_fs_snap_t snap;
+	const struct mmap_region *r;
+	int len = 0;
+	int n;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+
+	if (!proc_fs_snap_acquire(pid, &snap))
+		return 0;
+
+	if (snap.heap_end > snap.heap_start)
+	{
+		n = snprintf(buf + len, count - (size_t)len,
+			     "%016llx-%016llx rw-p 00000000 00:00 0          [heap]\n",
+			     (unsigned long long)snap.heap_start,
+			     (unsigned long long)snap.heap_end);
+		if (n > 0 && n < (int)(count - (size_t)len))
+			len += n;
+	}
+
+	for (r = snap.mmap_list; r; r = r->next)
+	{
+		uint64_t start = (uint64_t)(uintptr_t)r->addr;
+		uint64_t end = start + (uint64_t)r->length;
+		char perms[5];
+
+		perms[0] = (r->prot & PROT_READ) ? 'r' : '-';
+		perms[1] = (r->prot & PROT_WRITE) ? 'w' : '-';
+		perms[2] = (r->prot & PROT_EXEC) ? 'x' : '-';
+		perms[3] = (r->flags & MAP_SHARED) ? 's' : 'p';
+		perms[4] = '\0';
+
+		n = snprintf(buf + len, count - (size_t)len,
+			     "%016llx-%016llx %s 00000000 00:00 0\n",
+			     (unsigned long long)start,
+			     (unsigned long long)end, perms);
+		if (n > 0 && n < (int)(count - (size_t)len))
+			len += n;
+		else
+			break;
+	}
+
+	if (snap.stack_size > 0)
+	{
+		uint64_t sstart = snap.stack_start;
+		uint64_t send = sstart + snap.stack_size;
+
+		n = snprintf(buf + len, count - (size_t)len,
+			     "%016llx-%016llx rw-p 00000000 00:00 0          [stack]\n",
+			     (unsigned long long)sstart,
+			     (unsigned long long)send);
+		if (n > 0 && n < (int)(count - (size_t)len))
+			len += n;
+	}
+
+	proc_fs_snap_release(&snap);
+	buf[count - 1] = '\0';
+	return len;
+}
+
+/*
+ * /proc/[pid]/statm — Linux proc(5): size resident shared text lib data dt
+ * (units are pages). IR0 reports real total virtual size and resident pages
+ * from mm_struct; shared/text/lib/data/dt are 0 (no per-segment accounting).
+ */
+int proc_pid_statm_read(char *buf, size_t count, pid_t pid)
+{
+	proc_fs_snap_t snap;
+	uint64_t vsize = 0;
+	uint64_t size_pages;
+	uint64_t rss = 0;
+	int len;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+	memset(buf, 0, count);
+
+	if (!proc_fs_snap_acquire(pid, &snap))
+		return 0;
+
+	if (snap.heap_end > snap.heap_start)
+		vsize = snap.heap_end - snap.heap_start;
+	vsize += snap.stack_size;
+	{
+		const struct mmap_region *r;
+
+		for (r = snap.mmap_list; r; r = r->next)
+			vsize += (uint64_t)r->length;
+	}
+	if (snap.mm)
+		rss = mm_count_resident_user_pages(snap.mm);
+
+	size_pages = vsize / (uint64_t)IR0_MM_PAGE_SIZE;
+
+	len = snprintf(buf, count, "%llu %llu 0 0 0 0 0\n",
+		       (unsigned long long)size_pages,
+		       (unsigned long long)rss);
+	proc_fs_snap_release(&snap);
+	if (len < 0)
+		return -1;
+	if (len >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	buf[len] = '\0';
+	return len;
+}
+
+typedef struct proc_fd_snap
+{
+	fd_entry_t table[MAX_FDS_PER_PROCESS];
+	int valid;
+} proc_fd_snap_t;
+
+static int proc_fd_snap_acquire(pid_t pid, proc_fd_snap_t *snap)
+{
+	process_t *proc;
+	unsigned long irqf;
+
+	if (!snap)
+		return -EINVAL;
+
+	memset(snap, 0, sizeof(*snap));
+
+	irqf = irq_save();
+	if (pid == -1)
+		proc = current_process;
+	else
+	{
+		proc = process_list;
+		while (proc && proc->task.pid != pid)
+			proc = proc->next;
+	}
+
+	if (proc && proc->files && files_struct_live(proc->files))
+	{
+		memcpy(snap->table, proc->files->fd_table, sizeof(snap->table));
+		snap->valid = 1;
+	}
+	irq_restore(irqf);
+	return snap->valid;
+}
+
+static int proc_parse_pid_fd_link(const char *path, pid_t *pid_out, int *fd_out)
+{
+	const char *name;
+	const char *fd_slash;
+	int fd;
+
+	if (!path || !pid_out || !fd_out)
+		return -EINVAL;
+
+	name = proc_parse_path(path, pid_out);
+	if (!name || strcmp(name, "fd_link") != 0)
+		return -ENOENT;
+
+	fd_slash = strstr(path, "/fd/");
+	if (!fd_slash)
+		return -ENOENT;
+
+	fd = atoi(fd_slash + 4);
+	if (fd < 0 || fd >= MAX_FDS_PER_PROCESS)
+		return -EINVAL;
+
+	*fd_out = fd;
+	return 0;
+}
+
+static int proc_fd_entry_target(const fd_entry_t *ent, char *buf, size_t count)
+{
+	if (!ent || !ent->in_use)
+		return -ENOENT;
+
+	if (ent->path[0] != '\0')
+		return snprintf(buf, count, "%s", ent->path);
+	if (ent->is_pipe)
+		return snprintf(buf, count, "[pipe]");
+	if (ent->is_socket)
+		return snprintf(buf, count, "[socket]");
+	if (ent->is_epoll)
+		return snprintf(buf, count, "[eventpoll]");
+	if (ent->is_eventfd)
+		return snprintf(buf, count, "[eventfd]");
+	if (ent->is_timerfd)
+		return snprintf(buf, count, "[timerfd]");
+	if (ent->is_memfd)
+		return snprintf(buf, count, "[memfd]");
+	if (ent->is_devfs)
+		return snprintf(buf, count, "[dev]");
+	if (ent->is_pseudo)
+		return snprintf(buf, count, "[pseudo]");
+	return snprintf(buf, count, "[anon]");
+}
+
+int proc_pid_fd_link_target_read(char *buf, size_t count, pid_t pid, int fd_num)
+{
+	proc_fd_snap_t snap;
+	int len;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+
+	if (!proc_fd_snap_acquire(pid, &snap))
+		return -ENOENT;
+
+	if (fd_num < 0 || fd_num >= MAX_FDS_PER_PROCESS ||
+	    !snap.table[fd_num].in_use)
+		return -ENOENT;
+
+	len = proc_fd_entry_target(&snap.table[fd_num], buf, count);
+	if (len < 0)
+		return len;
+	if ((size_t)len >= count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	buf[len] = '\0';
+	return len;
+}
+
+int proc_pid_exe_link_target_read(char *buf, size_t count, pid_t pid)
+{
+	process_t *proc;
+	unsigned long irqf;
+	int len;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+
+	irqf = irq_save();
+	if (pid == -1)
+		proc = current_process;
+	else
+	{
+		proc = process_list;
+		while (proc && proc->task.pid != pid)
+			proc = proc->next;
+	}
+
+	if (!proc || !proc->exe_path[0])
+	{
+		irq_restore(irqf);
+		return -ENOENT;
+	}
+
+	len = snprintf(buf, count, "%s", proc->exe_path);
+	irq_restore(irqf);
+	if (len < 0)
+		return -1;
+	if ((size_t)len >= count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+	buf[len] = '\0';
+	return len;
+}
+
+int proc_pid_environ_read(char *buf, size_t count, pid_t pid)
+{
+	process_t *proc;
+	char *blob;
+	size_t blob_len;
+	unsigned long irqf;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+
+	memset(buf, 0, count);
+
+	irqf = irq_save();
+	if (pid == -1)
+		proc = current_process;
+	else
+	{
+		proc = process_list;
+		while (proc && proc->task.pid != pid)
+			proc = proc->next;
+	}
+
+	if (!proc || !proc->saved_environ || proc->saved_environ_len == 0)
+	{
+		irq_restore(irqf);
+		return 0;
+	}
+
+	blob = proc->saved_environ;
+	blob_len = proc->saved_environ_len;
+	irq_restore(irqf);
+
+	if (blob_len > count)
+	{
+		memcpy(buf, blob, count);
+		return (int)count;
+	}
+
+	memcpy(buf, blob, blob_len);
+	return (int)blob_len;
+}
+
+static int proc_readlink_finish(char *buf, size_t buflen, int len)
+{
+	if (len < 0)
+		return len;
+	if ((size_t)len >= buflen)
+	{
+		buf[buflen - 1] = '\0';
+		return (int)(buflen - 1);
+	}
+	buf[len] = '\0';
+	return len;
+}
+
+int proc_readlink(const char *path, char *buf, size_t buflen)
+{
+	pid_t pid;
+	const char *name;
+	int fd_num;
+	int len;
+
+	if (!path || !buf || buflen == 0)
+		return -EINVAL;
+
+	if (proc_parse_pid_fd_link(path, &pid, &fd_num) == 0)
+	{
+		len = proc_pid_fd_link_target_read(buf, buflen, pid, fd_num);
+		return proc_readlink_finish(buf, buflen, len);
+	}
+
+	name = proc_parse_path(path, &pid);
+	if (!name)
+		return -ENOENT;
+
+	if (strcmp(name, "self_link") == 0)
+	{
+		if (!current_process)
+			return -ENOENT;
+		len = snprintf(buf, buflen, "%d", (int)current_process->task.pid);
+		return proc_readlink_finish(buf, buflen, len);
+	}
+
+	if (strcmp(name, "exe_link") == 0)
+	{
+		len = proc_pid_exe_link_target_read(buf, buflen, pid);
+		return proc_readlink_finish(buf, buflen, len);
+	}
+
+	return -ENOENT;
 }
 
 /*
@@ -1758,43 +2293,30 @@ int proc_timer_list_read(char *buf, size_t count)
 /* Generate /proc/[pid]/cmdline content */
 int proc_cmdline_read(char *buf, size_t count, pid_t pid)
 {
-    if (VALIDATE_BUFFER(buf, count) != 0)
-        return -1;
-    
-    /* Initialize buffer to zero */
-    memset(buf, 0, count);
-    
-    process_t *proc = NULL;
-    
-    if (pid == -1)
-    {
-        /* Current process */
-        proc = current_process;
-    } else
-    {
-        /* Specific process */
-        proc = process_find_by_pid(pid);
-    }
-    
-    if (!proc)
-    {
-        /* No such process */
-        return -1;
-    }
-    
-    /* Get command name from process */
-    int len = snprintf(buf, count, "%s", proc->comm[0] ? proc->comm : "(none)");
-    
-    if (len < 0)
-        return -1;
-    if (len >= (int)count)
-    {
-        buf[count - 1] = '\0';
-        return (int)(count - 1);
-    }
-    
-    buf[len] = '\0';
-    return len;
+	proc_fs_snap_t snap;
+	int len;
+
+	if (VALIDATE_BUFFER(buf, count) != 0)
+		return -1;
+
+	memset(buf, 0, count);
+
+	if (!proc_fs_snap_acquire(pid, &snap))
+		return -1;
+
+	len = snprintf(buf, count, "%s", snap.comm[0] ? snap.comm : "(none)");
+	proc_fs_snap_release(&snap);
+
+	if (len < 0)
+		return -1;
+	if (len >= (int)count)
+	{
+		buf[count - 1] = '\0';
+		return (int)(count - 1);
+	}
+
+	buf[len] = '\0';
+	return len;
 }
 
 /* Legacy virtual-fd offset maps removed — offsets live in process fd_table. */
@@ -1814,6 +2336,63 @@ static int proc_readdir_add(struct vfs_dirent *entries, int max_entries, int n,
     entries[n].name[sizeof(entries[n].name) - 1] = '\0';
     entries[n].type = type;
     return n + 1;
+}
+
+static int proc_readdir_fill_pid_subdir(struct vfs_dirent *entries, int max_entries,
+                                        int n)
+{
+	n = proc_readdir_add(entries, max_entries, n, "status", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "cmdline", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "stat", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "maps", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "statm", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "fd", DT_DIR);
+	n = proc_readdir_add(entries, max_entries, n, "environ", DT_REG);
+	n = proc_readdir_add(entries, max_entries, n, "exe", DT_LNK);
+	return n;
+}
+
+/*
+ * Snapshot live PIDs under irq_save, then fill entries — same pattern as
+ * proc_ps_read. Avoids UAF if a concurrent exit unlinks process_list while
+ * ls/getdents walks /proc (session soak: ls /proc | head → shell SIGSEGV).
+ */
+static int proc_readdir_fill_live_pids(struct vfs_dirent *entries, int max_entries,
+                                       int n, int skip_zombies)
+{
+    pid_t snap[64];
+    int snap_count = 0;
+    process_t *p;
+    unsigned long irqf;
+    int i;
+
+    if (!entries || max_entries <= 0 || n < 0)
+        return n;
+
+    irqf = irq_save();
+    for (p = process_list;
+         p && snap_count < (int)(sizeof(snap) / sizeof(snap[0])) &&
+         n + snap_count < max_entries;
+         p = p->next)
+    {
+        if (skip_zombies && p->state == PROCESS_ZOMBIE)
+            continue;
+        snap[snap_count++] = p->task.pid;
+    }
+    irq_restore(irqf);
+
+    for (i = 0; i < snap_count && n < max_entries; i++)
+    {
+        char pid_str[16];
+        int len;
+
+        len = snprintf(pid_str, sizeof(pid_str), "%d", (int)snap[i]);
+        if (len <= 0 || len >= (int)sizeof(pid_str))
+            break;
+        n = proc_readdir_add(entries, max_entries, n, pid_str, DT_DIR);
+    }
+
+    return n;
 }
 
 /*
@@ -1837,25 +2416,10 @@ int proc_readdir(const char *path, struct vfs_dirent *entries, int max_entries)
 
     if (strcmp(path, "/proc") == 0 || strcmp(path, "/proc/") == 0)
     {
-        process_t *p;
-        unsigned long irqf;
-
         pseudo_fs_nodes_register_all();
         n = 0;
-        irqf = irq_save();
-        for (p = process_list; p && n < max_entries; p = p->next)
-        {
-            char pid_str[16];
-            int len;
-
-            if (p->state == PROCESS_ZOMBIE)
-                continue;
-            len = snprintf(pid_str, sizeof(pid_str), "%d", (int)p->task.pid);
-            if (len <= 0 || len >= (int)sizeof(pid_str))
-                break;
-            n = proc_readdir_add(entries, max_entries, n, pid_str, DT_DIR);
-        }
-        irq_restore(irqf);
+        n = proc_readdir_fill_live_pids(entries, max_entries, n, 1);
+        n = proc_readdir_add(entries, max_entries, n, "self", DT_LNK);
         n = proc_readdir_add(entries, max_entries, n, "pid", DT_DIR);
         if (n < max_entries)
         {
@@ -1870,26 +2434,25 @@ int proc_readdir(const char *path, struct vfs_dirent *entries, int max_entries)
         return n;
     }
 
+    if (strcmp(path, "/proc/self") == 0 || strcmp(path, "/proc/self/") == 0)
+    {
+        if (!current_process)
+            return -ENOENT;
+        pid = current_process->task.pid;
+        if (!process_find_by_pid(pid))
+            return -ENOENT;
+        n = 0;
+        return proc_readdir_fill_pid_subdir(entries, max_entries, n);
+    }
+
     filename = proc_resolve_path(path, &pid);
     if (!filename)
         return -ENOENT;
 
     if (strcmp(filename, "pid_dir") == 0)
     {
-        process_t *p = process_list;
-
         n = 0;
-        while (p && n < max_entries)
-        {
-            char pid_str[16];
-            int len;
-
-            len = snprintf(pid_str, sizeof(pid_str), "%d", (int)p->task.pid);
-            if (len <= 0 || len >= (int)sizeof(pid_str))
-                break;
-            n = proc_readdir_add(entries, max_entries, n, pid_str, DT_DIR);
-            p = p->next;
-        }
+        n = proc_readdir_fill_live_pids(entries, max_entries, n, 0);
         return n;
     }
 
@@ -1898,9 +2461,30 @@ int proc_readdir(const char *path, struct vfs_dirent *entries, int max_entries)
         if (!process_find_by_pid(pid))
             return -ENOENT;
         n = 0;
-        n = proc_readdir_add(entries, max_entries, n, "status", DT_REG);
-        n = proc_readdir_add(entries, max_entries, n, "cmdline", DT_REG);
-        n = proc_readdir_add(entries, max_entries, n, "stat", DT_REG);
+        return proc_readdir_fill_pid_subdir(entries, max_entries, n);
+    }
+
+    if (strcmp(filename, "fd_dir") == 0)
+    {
+        proc_fd_snap_t snap;
+        int i;
+
+        if (!process_find_by_pid(pid))
+            return -ENOENT;
+        if (!proc_fd_snap_acquire(pid, &snap))
+            return 0;
+
+        n = 0;
+        for (i = 0; i < MAX_FDS_PER_PROCESS && n < max_entries; i++)
+        {
+            char fd_name[16];
+
+            if (!snap.table[i].in_use)
+                continue;
+            if (snprintf(fd_name, sizeof(fd_name), "%d", i) <= 0)
+                continue;
+            n = proc_readdir_add(entries, max_entries, n, fd_name, DT_LNK);
+        }
         return n;
     }
 
@@ -1945,7 +2529,8 @@ int proc_open(const char *path, int flags)
         (strcmp(filename, "stat") == 0 && pid > 0))
         return -ENOENT;
 
-    if (strcmp(filename, "pid_dir") == 0 || strcmp(filename, "pid_subdir") == 0)
+    if (strcmp(filename, "pid_dir") == 0 || strcmp(filename, "pid_subdir") == 0 ||
+        strcmp(filename, "self_link") == 0)
         return -EISDIR;
 
     /* Static registry nodes also use bind path, not this helper. */
@@ -2044,7 +2629,55 @@ int proc_stat(const char *path, stat_t *st)
         memset(st, 0, sizeof(stat_t));
         st->st_mode = S_IFDIR | 0555;
         st->st_nlink = 2;
+        pseudo_fs_stat_now(st);
         return 0;
+    }
+
+    filename = proc_parse_path(path, &pid);
+    if (filename)
+    {
+        if (strcmp(filename, "pid_dir") == 0 ||
+            strcmp(filename, "pid_subdir") == 0 ||
+            strcmp(filename, "fd_dir") == 0 ||
+            strcmp(filename, "self_link") == 0)
+        {
+            memset(st, 0, sizeof(stat_t));
+            if (strcmp(filename, "self_link") == 0)
+                st->st_mode = S_IFLNK | 0777;
+            else
+                st->st_mode = S_IFDIR | 0555;
+            st->st_nlink = (strcmp(filename, "self_link") == 0) ? 1 : 2;
+            st->st_uid = 0;
+            st->st_gid = 0;
+            st->st_size = 0;
+            pseudo_fs_stat_now(st);
+            return 0;
+        }
+
+        if (strcmp(filename, "fd_link") == 0 ||
+            strcmp(filename, "exe_link") == 0)
+        {
+            memset(st, 0, sizeof(stat_t));
+            st->st_mode = S_IFLNK | 0777;
+            st->st_nlink = 1;
+            st->st_uid = 0;
+            st->st_gid = 0;
+            st->st_size = 0;
+            pseudo_fs_stat_now(st);
+            return 0;
+        }
+
+        if (strcmp(filename, "environ") == 0 && pid > 0)
+        {
+            memset(st, 0, sizeof(stat_t));
+            st->st_mode = S_IFREG | 0400;
+            st->st_nlink = 1;
+            st->st_uid = 0;
+            st->st_gid = 0;
+            st->st_size = 0;
+            pseudo_fs_stat_now(st);
+            return 0;
+        }
     }
 
     pseudo_fs_nodes_register_all();
@@ -2064,19 +2697,21 @@ int proc_stat(const char *path, stat_t *st)
             return st_rc;
     }
 
-    filename = proc_parse_path(path, &pid);
     if (!filename)
         return -ENOENT;
-    
-    /* Check if directory (OSDev-style /proc/pid) */
-    if (strcmp(filename, "pid_dir") == 0 || strcmp(filename, "pid_subdir") == 0)
+
+    /*
+     * Intermediate registry directories (e.g. /proc/net, /proc/bluetooth):
+     * no exact node, but they contain registered leaves. Report them as real
+     * directories with a live timestamp instead of ENOENT so `stat`/`ls -ld`
+     * behave like Linux.
+     */
+    if (pseudo_fs_path_has_children(path))
     {
         memset(st, 0, sizeof(stat_t));
         st->st_mode = S_IFDIR | 0555;
         st->st_nlink = 2;
-        st->st_uid = 0;
-        st->st_gid = 0;
-        st->st_size = 0;
+        pseudo_fs_stat_now(st);
         return 0;
     }
 

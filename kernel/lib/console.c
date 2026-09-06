@@ -99,32 +99,33 @@ static void tty_deliver_sig(int sig)
 	int i;
 	int n = 0;
 
-	/*
-	 * Never signal PID/pgid 1 (runit). A wrong TIOCSPGRP of 1 would
-	 * otherwise let VINTR tear down stage supervision and leave stale
-	 * supervise/lock holders.
-	 */
 	if (console_fg_pgid > 1)
 		n = send_signal_pgrp(console_fg_pgid, sig);
-	if (n > 0)
-		return;
 
 	/*
-	 * No fg pgrp yet (ash before tcsetpgrp) and no blocked tty readers:
-	 * still deliver to the current userspace task. Otherwise Ctrl+C
-	 * during `cat /dev/hda` (busy in write, not in read) is a no-op.
+	 * Blocked stdin readers (hexdump, cat, ash lineedit) must see VINTR even
+	 * when console_fg_pgid lags tcsetpgrp after SIGCHLD or a short-lived fg
+	 * job — Linux job control can leave the tty waiter outside a stale pgid.
 	 */
-	if (current_process && current_process->task.pid > 1)
-		(void)send_signal((int)current_process->task.pid, sig);
-
 	for (i = 0; i < IR0_TTY_MAX_READ_WAITERS; i++)
 	{
 		process_t *w = tty_read_waiters[i];
 
 		if (!w || w->task.pid <= 1)
 			continue;
-		(void)send_signal((int)w->task.pid, sig);
+		if (send_signal((int)w->task.pid, sig) == 0)
+			n++;
 	}
+
+	if (n > 0)
+		return;
+
+	/*
+	 * No fg pgrp and no blocked tty readers: deliver to the running task
+	 * (e.g. cat busy in write, not read).
+	 */
+	if (current_process && current_process->task.pid > 1)
+		(void)send_signal((int)current_process->task.pid, sig);
 }
 
 int ir0_console_set_fg_pgid(int32_t pgid)
@@ -801,7 +802,15 @@ int tty_ioctl_termios_kernel(uint64_t request, struct ir0_termios *ktermios)
 		 * not replay stale NL/ESC bytes (empty-prompt storms).
 		 */
 		if (request == IR0_CONSOLE_TCSETSF || was_icanon != now_icanon)
+		{
 			tty_flush_input();
+			/*
+			 * Password/no-echo prompts can end with modifiers held; TCSETSF
+			 * must resync like TCFLSH or the first shell keystrokes show
+			 * garbage (ê-prefix) after interactive firstboot login.
+			 */
+			input_kbd_resync_modifiers();
+		}
 		return 0;
 	}
 
@@ -1063,6 +1072,7 @@ void ir0_console_reset_cooked_echo(void)
 				IR0_LFLAG_ECHOE | IR0_LFLAG_ECHOK |
 				IR0_LFLAG_ECHONL);
 	tty_termios_ready = 1;
+	input_kbd_resync_modifiers();
 }
 
 int ir0_console_set_termios(const struct ir0_termios *in)
@@ -1101,9 +1111,11 @@ void ir0_console_flush_input_session(void)
 
 void ir0_console_after_tty_read_signal(int signo)
 {
+	(void)signo;
 	/*
-	 * Decoder modifier state (Ctrl/Shift/E0) must not leak across signal
-	 * boundaries — stock ash, bash, and getty assume Linux PS/2 behaviour.
+	 * PS/2 modifier state must not leak across any signal that interrupted
+	 * a console read (SIGCHLD after ./a.out, SIGINT, SIGQUIT). Without this,
+	 * VINTR stops working until session restart (hexdump | grep, ^C dead).
 	 */
 	input_kbd_resync_modifiers();
 	if (signo == SIGINT || signo == SIGQUIT)

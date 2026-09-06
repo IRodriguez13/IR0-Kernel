@@ -1250,8 +1250,7 @@ int64_t sys_ioctl(int fd, uint64_t request, void *arg)
 	ret = -EINVAL;
 	goto out;
       }
-      pg = current_process->pgid > 0 ? current_process->pgid
-				     : (pid_t)current_process->task.pid;
+      pg = (pid_t)ir0_console_get_fg_pgid();
       if (copy_to_user(arg, &pg, sizeof(pg)) != 0)
       {
 	ret = -EFAULT;

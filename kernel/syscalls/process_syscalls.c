@@ -28,6 +28,7 @@
 #include <ir0/task_ops.h>
 #include <ir0/signal_irq.h>
 #include <ir0/signal_syscall_resume.h>
+#include <ir0/console.h>
 #include <string.h>
 
 #include <ir0/oops.h>
@@ -1878,6 +1879,11 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
       signal_resume_blocked_syscall_frame(
           &current_process->syscall_frame, &resume_rax, block_sf, 1,
           current_process->syscall_block_nr);
+      if (signal_blocked_syscall_is_console_read(
+              current_process->syscall_block_nr,
+              (int64_t)block_sf->rdi) &&
+          delivered > 0)
+	ir0_console_after_tty_read_signal(delivered);
     }
     else
     {
@@ -1936,6 +1942,8 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
   current_process->want_kernel_ret = 0;
   current_process->syscall_frame_fresh = 0;
   process_signal_enter_pending_clear(current_process);
+  if (from_user && user_frame.signum > 0 && user_frame.signum < _NSIG)
+    ir0_console_after_tty_read_signal(user_frame.signum);
   process_signal_last_delivered_clear(current_process);
   restore_user_fs_base();
   switch_to_user_task(&current_process->task);

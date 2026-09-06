@@ -161,13 +161,13 @@ def main() -> int:
                   file=sys.stderr)
             print(sanitize(window[-2000:]), file=sys.stderr)
             return 1
-        # Garbage heuristic: a run of >=6 non-printables on an input line.
+        # Any non-ASCII on a prompt input line is a failure (ê-prefix class).
         raw_lines = [ln for ln in window.splitlines() if "labuser@" in ln]
         for ln in raw_lines:
             run = max((len(m.group(0)) for m in
                        re.finditer(r"[^\x20-\x7e]+", ln)), default=0)
-            if run >= 6:
-                print("✗ non-printable burst on input line after relogin",
+            if run >= 1:
+                print("✗ non-ASCII/garbage on input line after relogin",
                       file=sys.stderr)
                 print(repr(ln), file=sys.stderr)
                 return 1

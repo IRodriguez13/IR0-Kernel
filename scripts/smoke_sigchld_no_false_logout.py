@@ -35,6 +35,11 @@ FATAL = relogin.FATAL
 
 MARKER = "SIGCHLDNOLOGOUT42"
 
+_guards_spec = importlib.util.spec_from_file_location(
+    "guards", str(ROOT / "scripts" / "smoke_tty_guards.py"))
+guards = importlib.util.module_from_spec(_guards_spec)
+_guards_spec.loader.exec_module(guards)
+
 
 def main() -> int:
     iso = Path(os.environ.get("ISO", str(ROOT / "kernel-x64-userspace.iso")))
@@ -105,23 +110,15 @@ def main() -> int:
         time.sleep(0.6)
 
         text = read_log(log)
-        for tag in FATAL:
-            if tag in text:
-                print(f"✗ fatal: {tag}", file=sys.stderr)
-                return 1
+        errs = guards.check_typing_garbage(text, mark=mark)
         if text.count("CONSOLE_SESSION_REPROMPT") > reprompt_base:
-            print("✗ false REPROMPT after SIGCHLD-heavy cmds", file=sys.stderr)
-            print(text[mark:][-3000:], file=sys.stderr)
-            return 1
+            errs.append("false REPROMPT after SIGCHLD-heavy cmds")
         if text.count("CONSOLE_SESSION_END") > end_base:
-            print("✗ false SESSION_END after SIGCHLD-heavy cmds", file=sys.stderr)
-            return 1
+            errs.append("false SESSION_END after SIGCHLD-heavy cmds")
         if MARKER not in text[mark:]:
-            print("✗ shell lost after SIGCHLD cmds", file=sys.stderr)
-            return 1
-        if "USER_RESUME_KSTACK_GPR_LEAK" in text[mark:]:
-            print("✗ GPR leak", file=sys.stderr)
-            return 1
+            errs.append("shell lost after SIGCHLD cmds")
+        if errs:
+            return guards.report_guard_failures(errs, text[mark:])
 
         print("✓ smoke-sigchld-no-false-logout PASS")
         return 0

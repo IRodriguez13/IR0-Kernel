@@ -26,6 +26,13 @@ ROOT = Path(__file__).resolve().parents[1]
 PROMPT_RE = re.compile(r"[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+:\S*[#$]")
 NEED_BOOT = ["RUNIT_STAGE1_OK", "GETTY_READY"]
 
+import importlib.util
+
+_guards_spec = importlib.util.spec_from_file_location(
+    "guards", str(ROOT / "scripts" / "smoke_tty_guards.py"))
+guards = importlib.util.module_from_spec(_guards_spec)
+_guards_spec.loader.exec_module(guards)
+
 FATAL = (
     "KERNEL PANIC",
     "KERNEL_UACCESS_FAULT",
@@ -258,23 +265,17 @@ def main() -> int:
             print(read_log(log_path)[-8000:], file=sys.stderr)
             return 1
 
+        mark = len(read_log(log_path))
+        type_str(args.port, "llss", delay=0.06)
+        mon(args.port, "sendkey ret", 0.5)
+        time.sleep(0.5)
+
         text = read_log(log_path)
-        for tag in FATAL:
-            if tag in text:
-                print(f"✗ fatal after re-login: {tag}", file=sys.stderr)
-                print(text[-8000:], file=sys.stderr)
-                return 1
-
+        errs = guards.check_typing_garbage(text, mark=mark)
         if text.count("LOGIN_OK") < login_ok + 1:
-            print("✗ missing second LOGIN_OK", file=sys.stderr)
-            print(text[-6000:], file=sys.stderr)
-            return 1
-
-        leaks = text.count("USER_RESUME_KSTACK_GPR_LEAK")
-        if leaks > 0:
-            print(f"✗ USER_RESUME_KSTACK_GPR_LEAK x{leaks}", file=sys.stderr)
-            print(text[-6000:], file=sys.stderr)
-            return 1
+            errs.append("missing second LOGIN_OK")
+        if errs:
+            return guards.report_guard_failures(errs, text[mark:])
 
         print("✓ smoke-desktop-relogin PASS")
         return 0

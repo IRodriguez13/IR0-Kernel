@@ -526,6 +526,17 @@ smoke-ctrl-c-spam: load-userspace-runit kernel-x64-userspace.iso
 	@python3 scripts/smoke_ctrl_c_spam.py
 	@echo "✓ smoke-ctrl-c-spam passed"
 
+smoke-pipe-stdin-ctrl-c: load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   ^C on hexdump|grep blocked on stdin..."
+	@python3 scripts/smoke_pipe_stdin_ctrl_c.py
+	@echo "✓ smoke-pipe-stdin-ctrl-c passed"
+
+smoke-firstboot-login-typing: load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   interactive firstboot + login + ASCII typing..."
+	@chmod +x scripts/smoke_firstboot_login_typing.py
+	@python3 scripts/smoke_firstboot_login_typing.py
+	@echo "✓ smoke-firstboot-login-typing passed"
+
 smoke-sigchld-no-false-logout: load-userspace-runit kernel-x64-userspace.iso
 	@echo "  SMOKE   SIGCHLD must not false-logout shell..."
 	@python3 scripts/smoke_sigchld_no_false_logout.py
@@ -538,12 +549,15 @@ smoke-sigchld-sysfs-stress: load-userspace-runit kernel-x64-userspace.iso
 
 smoke-keyboard-stability: kernel-x64.bin
 	@echo "  BATTERY keyboard/signal stability..."
+	@$(MAKE) -s smoke-firstboot-login-typing
 	@$(MAKE) -s smoke-sigchld-tty
 	@$(MAKE) -s smoke-kbd-resync
 	@$(MAKE) -s smoke-desktop-relogin
 	@$(MAKE) -s smoke-ctrl-c-spam
+	@$(MAKE) -s smoke-pipe-stdin-ctrl-c
 	@$(MAKE) -s smoke-sigchld-no-false-logout
 	@$(MAKE) -s smoke-sigchld-sysfs-stress
+	@$(MAKE) -s smoke-shell-pipe-stress
 	@echo "✓ smoke-keyboard-stability passed"
 
 smoke-session-chaos: load-userspace-runit kernel-x64-userspace.iso
@@ -2856,6 +2870,7 @@ LINUX_ABI_VFS_WRITE_PROBE := $(LINUX_ABI_AUDIT_DIR)/vfs_write_probe
 	linux-abi-audit linux-abi-audit-brk linux-abi-audit-wait4 linux-abi-audit-read \
 	linux-abi-audit-pipe linux-abi-audit-poll linux-abi-audit-nanosleep \
 	linux-abi-audit-getcwd linux-abi-audit-chdir linux-abi-audit-dup linux-abi-audit-execve \
+	linux-abi-audit-ioctl linux-abi-audit-fcntl linux-abi-audit-kill-sigterm \
 	linux-abi-audit-mmap linux-abi-audit-mount linux-abi-audit-openat linux-abi-audit-stat \
 	linux-abi-audit-vfs-write linux-abi-audit-sigreturn-blocked-syscall
 
@@ -3018,6 +3033,27 @@ linux-abi-audit-dup: kernel-x64-userspace.iso
 	@grep -q '^## dup — PASS' $(LINUX_ABI_AUDIT_DIR)/report.md && \
 		echo "✓ linux-abi-audit-dup passed (see $(LINUX_ABI_AUDIT_DIR)/report.md)" || \
 		(echo "✗ linux-abi-audit-dup FAILED — see $(LINUX_ABI_AUDIT_DIR)/report.md"; exit 1)
+
+linux-abi-audit-ioctl: kernel-x64-userspace.iso
+	@chmod +x scripts/linux_abi/run_linux_workload.sh scripts/linux_abi/run_ir0_workload.sh
+	@python3 scripts/linux_abi_audit.py --contract ioctl
+	@grep -q '^## ioctl — PASS' $(LINUX_ABI_AUDIT_DIR)/report.md && \
+		echo "✓ linux-abi-audit-ioctl passed (see $(LINUX_ABI_AUDIT_DIR)/report.md)" || \
+		(echo "✗ linux-abi-audit-ioctl FAILED — see $(LINUX_ABI_AUDIT_DIR)/report.md"; exit 1)
+
+linux-abi-audit-fcntl: kernel-x64-userspace.iso
+	@chmod +x scripts/linux_abi/run_linux_workload.sh scripts/linux_abi/run_ir0_workload.sh
+	@python3 scripts/linux_abi_audit.py --contract fcntl
+	@grep -q '^## fcntl — PASS' $(LINUX_ABI_AUDIT_DIR)/report.md && \
+		echo "✓ linux-abi-audit-fcntl passed (see $(LINUX_ABI_AUDIT_DIR)/report.md)" || \
+		(echo "✗ linux-abi-audit-fcntl FAILED — see $(LINUX_ABI_AUDIT_DIR)/report.md"; exit 1)
+
+linux-abi-audit-kill-sigterm: kernel-x64-userspace.iso build-linux-abi-wait4-probe
+	@chmod +x scripts/linux_abi/run_linux_kill_sigterm.sh scripts/linux_abi/run_ir0_kill_sigterm.sh
+	@python3 scripts/linux_abi_audit.py --contract kill_sigterm
+	@grep -q '^## kill_sigterm — PASS' $(LINUX_ABI_AUDIT_DIR)/report.md && \
+		echo "✓ linux-abi-audit-kill-sigterm passed (see $(LINUX_ABI_AUDIT_DIR)/report.md)" || \
+		(echo "✗ linux-abi-audit-kill-sigterm FAILED — see $(LINUX_ABI_AUDIT_DIR)/report.md"; exit 1)
 
 linux-abi-audit-execve: kernel-x64-userspace.iso
 	@chmod +x scripts/linux_abi/run_linux_execve.sh scripts/linux_abi/run_ir0_execve.sh 2>/dev/null || true

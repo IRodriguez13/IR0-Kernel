@@ -42,6 +42,11 @@ PANIC = (
 )
 MARKER = "SIGCHLDTTY7788"
 
+_guards_spec = importlib.util.spec_from_file_location(
+    "guards", str(ROOT / "scripts" / "smoke_tty_guards.py"))
+guards = importlib.util.module_from_spec(_guards_spec)
+_guards_spec.loader.exec_module(guards)
+
 
 def shell_ready(port: int, log: Path, proc: subprocess.Popen[bytes]) -> bool:
     type_str(port, "true", delay=0.05)
@@ -123,16 +128,15 @@ def attempt(iso: Path, src: Path, port: int) -> int:
             time.sleep(0.25)
 
         text = read_log(log)
-        leaks = text.count("USER_RESUME_KSTACK_GPR_LEAK")
-        if leaks > 0:
-            print(f"✗ USER_RESUME_KSTACK_GPR_LEAK x{leaks}", file=sys.stderr)
-            print(text[-4000:], file=sys.stderr)
-            return 1
+        errs = guards.check_typing_garbage(text, mark=0)
+        if text.count("USER_RESUME_KSTACK_GPR_LEAK") > 0:
+            errs.append(
+                f"USER_RESUME_KSTACK_GPR_LEAK x{text.count('USER_RESUME_KSTACK_GPR_LEAK')}"
+            )
         if not ok:
-            print("✗ marker not echoed", file=sys.stderr)
-            print(text[-4000:], file=sys.stderr)
-            return 1
-
+            errs.append("marker not echoed")
+        if errs:
+            return guards.report_guard_failures(errs, text[-4000:])
         print(f"✓ smoke-sigchld-tty PASS (marker OK, leaks=0)")
         return 0
     finally:

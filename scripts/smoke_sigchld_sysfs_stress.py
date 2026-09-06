@@ -39,6 +39,11 @@ FATAL = relogin.FATAL
 MARKER = "SYSFSSIGCHLDSTRESSOK"
 ABNORMAL = "shell exited abnormally"
 
+_guards_spec = importlib.util.spec_from_file_location(
+    "guards", str(ROOT / "scripts" / "smoke_tty_guards.py"))
+guards = importlib.util.module_from_spec(_guards_spec)
+_guards_spec.loader.exec_module(guards)
+
 
 def run_cmd(port: int, cmd: str, pause: float = 0.55) -> None:
     type_str(port, cmd, delay=0.06)
@@ -122,38 +127,21 @@ def main() -> int:
 
         text = read_log(log)
         tail = text[mark:]
-        hard_fatal = tuple(t for t in FATAL if t != "USER_FAULT_FRAME")
-        for tag in hard_fatal:
-            if tag in tail:
-                print(f"✗ fatal: {tag}", file=sys.stderr)
-                return 1
-        if "CONSOLE_SESSION_SEGV" in tail:
-            print("✗ shell SEGV during stress", file=sys.stderr)
-            return 1
-        if tail.count("USER_FAULT_FRAME\n") > 2:
-            print("✗ repeated USER_FAULT_FRAME (#PF cr2=0x3f read path)", file=sys.stderr)
-            return 1
+        errs = guards.check_typing_garbage(text, mark=mark)
+        if tail.count("USER_FAULT_FRAME\n") > 0:
+            errs.append("USER_FAULT_FRAME during sysfs stress")
         if text.count("CONSOLE_SESSION_END") > end_base:
-            print("✗ false SESSION_END during sysfs stress", file=sys.stderr)
-            print(tail[-4000:], file=sys.stderr)
-            return 1
+            errs.append("false SESSION_END during sysfs stress")
         if text.count("CONSOLE_SESSION_REPROMPT") > reprompt_base:
-            print("✗ false REPROMPT during sysfs stress", file=sys.stderr)
-            return 1
+            errs.append("false REPROMPT during sysfs stress")
         if text.count("CONSOLE_SESSION_RESUME") > resume_base:
-            print("✗ abnormal shell restart (SESSION_RESUME)", file=sys.stderr)
-            if ABNORMAL in tail:
-                print("  (shell exited abnormally — false EOF on SIGCHLD)", file=sys.stderr)
-            return 1
+            errs.append("abnormal shell restart (SESSION_RESUME)")
         if MARKER not in tail:
-            print("✗ shell lost before marker", file=sys.stderr)
-            return 1
-        if "USER_RESUME_KSTACK_GPR_LEAK" in tail:
-            print("✗ GPR leak", file=sys.stderr)
-            return 1
+            errs.append("shell lost before marker")
         if tail.count("DELIVER_CTX sig=17") > 24:
-            print("✗ excessive SIGCHLD delivery during stress", file=sys.stderr)
-            return 1
+            errs.append("excessive SIGCHLD delivery during stress")
+        if errs:
+            return guards.report_guard_failures(errs, tail)
 
         print("✓ smoke-sigchld-sysfs-stress PASS")
         return 0

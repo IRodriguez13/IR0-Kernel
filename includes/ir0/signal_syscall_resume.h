@@ -19,6 +19,75 @@
 #include <ir0/syscall_frame.h>
 
 /*
+ * read(2) arg0: negative or small non-fd (signum / wait4 pid residue).
+ * fd 0–2 are valid even though they are below 0x1000.
+ */
+static inline int signal_syscall_read_fd_suspicious(uint64_t val)
+{
+	if ((int64_t)val < 0)
+		return 1;
+	if (val <= 2u)
+		return 0;
+	return val < 0x1000ul;
+}
+
+/* read(2) arg1 is the userspace buffer pointer. */
+static inline int signal_syscall_user_ptr_suspicious(uint64_t val)
+{
+	return (int64_t)val < 0 || val < 0x1000ul;
+}
+
+static inline int signal_syscall_arg_suspicious(uint64_t val)
+{
+	return signal_syscall_read_fd_suspicious(val);
+}
+
+/*
+ * read(2) block snapshot must not carry wait4(-1) into SA_RESTART resume
+ * (observed #PF cr2=0x3f in runit login after shell logout).
+ */
+static inline void signal_blocked_syscall_frame_sanitize(arch_syscall_frame_t *sf,
+							 uint32_t block_nr)
+{
+	if (!sf)
+		return;
+
+	if (block_nr != 0u)
+		return;
+
+	if (signal_syscall_read_fd_suspicious(sf->rdi))
+		sf->rdi = 0;
+}
+
+static inline uint64_t signal_repair_sigcontext_syscall_arg(
+	uint64_t ctx_val,
+	uint64_t snap_val,
+	uint64_t task_val)
+{
+	if (!signal_syscall_user_ptr_suspicious(ctx_val))
+		return ctx_val;
+	if (!signal_syscall_user_ptr_suspicious(snap_val))
+		return snap_val;
+	if (!signal_syscall_user_ptr_suspicious(task_val))
+		return task_val;
+	return ctx_val;
+}
+
+static inline uint64_t signal_repair_sigcontext_read_fd(
+	uint64_t ctx_val,
+	uint64_t snap_val,
+	uint64_t task_val)
+{
+	if (!signal_syscall_read_fd_suspicious(ctx_val))
+		return ctx_val;
+	if (!signal_syscall_read_fd_suspicious(snap_val))
+		return snap_val;
+	if (!signal_syscall_read_fd_suspicious(task_val))
+		return task_val;
+	return ctx_val;
+}
+
+/*
  * Resume userspace after rt_sigreturn when the signal interrupted a blocking
  * syscall (TTY read, pipe, poll). Linux keeps the saved syscall-entry GPRs on
  * -EINTR; only SA_RESTART restarts at the syscall insn with __NR in rax.
@@ -30,10 +99,14 @@ static inline void signal_resume_blocked_syscall_frame(
 	int restart,
 	uint32_t block_nr)
 {
+	arch_syscall_frame_t snap;
+
 	if (!out || !resume_rax || !block_sf)
 		return;
 
-	*out = *block_sf;
+	snap = *block_sf;
+	signal_blocked_syscall_frame_sanitize(&snap, block_nr);
+	*out = snap;
 	if (restart)
 	{
 		*resume_rax = (uint64_t)block_nr;

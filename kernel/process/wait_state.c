@@ -101,9 +101,16 @@ void process_wait_state_arm(process_t *p, pid_t pid, int options, int *status_pt
 	p->wait_target_pid = pid;
 	p->wait_options = options;
 	p->wait_resume_child_pid = 0;
+	/*
+	 * Blocked in wait4: defer catchable user-handler delivery until the
+	 * syscall returns (Linux wait_event_interruptible). Prevents SIGCHLD
+	 * to run's musl handler while kernel_sleep on waitpid → rip=user stack.
+	 */
+	process_signal_defer_catchable_set(p);
 }
 
 void process_wait_state_clear(process_t *p)
 {
+	process_signal_defer_catchable_clear(p);
 	process_wait_state_init(p);
 }

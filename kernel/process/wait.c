@@ -550,6 +550,14 @@ int process_wait(pid_t pid, int *status, int options)
 			process_clear_in_thread_syscall_block(current_process);
 			current_process->syscall_resume_rax = 0;
 			task_set_retval(&current_process->task, (uint64_t)(uint32_t)reaped_pid);
+			/*
+			 * wait(2) consumed this child exit (Linux waitpid). Drop stale
+			 * SIGCHLD pending when no zombies remain — otherwise
+			 * sigprocmask(SIG_UNBLOCK) after waitpid runs the musl handler
+			 * and corrupts the supervisor syscall frame (rip=user stack).
+			 */
+			if (!wait_find_matching_zombie(current_process, (pid_t)-1))
+				current_process->signal_pending &= ~SIGNAL_MASK(SIGCHLD);
 
 			if (IR0_DEBUG_PROC)
 			{

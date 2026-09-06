@@ -25,6 +25,7 @@
 #include <ir0/kmem.h>
 #include <ir0/task_ops.h>
 #include <ir0/signal_irq.h>
+#include <ir0/signal_syscall_resume.h>
 #include <ir0/paging.h>
 #include <ir0/tls.h>
 #include <ir0/arch_task.h>
@@ -869,6 +870,24 @@ void handle_signals(void)
             {
                 continue; /* Don't deliver blocked signals */
             }
+
+            /*
+             * wait4 kernel sleep: SIGCHLD is reaped via wait wake, never a
+             * user handler (run supervisor with musl handler → #PF user RIP).
+             */
+            if (sig == SIGCHLD && process_wait_blocked(current))
+                continue;
+
+            /*
+             * Console supervisor (comm=run) only reaps via waitpid — never
+             * deliver SIGCHLD to a musl handler (corrupts wait syscall frame).
+             */
+            if (sig == SIGCHLD && current->comm[0] &&
+                strcmp(current->comm, "run") == 0)
+            {
+                current->signal_pending &= ~SIGNAL_MASK(SIGCHLD);
+                continue;
+            }
             
             /* Check if there's a userspace handler */
             if (current->signal_handlers[sig] && 
@@ -877,6 +896,9 @@ void handle_signals(void)
             {
                 /* Call userspace handler */
                 void (*handler)(int) = current->signal_handlers[sig];
+
+		if (sig == SIGCHLD)
+			ir0_console_after_tty_read_signal(SIGCHLD);
 
 		/*
 		 * Defer catchable delivery: leave pending for the in-syscall
@@ -948,11 +970,15 @@ void handle_signals(void)
                          * When kernel_syscall_sleep is set the task.arch GPRs
                          * are kernel-stack residue; never copy them into ctx.
                          */
-                        if (current->kernel_syscall_sleep &&
-                            current->syscall_frame_fresh)
+                        if (current->kernel_syscall_sleep)
                         {
+                            arch_syscall_frame_t block_sf =
+                                current->kernel_sleep_syscall_frame;
+
+                            signal_blocked_syscall_frame_sanitize(
+                                &block_sf, current->syscall_block_nr);
                             signal_fill_sigcontext_from_syscall_frame(
-                                ctx, &current->kernel_sleep_syscall_frame,
+                                ctx, &block_sf,
                                 (uint64_t)(int64_t)(-EINTR));
                         }
                         else if (current->syscall_frame_fresh)
@@ -960,48 +986,39 @@ void handle_signals(void)
                             signal_fill_sigcontext_from_syscall_frame(
                                 ctx, &current->syscall_frame,
                                 (uint64_t)(int64_t)(-EINTR));
-                            if (ctx->rdi > 0 && ctx->rdi < 64)
-                                task_store_sigcontext(ctx, &current->task);
                         }
                         else
                             task_store_sigcontext(ctx, &current->task);
 
-                        if (ctx->rdi < 0x1000ul)
                         {
                             uint64_t snap_rdi = 0;
-
-                            if (current->kernel_syscall_sleep)
-                                snap_rdi = syscall_frame_arg(
-                                    &current->kernel_sleep_syscall_frame, 0);
-                            else if (current->syscall_frame_fresh)
-                                snap_rdi = syscall_frame_arg(
-                                    &current->syscall_frame, 0);
-
-                            if (snap_rdi >= 0x1000ul)
-                                ctx->rdi = snap_rdi;
-                            else
-                            {
-                                uint64_t trdi = task_get_rdi(&current->task);
-
-                                if (trdi >= 0x1000ul)
-                                    ctx->rdi = trdi;
-                            }
-                        }
-
-                        if (current->syscall_entry_nr == 0u &&
-                            ctx->rsi < 0x1000ul)
-                        {
                             uint64_t snap_rsi = 0;
 
                             if (current->kernel_syscall_sleep)
+                            {
+                                snap_rdi = syscall_frame_arg(
+                                    &current->kernel_sleep_syscall_frame, 0);
                                 snap_rsi = syscall_frame_arg(
                                     &current->kernel_sleep_syscall_frame, 1);
+                            }
                             else if (current->syscall_frame_fresh)
+                            {
+                                snap_rdi = syscall_frame_arg(
+                                    &current->syscall_frame, 0);
                                 snap_rsi = syscall_frame_arg(
                                     &current->syscall_frame, 1);
+                            }
 
-                            if (snap_rsi >= 0x1000ul)
-                                ctx->rsi = snap_rsi;
+                            ctx->rdi = signal_repair_sigcontext_read_fd(
+                                ctx->rdi, snap_rdi,
+                                task_get_rdi(&current->task));
+                            if (current->syscall_block_nr == 0u ||
+                                current->syscall_entry_nr == 0u)
+                            {
+                                ctx->rsi = signal_repair_sigcontext_syscall_arg(
+                                    ctx->rsi, snap_rsi,
+                                    task_get_rsi(&current->task));
+                            }
                         }
 
                         /*
@@ -1238,6 +1255,7 @@ int register_signal_handler(int signal, void (*handler)(int))
     if (handler == SIG_IGN)
     {
         current->signal_ignored |= SIGNAL_MASK(signal);
+        current->signal_pending &= ~SIGNAL_MASK(signal);
     }
     else
     {

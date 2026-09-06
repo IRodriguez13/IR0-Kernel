@@ -324,6 +324,7 @@ void process_reset_blocked_syscall_state(process_t *p)
 	p->syscall_resume_rax = 0;
 	p->syscall_entry_nr = 0;
 	p->syscall_block_nr = 0;
+	p->syscall_frame_fresh = 0;
 	p->syscall_interrupted = 0;
 	process_wait_state_init(p);
 	p->poll_waiter = NULL;
@@ -343,8 +344,12 @@ void process_kernel_sleep_capture_syscall_frame(process_t *p)
 
 	p->kernel_sleep_syscall_frame = p->syscall_frame;
 	p->syscall_block_nr = p->syscall_entry_nr;
-	if (syscall_frame_arg(&p->kernel_sleep_syscall_frame, 0) ==
-	    (uint64_t)(int64_t)(-1))
+	/*
+	 * wait4(-1) is valid; only normalize read(0) snapshots so a stale
+	 * block frame cannot restart login read with rdi=-1 → #PF at ~0x3f.
+	 */
+	if (p->syscall_block_nr == 0u &&
+	    (int64_t)syscall_frame_arg(&p->kernel_sleep_syscall_frame, 0) < 0)
 		syscall_frame_set_arg(&p->kernel_sleep_syscall_frame, 0, 0);
 }
 
@@ -378,8 +383,18 @@ void process_arm_kernel_syscall_sleep(process_t *p)
 	 * can leave rdi=-1 and double keystrokes after SIGCHLD (line editor).
 	 */
 	if (p->syscall_frame_fresh)
-	{
 		process_kernel_sleep_capture_syscall_frame(p);
+	else if (p->syscall_block_nr != 0u &&
+		 p->syscall_block_nr != p->syscall_entry_nr)
+	{
+		/*
+		 * Prior syscall left a stale block snap (e.g. wait4) while we
+		 * block again in read — drop it so sigreturn cannot restart
+		 * the wrong syscall.
+		 */
+		memset(&p->kernel_sleep_syscall_frame, 0,
+		       sizeof(p->kernel_sleep_syscall_frame));
+		p->syscall_block_nr = 0;
 	}
 
 	if (process_rip_in_user_range(task_get_ip(&p->task)))

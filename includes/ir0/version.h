@@ -45,8 +45,8 @@
 #define IR0_VERSION_MAJOR 0
 #define IR0_VERSION_MINOR 0
 #define IR0_VERSION_PATCH 1
-#define IR0_VERSION_SUFFIX "-rc4"
-#define IR0_VERSION_STRING "0.0.1-rc4"
+#define IR0_VERSION_SUFFIX "-rc5"
+#define IR0_VERSION_STRING "0.0.1-rc5"
 
 /* Build information macros */
 /* If passed from Makefile, use those (real data), otherwise use compiler defaults */
@@ -113,4 +113,3 @@
 #define IR0_UNAME_VERSION_STRING IR0_UNAME_CPU_MODE " " IR0_UNAME_SCHED_POLICY
 
 #endif /* _IR0_VERSION_H */
-

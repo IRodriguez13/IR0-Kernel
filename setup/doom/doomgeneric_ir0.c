@@ -43,6 +43,13 @@
 
 #define AUDIO_SET_FORMAT 0x1005
 
+#define IR0_AUDIO_SAMPLE_RATE 11025u
+#define IR0_AUDIO_CHANNELS 1u
+#define IR0_AUDIO_BITS_PER_SAMPLE 8u
+#define IR0_AUDIO_WRITE_MAX 4096u
+#define DMX_HEADER_SIZE 8u
+#define DMX_FORMAT_PCM 3u
+
 #define IR0_KEY_ESC       1
 #define IR0_KEY_ENTER     28
 #define IR0_KEY_LEFTCTRL  29
@@ -472,9 +479,9 @@ static boolean IR0_SoundInit(boolean use_sfx_prefix)
     }
 
     memset(&fmt, 0, sizeof(fmt));
-    fmt.sample_rate = 11025;
-    fmt.channels = 1;
-    fmt.bits_per_sample = 8;
+    fmt.sample_rate = IR0_AUDIO_SAMPLE_RATE;
+    fmt.channels = IR0_AUDIO_CHANNELS;
+    fmt.bits_per_sample = IR0_AUDIO_BITS_PER_SAMPLE;
     (void)ioctl(g_fd_audio, AUDIO_SET_FORMAT, &fmt);
 
     if (!g_audio_ok_tagged)
@@ -504,21 +511,35 @@ static void IR0_SoundShutdown(void)
     }
 }
 
+static boolean IR0_BuildSfxName(const sfxinfo_t *sfxinfo, char namebuf[9])
+{
+    size_t prefix_len = 0;
+    size_t name_len;
+
+    if (!sfxinfo)
+    {
+        return false;
+    }
+    if (g_use_sfx_prefix)
+    {
+        namebuf[0] = 'd';
+        namebuf[1] = 's';
+        prefix_len = 2;
+    }
+
+    name_len = strnlen(sfxinfo->name, 8 - prefix_len);
+    memcpy(namebuf + prefix_len, sfxinfo->name, name_len);
+    namebuf[prefix_len + name_len] = '\0';
+    return true;
+}
+
 static int IR0_GetSfxLumpNum(sfxinfo_t *sfxinfo)
 {
     char namebuf[9];
 
-    if (!sfxinfo)
+    if (!IR0_BuildSfxName(sfxinfo, namebuf))
     {
         return -1;
-    }
-    if (g_use_sfx_prefix)
-    {
-        snprintf(namebuf, sizeof(namebuf), "ds%s", sfxinfo->name);
-    }
-    else
-    {
-        snprintf(namebuf, sizeof(namebuf), "%s", sfxinfo->name);
     }
     return W_GetNumForName(namebuf);
 }
@@ -539,7 +560,7 @@ static int IR0_StartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
     int lump;
     int len;
     const unsigned char *data;
-    int samples;
+    uint32_t samples;
     size_t nbytes;
 
     (void)vol;
@@ -562,23 +583,26 @@ static int IR0_StartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 
     len = W_LumpLength((unsigned int)lump);
     data = W_CacheLumpNum(lump, PU_CACHE);
-    if (!data || len < 8)
+    if (!data || len < (int)DMX_HEADER_SIZE)
     {
         return -1;
     }
 
     /* Classic DMX PCM: format=3, rate LE16, sample count LE32, then 8-bit unsigned. */
-    if (data[0] == 3 && data[1] == 0)
+    if (data[0] == DMX_FORMAT_PCM && data[1] == 0)
     {
-        samples = (int)(data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24));
-        if (samples > 0 && samples + 8 <= len)
+        samples = (uint32_t)data[4]
+                | ((uint32_t)data[5] << 8)
+                | ((uint32_t)data[6] << 16)
+                | ((uint32_t)data[7] << 24);
+        if (samples > 0 && samples <= (uint32_t)(len - (int)DMX_HEADER_SIZE))
         {
             nbytes = (size_t)samples;
-            if (nbytes > 8192u)
+            if (nbytes > IR0_AUDIO_WRITE_MAX)
             {
-                nbytes = 8192u;
+                nbytes = IR0_AUDIO_WRITE_MAX;
             }
-            if (write(g_fd_audio, data + 8, nbytes) > 0)
+            if (write(g_fd_audio, data + DMX_HEADER_SIZE, nbytes) > 0)
             {
                 tag_audio_write_once();
             }
@@ -600,8 +624,30 @@ static boolean IR0_SoundIsPlaying(int channel)
 
 static void IR0_CacheSounds(sfxinfo_t *sounds, int num_sounds)
 {
-    (void)sounds;
-    (void)num_sounds;
+    int i;
+
+    if (!sounds || num_sounds <= 1)
+    {
+        return;
+    }
+
+    /* Keep WAD reads out of gameplay frames, especially the first shot. */
+    for (i = 1; i < num_sounds; i++)
+    {
+        char namebuf[9];
+        int lump;
+
+        if (!IR0_BuildSfxName(&sounds[i], namebuf))
+        {
+            continue;
+        }
+        lump = W_CheckNumForName(namebuf);
+
+        if (lump >= 0)
+        {
+            (void)W_CacheLumpNum(lump, PU_CACHE);
+        }
+    }
 }
 
 sound_module_t DG_sound_module = {

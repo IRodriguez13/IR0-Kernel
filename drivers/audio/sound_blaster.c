@@ -32,10 +32,19 @@ static sb16_state_t sb16_state = {0};
 
 /*
  * Ping-pong DMA buffers (static, below 16 MiB). Samples must outlive DMA;
- * never kfree after PLAY. Doom caps writes at 8192 bytes @ 11025 Hz.
+ * never kfree after PLAY. The 64 KiB alignment prevents 8237 boundary wraps.
  */
-#define SB16_PCM_BUF_MAX 8192u
-static uint8_t sb16_pcm_buf[2][SB16_PCM_BUF_MAX] __attribute__((aligned(16)));
+#define SB16_PCM_BUF_MAX          8192u
+#define SB16_DMA_BOUNDARY         65536u
+#define SB16_DSP_MIN_RATE_HZ      4000u
+#define SB16_DSP_MAX_RATE_HZ      45454u
+#define SB16_DSP_TIME_BASE_HZ     1000000u
+#define SB16_DSP_COUNTER_BASE     256u
+#define SB16_RESET_SPIN_LIMIT     10000u
+#define SB16_SELFTEST_RATE_HZ     11025u
+#define SB16_SELFTEST_SPIN_LIMIT  200000u
+static uint8_t sb16_pcm_buf[2][SB16_PCM_BUF_MAX]
+    __attribute__((aligned(SB16_DMA_BOUNDARY)));
 static volatile int sb16_active_buf = -1;
 static volatile bool sb16_hw_playing;
 static uint32_t sb16_cached_rate;
@@ -45,6 +54,7 @@ static bool sb16_speaker_on_state;
 static int32_t sb16_hw_init(void);
 static int sb16_program_rate(uint32_t sample_rate);
 static void sb16_reclaim_playback(void);
+static bool sb16_dsp_data_ready(void);
 static bool sb16_dsp_ready_write_hot(void);
 
 /* Driver registration structures */
@@ -135,7 +145,10 @@ bool sb16_reset_dsp(void)
     outb(SB16_RESET_PORT, 1);
     
     /* Wait 3 microseconds (or more to be safe) */
-    for (volatile int i = 0; i < 10000; i++); 
+    for (volatile unsigned spin = 0; spin < SB16_RESET_SPIN_LIMIT; spin++)
+    {
+        cpu_relax();
+    }
 
     /* Write 0 to reset port */
     outb(SB16_RESET_PORT, 0);
@@ -190,6 +203,11 @@ bool sb16_dsp_ready_read(void)
     return false;
 }
 
+static bool sb16_dsp_data_ready(void)
+{
+    return (inb(SB16_READ_STATUS) & SB16_DSP_BUSY) != 0;
+}
+
 bool sb16_dsp_ready_write(void)
 {
     return sb16_dsp_ready_write_hot();
@@ -216,9 +234,15 @@ static bool sb16_dsp_ready_write_hot(void)
 static void sb16_reclaim_playback(void)
 {
     if (!sb16_hw_playing)
+    {
         return;
-    if (sb16_dsp_ready_read())
+    }
+
+    /* Never poll here: this path runs synchronously in the writer's frame. */
+    if (sb16_dsp_data_ready())
+    {
         (void)inb(SB16_READ_DATA);
+    }
     dma_disable_channel(SB16_DMA_8BIT);
     sb16_hw_playing = false;
 }
@@ -278,15 +302,22 @@ static int sb16_program_rate(uint32_t sample_rate)
 {
     uint32_t sr = sample_rate;
 
-    if (sr < 4000)
-        sr = 4000;
-    if (sr > 45454)
-        sr = 45454;
+    if (sr < SB16_DSP_MIN_RATE_HZ)
     {
-        uint8_t tc = (uint8_t)(256 - (1000000 / sr));
+        sr = SB16_DSP_MIN_RATE_HZ;
+    }
+    if (sr > SB16_DSP_MAX_RATE_HZ)
+    {
+        sr = SB16_DSP_MAX_RATE_HZ;
+    }
+    {
+        uint8_t tc = (uint8_t)(SB16_DSP_COUNTER_BASE
+                               - (SB16_DSP_TIME_BASE_HZ / sr));
 
         if (!sb16_dsp_write(SB16_DSP_SET_TIME_CONST) || !sb16_dsp_write(tc))
+        {
             return -1;
+        }
     }
     return 0;
 }
@@ -325,6 +356,7 @@ void sb16_destroy_sample(sb16_sample_t *sample)
 
 int sb16_play_pcm(const void *data, uint32_t size, uint32_t sample_rate)
 {
+    unsigned long irq_flags;
     int buf_idx;
     uint32_t phys;
     uint16_t len;
@@ -337,10 +369,12 @@ int sb16_play_pcm(const void *data, uint32_t size, uint32_t sample_rate)
     if (size > 0xFFFEu)
         return -1;
 
-    sb16_reclaim_playback();
-
     buf_idx = (sb16_active_buf == 0) ? 1 : 0;
     memcpy(sb16_pcm_buf[buf_idx], data, size);
+
+    /* IRQ5 must not observe a partially programmed DSP/DMA transaction. */
+    irq_flags = irq_save();
+    sb16_reclaim_playback();
 
     if (!sb16_speaker_on_state)
     {
@@ -350,25 +384,32 @@ int sb16_play_pcm(const void *data, uint32_t size, uint32_t sample_rate)
     if (sample_rate != sb16_cached_rate)
     {
         if (sb16_program_rate(sample_rate) != 0)
-            return -1;
+            goto fail;
         sb16_cached_rate = sample_rate;
     }
 
     len = (uint16_t)size;
-    /* SB16 auto-init DMA: DSP count is (bytes - 1); DMA count is bytes. */
+    /* Single-cycle DSP count is (bytes - 1); DMA helper accepts byte length. */
     dsp_count = (uint16_t)(len - 1u);
     phys = (uint32_t)(uintptr_t)sb16_pcm_buf[buf_idx];
     sb16_setup_dma_8bit(phys, len);
 
     if (!sb16_dsp_write(SB16_DSP_PLAY_8BIT))
-        return -1;
+        goto fail;
     if (!sb16_dsp_write((uint8_t)(dsp_count & 0xFF)) ||
         !sb16_dsp_write((uint8_t)((dsp_count >> 8) & 0xFF)))
-        return -1;
+        goto fail;
 
     sb16_active_buf = buf_idx;
     sb16_hw_playing = true;
+    irq_restore(irq_flags);
     return 0;
+
+fail:
+    dma_disable_channel(SB16_DMA_8BIT);
+    sb16_hw_playing = false;
+    irq_restore(irq_flags);
+    return -1;
 }
 
 /*
@@ -407,14 +448,16 @@ void sb16_post_irq_selftest(void)
     if (!sb16_state.initialized)
         return;
     /* Fire-and-forget: IRQ path validated interactively / optional log grep. */
-    (void)sb16_play_pcm(probe_silence, (uint32_t)sizeof(probe_silence), 11025u);
+    (void)sb16_play_pcm(probe_silence, (uint32_t)sizeof(probe_silence),
+                        SB16_SELFTEST_RATE_HZ);
     /*
      * QEMU audiodev=none may not deliver IRQ5; poll-read ack so hw_playing
      * clears and smoke can grep SB16_IRQ_OK when the DSP status bit sets.
      */
-    for (volatile int spin = 0; spin < 200000 && sb16_hw_playing; spin++)
+    for (volatile unsigned spin = 0;
+         spin < SB16_SELFTEST_SPIN_LIMIT && sb16_hw_playing; spin++)
     {
-        if (sb16_dsp_ready_read())
+        if (sb16_dsp_data_ready())
             sb16_irq_handler();
     }
     klog_smoke("SB16_SELFTEST_FIRED");
@@ -424,9 +467,8 @@ void sb16_irq_handler(void)
 {
     static int irq_smoke_logged;
 
-    /* Ack 8-bit DMA interrupt (read DSP data when status ready). */
-    if (sb16_dsp_ready_read())
-        (void)inb(SB16_READ_DATA);
+    /* Reading base+0x0e acknowledges an SB16 8-bit DMA interrupt. */
+    (void)inb(SB16_READ_STATUS);
     sb16_hw_playing = false;
     if (!irq_smoke_logged)
     {

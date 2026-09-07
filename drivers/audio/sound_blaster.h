@@ -33,7 +33,6 @@
 
 // DSP Timeouts and delays
 #define SB16_DSP_TIMEOUT        1000
-#define SB16_RESET_DELAY_US     1000
 
 // Mixer values
 #define SB16_MIXER_VOL_MEDIUM   0x88
@@ -148,8 +147,5 @@ void sb16_setup_dma_16bit(uint32_t buffer_addr, uint16_t length);
 
 // Interrupt handler
 void sb16_irq_handler(void);
-
-// Timing utilities
-void udelay(uint32_t microseconds);
 
 #endif // SOUND_BLASTER_H

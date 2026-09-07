@@ -26,7 +26,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from smoke_qemu_boot import extend_qemu_kernel_boot
 DEFAULT_TIMEOUT = 90
 MONITOR_PORT = 4446
 ECHO_STABILIZE_SEC = 3.5
@@ -297,13 +296,13 @@ def run_once(args: argparse.Namespace) -> int:
         "-no-reboot",
         "-net", "none",
     ]
-    extend_qemu_kernel_boot(qemu_cmd, ROOT, ash_smoke=True)
-
+    stderr_path = Path(tempfile.mktemp(prefix="ir0-runit-ash-qemu.", suffix=".stderr"))
+    stderr_file = stderr_path.open("wb")
     proc = subprocess.Popen(
         qemu_cmd,
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_file,
         start_new_session=True,
     )
 
@@ -340,6 +339,12 @@ def run_once(args: argparse.Namespace) -> int:
     try:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
+                stderr_file.flush()
+                if not read_log(log_path):
+                    detail = stderr_path.read_text(errors="replace").strip()
+                    print(f"✗ QEMU exited before serial output (rc={proc.returncode})")
+                    if detail:
+                        print(detail)
                 break
 
             text = read_log(log_path)
@@ -450,6 +455,8 @@ def run_once(args: argparse.Namespace) -> int:
         return 1
     finally:
         kill_qemu(proc)
+        stderr_file.close()
+        stderr_path.unlink(missing_ok=True)
         disk.unlink(missing_ok=True)
 
 
@@ -458,7 +465,7 @@ def main() -> int:
     parser.add_argument("--log", default="/tmp/runit-ash-smoke.log")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
-    parser.add_argument("--iso", default=str(ROOT / "kernel-x64-userspace.iso"))
+    parser.add_argument("--iso", default=str(ROOT / "kernel-x64-userspace-ash-smoke.iso"))
     parser.add_argument("--disk", default=str(ROOT / "disk.img"))
     parser.add_argument("--monitor-port", type=int, default=MONITOR_PORT)
     args = parser.parse_args()

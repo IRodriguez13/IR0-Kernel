@@ -1230,13 +1230,13 @@ smoke-desktop-nano: kernel-x64-userspace.iso
 USERSPACE_STABILITY_LOG = /tmp/ir0-userspace-stability.log
 USERSPACE_STABILITY_DISK ?= $(IR0_USERSPACE_ROOT)/out/x86_64/images/development/disk.img
 .PHONY: smoke-userspace-stability
-smoke-userspace-stability: kernel-x64-userspace.iso
+smoke-userspace-stability: kernel-x64-userspace-ash-smoke.iso
 	@echo "  SMOKE   userspace stability (top/man/tcc/pipes[+doom])..."
 	@test -f $(USERSPACE_STABILITY_DISK) || \
 		{ echo "✗ missing $(USERSPACE_STABILITY_DISK) — pack ISD development first"; exit 2; }
 	@chmod +x scripts/smoke_userspace_stability.py scripts/smoke_desktop_cmd_matrix.py
 	@python3 scripts/smoke_userspace_stability.py \
-		--iso kernel-x64-userspace.iso \
+		--iso kernel-x64-userspace-ash-smoke.iso \
 		--disk $(USERSPACE_STABILITY_DISK) \
 		--log $(USERSPACE_STABILITY_LOG) \
 		--auto-doom
@@ -3108,10 +3108,10 @@ linux-abi-audit-sigreturn-blocked-syscall: kernel-x64-userspace.iso
 		echo "✓ linux-abi-audit-sigreturn-blocked-syscall passed (see $(LINUX_ABI_AUDIT_DIR)/report.md)" || \
 		(echo "✗ linux-abi-audit-sigreturn-blocked-syscall FAILED — see $(LINUX_ABI_AUDIT_DIR)/report.md"; exit 1)
 
-smoke-runit-ash-interactive: load-userspace-runit kernel-x64-userspace.iso
+smoke-runit-ash-interactive: load-userspace-runit kernel-x64-userspace-ash-smoke.iso
 	@echo "  SMOKE   runit PID1 + ash interactive (headless + monitor sendkey)..."
 	@chmod +x scripts/smoke_runit_ash_interactive.py
-	@python3 scripts/smoke_runit_ash_interactive.py --log $(RUNIT_ASH_SMOKE_LOG) --timeout 90 --iso kernel-x64-userspace.iso --disk disk.img
+	@python3 scripts/smoke_runit_ash_interactive.py --log $(RUNIT_ASH_SMOKE_LOG) --timeout 90 --iso kernel-x64-userspace-ash-smoke.iso --disk disk.img
 	@echo "  LOG     $(RUNIT_ASH_SMOKE_LOG)"
 
 # T1 GUI — runit → BusyBox ash on /dev/console (tier1 stable; not legacy-only).
@@ -3363,6 +3363,16 @@ kernel-x64-userspace.iso: kernel-x64-userspace.bin arch/x86-64/grub.cfg
 	@cp kernel-x64-userspace.bin iso_userspace/boot/kernel-x64.bin
 	@grub-mkrescue -o $@ iso_userspace
 	@rm -rf iso_userspace
+	@echo "  ISO     $@"
+
+kernel-x64-userspace-ash-smoke.iso: kernel-x64-userspace.bin arch/x86-64/grub-ash-smoke.cfg
+	@echo "  ISO     $@ (ash smoke boot flag)"
+	@rm -rf iso_userspace_ash_smoke
+	@mkdir -p iso_userspace_ash_smoke/boot/grub
+	@cp arch/x86-64/grub-ash-smoke.cfg iso_userspace_ash_smoke/boot/grub/grub.cfg
+	@cp kernel-x64-userspace.bin iso_userspace_ash_smoke/boot/kernel-x64.bin
+	@grub-mkrescue -o $@ iso_userspace_ash_smoke
+	@rm -rf iso_userspace_ash_smoke
 	@echo "  ISO     $@"
 
 kernel-x64-userspace-lazy.iso: kernel-x64-userspace.iso

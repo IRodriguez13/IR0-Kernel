@@ -26,7 +26,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from smoke_qemu_boot import extend_qemu_kernel_boot
 DEFAULT_TIMEOUT = 90
 MONITOR_PORT = 4445
 
@@ -126,7 +125,7 @@ def main() -> int:
     parser.add_argument("--log", default="/tmp/fase58e-ash-smoke.log")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
-    parser.add_argument("--iso", default=str(ROOT / "kernel-x64-userspace.iso"))
+    parser.add_argument("--iso", default=str(ROOT / "kernel-x64-userspace-ash-smoke.iso"))
     parser.add_argument("--monitor-port", type=int, default=MONITOR_PORT)
     args = parser.parse_args()
 
@@ -151,13 +150,13 @@ def main() -> int:
         "-no-reboot",
         "-net", "none",
     ]
-    extend_qemu_kernel_boot(qemu_cmd, ROOT, ash_smoke=True)
-
+    stderr_path = Path(tempfile.mktemp(prefix="ir0-fase58e-qemu.", suffix=".stderr"))
+    stderr_file = stderr_path.open("wb")
     proc = subprocess.Popen(
         qemu_cmd,
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_file,
     )
 
     deadline = time.monotonic() + args.timeout
@@ -168,6 +167,12 @@ def main() -> int:
     try:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
+                stderr_file.flush()
+                if not read_log(log_path):
+                    detail = stderr_path.read_text(errors="replace").strip()
+                    print(f"✗ QEMU exited before serial output (rc={proc.returncode})")
+                    if detail:
+                        print(detail)
                 break
 
             text = read_log(log_path)
@@ -234,6 +239,8 @@ def main() -> int:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        stderr_file.close()
+        stderr_path.unlink(missing_ok=True)
         disk.unlink(missing_ok=True)
 
 

@@ -1264,10 +1264,10 @@ run-fase58c-doom-gui: build-ktm-doom-interactive kernel-x64-userspace.iso
 # FASE58E — runit GUI/smoke targets live in root Makefile (avoid duplicate override).
 # Legacy irinit path retired — use load-userspace-runit / smoke-runit-* / run-fase58e-ash-gui.
 
-smoke-fase58e-ash-interactive: load-userspace-runit kernel-x64-userspace.iso
+smoke-fase58e-ash-interactive: load-userspace-runit kernel-x64-userspace-ash-smoke.iso
 	@echo "  SMOKE   FASE58E ash interactive (headless + monitor sendkey)..."
 	@chmod +x scripts/smoke_fase58e_ash_interactive.py
-	@python3 scripts/smoke_fase58e_ash_interactive.py --log $(FASE58E_ASH_SMOKE_LOG) --timeout 90 --iso kernel-x64-userspace.iso
+	@python3 scripts/smoke_fase58e_ash_interactive.py --log $(FASE58E_ASH_SMOKE_LOG) --timeout 90 --iso kernel-x64-userspace-ash-smoke.iso
 	@echo "  LOG     $(FASE58E_ASH_SMOKE_LOG)"
 	@echo "  HINT    GUI manual: make run-fase58e-ash-gui && make check-fase58e-logs"
 
@@ -1423,4 +1423,3 @@ remove-init:
 	fi
 
 # CLEAN
-

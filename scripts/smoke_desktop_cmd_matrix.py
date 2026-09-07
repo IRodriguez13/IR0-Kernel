@@ -34,7 +34,6 @@ from typing import Callable, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from smoke_qemu_boot import extend_qemu_kernel_boot
 
 SPECIAL = {
     " ": "spc",
@@ -88,6 +87,7 @@ EMPTY_PROMPT_RE = re.compile(
     rf"{_USER}@{_HOST}:\S*[#$]\s*(?=(?:\n|\r|$|{_USER}@{_HOST}:))"
 )
 LOGIN_PROMPT_RE = re.compile(rf"ivan@{_HOST}:")
+USERNAME_PROMPT_RE = re.compile(r"(?:login:|Enter your Unix username:)")
 # Kernel serial noise interleaved with typed chars (breaks contiguous "true").
 KERN_LINE_RE = re.compile(r"\[#\d+\][^\n]*\n?")
 CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -176,7 +176,7 @@ CASES: list[Case] = [
     Case(
         "cat_host",
         "cat /etc/hostname",
-        expect_prompt_any("ir0", "IR0"),
+        expect_prompt_any("ir0", "IR0", "unix"),
         echo="cat /etc/hostname",
     ),
     Case(
@@ -650,7 +650,7 @@ def login_desktop(
     try:
         wait_pred(
             log,
-            lambda t: "login:" in t
+            lambda t: USERNAME_PROMPT_RE.search(t) is not None
             or "ASH_INTERACTIVE_READY" in t
             or PROMPT_RE.search(t) is not None,
             t0,
@@ -685,8 +685,10 @@ def login_desktop(
                 time.sleep(0.25)
                 typed_ok = False
                 break
-            # login echo: "...login: ivan" (no extra n)
-            if re.search(r"login:\s*ivan\b", tail) and "ivann" not in tail:
+            # Username echo after either the legacy or product login prompt.
+            if re.search(
+                r"(?:login:|Enter your Unix username:)\s*ivan\b", tail
+            ) and "ivann" not in tail:
                 typed_ok = True
                 break
             if re.search(r"(?m)^ivan\s*$", tail) and "ivann" not in tail:
@@ -718,7 +720,6 @@ def login_desktop(
             wait_pred(
                 log,
                 lambda t: LOGIN_PROMPT_RE.search(t) is not None
-                or "ASH_INTERACTIVE_READY" in t
                 or "Login incorrect" in t,
                 t0,
                 90,
@@ -955,11 +956,9 @@ def run_session(
                     "-device",
                     "virtio-9p-pci,fsdev=ir0fs,mount_tag=ir0share,disable-modern=on",
                 ]
-            extend_qemu_kernel_boot(qemu_cmd, ROOT, ash_smoke=True)
-
-            proc = subprocess.Popen(
-                qemu_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            stderr_path = Path(tempfile.mktemp(prefix="ir0-desktop-matrix-qemu.", suffix=".stderr"))
+            stderr_file = stderr_path.open("wb")
+            proc = subprocess.Popen(qemu_cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
             mon = Monitor(port)
             try:
                 t_wait = time.time()
@@ -1019,6 +1018,14 @@ def run_session(
                 return results
             except (TimeoutError, ConnectionError, OSError) as e:
                 last_fail = f"session:{e}"
+                stderr_file.flush()
+                if proc.poll() is not None and (
+                    not batch_log.is_file() or batch_log.stat().st_size == 0
+                ):
+                    detail = stderr_path.read_text(errors="replace").strip()
+                    print(f"QEMU exited before serial output (rc={proc.returncode})")
+                    if detail:
+                        print(detail)
                 with log.open("a") as out:
                     if batch_log.is_file():
                         out.write(batch_log.read_text(errors="replace"))
@@ -1026,6 +1033,8 @@ def run_session(
             finally:
                 mon.close()
                 stop_qemu(proc)
+                stderr_file.close()
+                stderr_path.unlink(missing_ok=True)
                 cleanup_port(port)
         return [("login", f"FAIL:{last_fail}")]
     finally:

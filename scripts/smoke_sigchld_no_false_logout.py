@@ -92,7 +92,8 @@ def main() -> int:
         end_base = text.count("CONSOLE_SESSION_END")
         mark = len(text)
 
-        for cmd in ("ps", "ls /sys/kernel", "true", "ps"):
+        for cmd in ("alias ll", "alias llh", "ll", "llh",
+                    "ps", "ls /sys/kernel", "true", "ps"):
             type_str(port, cmd, delay=0.04)
             mon(port, "sendkey ret", 0.5)
             time.sleep(0.4)
@@ -117,6 +118,13 @@ def main() -> int:
             errs.append("false SESSION_END after SIGCHLD-heavy cmds")
         if MARKER not in text[mark:]:
             errs.append("shell lost after SIGCHLD cmds")
+        delta = text[mark:]
+        if "labuser@unix:~$" not in delta:
+            errs.append("home prompt was not abbreviated to ~")
+        if "ll='ls -l'" not in delta:
+            errs.append("ll alias missing or incorrect")
+        if "llh='ls -lah'" not in delta:
+            errs.append("llh alias missing or incorrect")
         if errs:
             return guards.report_guard_failures(errs, text[mark:])
 

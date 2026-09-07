@@ -157,6 +157,7 @@ int ir0_usb_host_describe(int idx, char *buf, size_t len)
     if (idx < 0 || idx >= g_usb_controller_count)
         return -ENODEV;
 
+    hc = &g_usb_hcs[idx];
     {
         int n;
 
@@ -170,6 +171,8 @@ int ir0_usb_host_describe(int idx, char *buf, size_t len)
         if (n < 0 || (size_t)n >= len)
             return -ENOMEM;
     }
+
+    return 0;
 }
 
 #else

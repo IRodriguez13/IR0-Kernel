@@ -232,6 +232,9 @@ and backed by handlers in `fs/sysfs.c`.
 - `/sys/kernel/max_processes` — configured process table limit
 - `/sys/kernel/panic` — **write** any byte to force `panicex(TESTING)`
   (root-only, `0644`); read returns help text
+- `/sys/kernel/reboot` — write `reboot` to request a synchronized restart
+- `/sys/kernel/poweroff` — write `poweroff` to request synchronized poweroff
+- `/sys/kernel/halt` — write `halt` to synchronize and halt the machine
 - `/sys/devices/system/cpu<N>` and `/sys/devices/system/cpu<N>/online`
 - `/sys/devices/system` / `/sys/devices/block`
 - `/sys/console/mode`
@@ -244,9 +247,12 @@ and backed by handlers in `fs/sysfs.c`.
 - Error handling paths use consistent negative errno returns.
 - Console and backend exposure route through facade-backed interfaces.
 - Directory `stat` uses `pseudo_fs_stat_now()` so `ls -l` shows wall-clock dates.
-- `/sys/kernel/panic` mirrors the full panic dump to VGA/serial **and** the GTK
-  framebuffer (`console_backend_panic_screen_on` + `klog` screen sink); guest
-  check: `python3 scripts/smoke_sys_panic.py`.
+- `/sys/kernel/panic` writes the full debugging dump to serial and a compact,
+  non-duplicated diagnostic summary to VGA/GTK; guest check:
+  `python3 scripts/smoke_sys_panic.py`.
+- Power-control nodes require an exact semantic command and are root-writable;
+  they route through `kernel_system_shutdown()` so storage is synchronized
+  before the platform reboot, poweroff or halt callback.
 
 ## In-Memory Pseudo Backends
 

@@ -18,6 +18,7 @@
 #include <ir0/procfs.h>
 #include <ir0/fd_types.h>
 #include <ir0/arch_port.h>
+#include <ir0/power_manag.h>
 #include <config.h>
 #include <ir0/errno.h>
 #include <ir0/stat.h>
@@ -84,6 +85,76 @@ static int pseudo_panic_stat(void *ctx, stat_t *st)
 static const pseudo_fs_ops_t sys_panic_ops = {
     .read = pseudo_read_wrap_int,
     .write = pseudo_sys_panic_write,
+    .stat = pseudo_panic_stat,
+};
+
+struct pseudo_power_control
+{
+    const char *name;
+    enum ir0_system_action action;
+};
+
+static const struct pseudo_power_control sys_reboot_control = {
+    .name = "reboot",
+    .action = IR0_SYSTEM_REBOOT,
+};
+
+static const struct pseudo_power_control sys_poweroff_control = {
+    .name = "poweroff",
+    .action = IR0_SYSTEM_POWEROFF,
+};
+
+static const struct pseudo_power_control sys_halt_control = {
+    .name = "halt",
+    .action = IR0_SYSTEM_HALT,
+};
+
+static int64_t pseudo_power_read(void *ctx, char *buf, size_t count, off_t *offset)
+{
+    const struct pseudo_power_control *control = ctx;
+    int len;
+
+    if (!control || !buf || !offset || count == 0)
+        return -EINVAL;
+    if (*offset != 0)
+        return 0;
+    len = snprintf(buf, count, "write '%s' to request a coordinated %s\n",
+                   control->name, control->name);
+    if (len < 0)
+        return -EIO;
+    if ((size_t)len >= count)
+        len = (int)count - 1;
+    *offset += len;
+    return len;
+}
+
+static int64_t pseudo_power_write(void *ctx, const char *buf, size_t count)
+{
+    const struct pseudo_power_control *control = ctx;
+    size_t len;
+
+    if (!control || !buf || count == 0)
+        return -EINVAL;
+    len = strlen(control->name);
+    if (count < len || memcmp(buf, control->name, len) != 0)
+        return -EINVAL;
+    if (count > len)
+    {
+        size_t i;
+
+        for (i = len; i < count; i++)
+        {
+            if (buf[i] != '\n' && buf[i] != '\r' &&
+                buf[i] != ' ' && buf[i] != '\t')
+                return -EINVAL;
+        }
+    }
+    kernel_system_shutdown(control->action);
+}
+
+static const pseudo_fs_ops_t sys_power_ops = {
+    .read = pseudo_power_read,
+    .write = pseudo_power_write,
     .stat = pseudo_panic_stat,
 };
 
@@ -700,6 +771,12 @@ void pseudo_fs_nodes_register_all(void)
                        (void *)(uintptr_t)sys_kernel_max_processes_read_reg);
     pseudo_fs_register("/sys", "kernel/panic", &sys_panic_ops,
                        (void *)(uintptr_t)sys_kernel_panic_read_reg);
+    pseudo_fs_register("/sys", "kernel/reboot", &sys_power_ops,
+                       (void *)&sys_reboot_control);
+    pseudo_fs_register("/sys", "kernel/poweroff", &sys_power_ops,
+                       (void *)&sys_poweroff_control);
+    pseudo_fs_register("/sys", "kernel/halt", &sys_power_ops,
+                       (void *)&sys_halt_control);
     pseudo_fs_register("/sys", "devices/system", &sys_static_read_ops,
                        (void *)(uintptr_t)sys_devices_system_read_reg);
     pseudo_fs_register("/sys", "devices/block", &sys_static_read_ops,

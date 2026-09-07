@@ -99,6 +99,9 @@ nohup.out
 interrupt/arch/x86-64/isr_stubs_64.asm
 toolchain/
 
+# Default headers_install output
+/usr/
+
 
 # Product rootfs rebuild stamps (IR0-userspace drives the real build).
 *.runit.stamp

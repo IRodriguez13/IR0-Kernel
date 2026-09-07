@@ -131,7 +131,7 @@ all: $(DEFAULT_BUILD_TARGET)
 # Only includes/uapi leaves the kernel tree: a userspace package that needs a
 # private kernel header is a broken boundary, not a missing include path.
 UAPI_DIR = $(KERNEL_ROOT)/includes/uapi
-DESTDIR ?= $(KERNEL_ROOT)/usr
+DESTDIR ?= $(KERNEL_ROOT)
 
 headers_install:
 	@mkdir -p $(DESTDIR)/usr/include

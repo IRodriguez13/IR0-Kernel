@@ -1810,9 +1810,11 @@ int64_t sys_getrlimit(unsigned int resource, void *rlim)
 int64_t sys_sigreturn(struct sigcontext *ctx)
 {
   struct sigframe user_frame;
+  struct sigcontext restore_copy;
   struct sigcontext *restore_ctx;
   uint64_t user_sp;
   int from_user = 0;
+  int from_cache = 0;
 
   if (!current_process)
     return -ESRCH;
@@ -1840,6 +1842,23 @@ int64_t sys_sigreturn(struct sigcontext *ctx)
         return -EFAULT;
       restore_ctx = ctx;
     }
+    else
+      from_cache = 1;
+
+    /* process_saved_context_clear() releases the cached context below. */
+    if (from_cache)
+    {
+      restore_copy = *restore_ctx;
+      restore_ctx = &restore_copy;
+    }
+  }
+
+  if (!signal_sigcontext_validate_and_sanitize(restore_ctx))
+  {
+    process_saved_context_clear(current_process);
+    current_process->signal_pending |= SIGNAL_MASK(SIGSEGV);
+    handle_signals();
+    return -EFAULT;
   }
 
   process_saved_context_clear(current_process);

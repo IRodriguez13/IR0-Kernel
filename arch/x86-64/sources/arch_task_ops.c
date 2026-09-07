@@ -71,8 +71,10 @@ void task_load_sigcontext(task_t *t, const struct sigcontext *ctx)
 	t->arch.ss = (uint16_t)ctx->ss;
 }
 
-void task_save_irq_user_frame(task_t *t, const uint64_t *frame)
+void task_save_user_exception_frame(task_t *t, const void *opaque_frame)
 {
+	const uint64_t *frame = opaque_frame;
+
 	if (!t || !frame)
 		return;
 

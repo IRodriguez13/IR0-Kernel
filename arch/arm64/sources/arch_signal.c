@@ -31,6 +31,19 @@ uint64_t sigcontext_sp(const struct sigcontext *ctx)
 	return ctx ? ctx->sp : 0;
 }
 
+int signal_sigcontext_validate_and_sanitize(struct sigcontext *ctx)
+{
+    if (!ctx || ctx->pc < 0x00400000ULL ||
+        ctx->pc > 0x0000FFFFFFFFFFFFULL ||
+        ctx->sp < 0x00400000ULL || ctx->sp > 0x0000FFFFFFFFFFFFULL ||
+        (ctx->pc & 3ULL) != 0 || (ctx->sp & 15ULL) != 0)
+        return 0;
+
+    /* Preserve userspace NZCV only; force EL0t and drop privileged PSTATE. */
+    ctx->pstate &= 0xF0000000ULL;
+    return 1;
+}
+
 void signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,
 						    const struct arch_syscall_frame *sf,
 						    uint64_t retval)

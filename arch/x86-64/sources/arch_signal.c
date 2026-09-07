@@ -16,6 +16,7 @@
 #include <ir0/arch_task.h>
 #include <ir0/arch_syscall_frame.h>
 #include <ir0/signals.h>
+#include <ir0/debug_trap.h>
 #include <config.h>
 #include <string.h>
 
@@ -27,6 +28,21 @@ uint64_t sigcontext_ip(const struct sigcontext *ctx)
 uint64_t sigcontext_sp(const struct sigcontext *ctx)
 {
 	return ctx ? ctx->rsp : 0;
+}
+
+int signal_sigcontext_validate_and_sanitize(struct sigcontext *ctx)
+{
+    if (!ctx || ctx->rip < 0x00400000ULL ||
+        ctx->rip > 0x00007FFFFFFFFFFFULL ||
+        ctx->rsp < 0x00400000ULL || ctx->rsp > 0x00007FFFFFFFFFFFULL)
+        return 0;
+
+    ctx->rflags = ir0_rflags_sanitize_user(ctx->rflags | 2ULL | RFLAGS_IF);
+#if defined(USER_CODE_SEL) && defined(USER_DATA_SEL)
+    ctx->cs = (uint64_t)USER_CODE_SEL;
+    ctx->ss = (uint64_t)USER_DATA_SEL;
+#endif
+    return 1;
 }
 
 void signal_fill_sigcontext_from_syscall_frame(struct sigcontext *ctx,

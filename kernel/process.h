@@ -553,8 +553,6 @@ void process_sync_task_user_ip_from_syscall_frame(process_t *p);
 
 void process_restore_user_task_segments(process_t *p);
 
-void process_save_user_context_from_irq_frame(uint64_t *gpr_stack);
-
 void process_arm_blocked_syscall_resume(process_t *p, uint64_t rax);
 void process_arm_coop_resched_resume(process_t *p, uint64_t rax);
 void process_clear_in_thread_syscall_block(process_t *p);
@@ -736,7 +734,7 @@ void process_syscall_restore_exit_regs(uint64_t *stack_r9_slot);
 pid_t process_get_pid(void);
 pid_t process_get_ppid(void);
 process_t *process_get_current(void);
-void irq_save_user_frame(uint64_t *frame);
+void process_save_user_exception_frame(void *frame);
 process_t *get_process_list(void);
 void process_itimer_tick(uint64_t now_ms);
 pid_t process_get_next_pid(void);

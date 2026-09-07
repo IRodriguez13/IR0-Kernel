@@ -28,6 +28,3 @@ void sched_promote_process(process_t *proc);
 void sched_try_preempt_blocked(void);
 int sched_user_return_take_switch(void);
 void sched_need_resched_user_return(void);
-void sched_context_switch_skip_prev_save(void);
-int sched_context_switch_take_skip_prev_save(void);
-int sched_irq_preempt_from_frame(uint64_t *gpr_stack);

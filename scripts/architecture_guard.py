@@ -132,6 +132,8 @@ DEVFS_USERCOPY_WHITELIST = {
     "dev_console_ioctl",
     "dev_events0_ioctl",
     "dev_fb0_ioctl",
+    "dev_mouse_ioctl",
+    "dev_net_ioctl",
     "dev_pty_ioctl",
 }
 
@@ -1501,6 +1503,50 @@ def check_portable_port1_no_legacy_arch_mm():
     return errors
 
 
+def check_scheduler_user_return_boundary():
+    """Keep raw IRQ frames and signal delivery out of portable scheduling."""
+    errors = []
+    sched_header = ROOT / "includes" / "ir0" / "sched.h"
+    sched_tree = ROOT / "sched"
+    irq_dispatch = ROOT / "interrupt" / "arch" / "isr_handlers.c"
+
+    header_text = sched_header.read_text(encoding="utf-8", errors="replace")
+    for forbidden in (
+        "sched_irq_preempt_from_frame",
+        "sched_context_switch_skip_prev_save",
+        "sched_context_switch_take_skip_prev_save",
+    ):
+        if forbidden in header_text:
+            errors.append(
+                f"{sched_header.relative_to(ROOT)}: raw IRQ/context API "
+                f"'{forbidden}' must remain ISA-private"
+            )
+
+    for path in sched_tree.rglob("*"):
+        if path.suffix not in {".c", ".h"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"\bhandle_signals\s*\(", text):
+            errors.append(
+                f"{path.relative_to(ROOT)}: scheduler must not deliver signals; "
+                "use the exit-to-user facade"
+            )
+
+    irq_text = irq_dispatch.read_text(encoding="utf-8", errors="replace")
+    if "#include <ir0/sched.h>" in irq_text:
+        errors.append(
+            f"{irq_dispatch.relative_to(ROOT)}: IRQ backend must not include "
+            "the scheduler facade"
+        )
+    if re.search(r"\bsched_[A-Za-z0-9_]*\s*\(", irq_text):
+        errors.append(
+            f"{irq_dispatch.relative_to(ROOT)}: IRQ backend must not invoke "
+            "portable scheduler entry points"
+        )
+
+    return errors
+
+
 def main():
     errors = []
     errors.extend(check_forbidden_includes())
@@ -1540,6 +1586,7 @@ def main():
     errors.extend(check_portable_port1_no_legacy_arch_mm())
     errors.extend(check_portable_no_arch_prefix_calls())
     errors.extend(check_portable_no_arch_switch_include())
+    errors.extend(check_scheduler_user_return_boundary())
 
     if errors:
         print("[arch-guard] FAILED")

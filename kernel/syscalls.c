@@ -57,7 +57,7 @@ void stdin_wake_check(void)
 	 * current may be userspace or idle. Mid-IRQ switch_to saves [rsp] into
 	 * prev->task.rip (kernel C / stack junk) → later kernel_ret/#UD into
 	 * BSS (desk panic after top/TTY). Defer via resched flags; ISR exit
-	 * uses sched_irq_preempt_from_frame, idle_poll yields cooperatively.
+	 * consumes the request after interrupt return; idle_poll yields too.
 	 */
 	clock_request_sched_resched();
 }

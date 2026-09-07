@@ -68,26 +68,15 @@ void syscall_restore_exit_regs(struct process *p,
 	__asm__ volatile("msr sp_el0, %0" :: "r"(sf->sp) : "memory");
 }
 
-int irq_frame_is_user(const uint64_t *iretq_frame)
+int exception_frame_is_user(const void *opaque_frame)
 {
 	uint64_t spsr;
 
-	(void)iretq_frame;
+	(void)opaque_frame;
 	/*
 	 * SPSR_EL1.M[3:0] == 0 → EL0t (AArch64). Frame pointer alone does not
 	 * encode privilege; exception entry left SPSR in the system register.
 	 */
 	__asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
 	return ((spsr & 0xfu) == 0u) ? 1 : 0;
-}
-
-void syscall_save_user_context_from_irq(uint64_t *gpr_stack)
-{
-	/*
-	 * vectors.S exc_entry_frame: x0 at [0] … x30 at [30]. Same pointer
-	 * shape as irq_save_user_frame / task_save_irq_user_frame.
-	 */
-	if (!gpr_stack)
-		return;
-	irq_save_user_frame(gpr_stack);
 }

@@ -30,7 +30,8 @@ void task_apply_syscall_frame(task_t *task,
 				   uint64_t rax);
 void task_sync_syscall_soft_mirror(task_t *task,
 					const arch_task_syscall_frame_t *sf);
-void task_save_irq_user_frame(task_t *task, const uint64_t *iretq_frame);
+/* Decode an opaque ISA exception frame into the portable task snapshot. */
+void task_save_user_exception_frame(task_t *task, const void *frame);
 void task_apply_kernel_segments(task_t *task);
 void task_apply_user_segments(task_t *task);
 uint64_t *task_retval_slot_addr(task_t *task);

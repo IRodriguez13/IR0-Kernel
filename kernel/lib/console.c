@@ -593,7 +593,7 @@ void ir0_console_keypress(char c)
 			 * Wake waiters only. Scheduling from IRQ1 (keyboard →
 			 * keypress) corrupted prev RIP → #UD into .bss /
 			 * process_t during firstboot password Confirm.
-			 * sched_irq_preempt_from_frame / idle_poll pick READY.
+			 * syscall-return / idle_poll paths pick READY.
 			 */
 			(void)ir0_console_wake_readers();
 		}

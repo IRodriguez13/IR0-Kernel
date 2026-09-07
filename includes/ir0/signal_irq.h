@@ -25,6 +25,9 @@ typedef struct arch_syscall_frame arch_syscall_frame_t;
 uint64_t sigcontext_ip(const struct sigcontext *ctx);
 uint64_t sigcontext_sp(const struct sigcontext *ctx);
 
+/* Validate a userspace-controlled rt_sigreturn context and mask privileged state. */
+int signal_sigcontext_validate_and_sanitize(struct sigcontext *ctx);
+
 /*
  * Fill @ctx from a captured syscall frame (musl syscall insn while blocked).
  * @retval is the interrupted syscall return (typically -EINTR).

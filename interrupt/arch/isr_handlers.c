@@ -21,7 +21,6 @@
 #include <ir0/ktm/klog.h>
 #include <ir0/debug_trap.h>
 #include <kernel/process.h>
-#include <ir0/sched.h>
 #include <ir0/cpu.h>
 #include <ir0/arch_io.h>
 #include <config.h>
@@ -502,7 +501,7 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
         {
         case 0: /* Timer */
         {
-            irq_save_user_frame(stack);
+            process_save_user_exception_frame(stack);
             increment_pit_ticks();
             break;
         }
@@ -534,11 +533,8 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
 
         /* Enviar EOI para IRQs */
         pic_send_eoi64(irq);
-	/*
-	 * Safe preempt after wake (TTY/timer flags). Must run with the IRQ
-	 * frame still intact; never schedule from keyboard_handler itself.
-	 */
-	(void)sched_irq_preempt_from_frame(stack);
+	/* Architecture owns raw frame decoding; portable IRQ code ignores it. */
+	(void)stack;
         return;
     }
 

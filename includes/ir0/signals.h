@@ -168,11 +168,25 @@ int send_signal(int pid, int signal);
 int send_signal_pgrp(int32_t pgid, int signal);
 
 /**
- * handle_signals - Check and handle pending signals for current process
+ * handle_signals - Low-level pending-signal engine for current process.
  *
- * Called by scheduler before context switch
+ * Subsystems that are about to return to userspace should use
+ * signals_prepare_user_return() instead. Blocking syscall implementations may
+ * call this engine after their own interruption-state checks.
  */
 void handle_signals(void);
+
+/**
+ * signals_prepare_user_return - Run signal work at a proven user-return edge.
+ * @p: process executing on the current kernel stack
+ *
+ * This is the portable exit-to-user facade. It deliberately rejects a process
+ * other than current_process, so scheduler/ISA switch code cannot deliver a
+ * signal to an incoming task while still executing on the outgoing stack.
+ *
+ * Returns 1 when a userspace handler was armed, 0 otherwise.
+ */
+int signals_prepare_user_return(process_t *p);
 
 /*
  * True when @p has a pending signal that should interrupt pause(2) or run
@@ -182,8 +196,8 @@ void handle_signals(void);
 int signals_pause_should_interrupt(process_t *p);
 
 /*
- * True when handle_signals() should run on context switch to @p (includes
- * default SIGTERM/SIGKILL even if blocked in signal_mask).
+ * True when pending signal work exists for @p (includes default
+ * SIGTERM/SIGKILL even if blocked in signal_mask).
  */
 int signals_should_handle_on_run(process_t *p);
 

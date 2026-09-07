@@ -277,7 +277,7 @@ int signals_deliver_from_irq_frame(process_t *p, int sig, uint64_t *frame,
 	signal_redirect_irq_frame(frame, (void *)handler, sig, new_rsp,
 				       info_addr, uctx_addr,
 				       (sa_flags & SA_SIGINFO) ? 1 : 0);
-	irq_save_user_frame(frame);
+	process_save_user_exception_frame(frame);
 
 	if (sa_flags & SA_RESETHAND)
 		p->signal_handlers[sig] = SIG_DFL;
@@ -625,6 +625,8 @@ void handle_signals(void)
 #endif
         current->signal_pending &= ~SIGNAL_MASK(SIGSTOP);
         process_set_sched_state(current, PROCESS_BLOCKED);
+        /* A stopped task must not cross the pending exit-to-user edge. */
+        sched_schedule_next();
         return;
     }
 
@@ -1224,6 +1226,24 @@ void handle_signals(void)
     }
     
     /* SIGALRM, SIGUSR1, SIGUSR2, SIGTRAP - handled above or default */
+}
+
+int signals_prepare_user_return(process_t *p)
+{
+    if (!p || p != process_get_current() || p->mode != USER_MODE)
+        return 0;
+
+    if (!signals_should_handle_on_run(p))
+        return 0;
+
+    handle_signals();
+
+    /* process_exit() may have switched current while handling a default. */
+    if (p != process_get_current())
+        return 0;
+
+    return process_signal_enter_pending(p) &&
+           process_saved_context_present(p);
 }
 
 /**

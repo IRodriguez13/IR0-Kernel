@@ -118,14 +118,21 @@ section .text
 ;   0xB0 cr3
 ;
 switch_context_x64:
+    ; next=NULL is a save-only continuation checkpoint used before a direct
+    ; user transfer. It returns 0 now and 1 when that context is resumed.
     test rsi, rsi
+    jnz .have_next
+    test rdi, rdi
     jz .skip
+    jmp .save_current
 
     ; rdi=NULL: user IRQ frame already in prev->task (skip clobbering save).
+.have_next:
     test rdi, rdi
     jz .load_only
 
     ; ---- Save current context (rdi = &current->task) ----
+.save_current:
 
     mov [rdi + 0x00], rax
     mov [rdi + 0x08], rbx
@@ -190,9 +197,19 @@ switch_context_x64:
     mov [rdi + TASK_ARCH_CR3_OFFSET], rax
 
     ; Class B close: honour want_kernel_ret now that rip/cs are kernel from save.
+    push rdi
     push rsi
+    sub rsp, 8
     call process_after_task_save
+    add rsp, 8
     pop rsi
+    pop rdi
+
+    test rsi, rsi
+    jnz .load_only
+    mov qword [rdi + 0x00], 1
+    xor eax, eax
+    ret
 
 .load_only:
     ; ---- Load new context (rsi = &new->task) ----

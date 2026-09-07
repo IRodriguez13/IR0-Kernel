@@ -30,7 +30,7 @@
 #include <pmm.h>
 #include <mm/allocator.h>
 
-extern void switch_context_x64(task_t *prev, task_t *next);
+extern int switch_context_x64(task_t *prev, task_t *next);
 extern uint64_t get_current_page_directory(void);
 extern uint64_t kernel_syscall_stack_top;
 extern uint64_t user_rsp_save;
@@ -396,6 +396,16 @@ void arch_switch_to(task_t *prev, task_t *next)
         else
         {
         syscall_user_frame_t *frame = &next_proc->syscall_frame;
+
+        /*
+         * Direct user transfer does not return through switch_context_x64, so
+         * preserve a live cooperative caller first. On its later kernel
+         * resume the helper returns non-zero and we unwind this old switch
+         * invocation instead of transferring to @next a second time.
+         */
+        if (next_proc->coop_resched_resume && prev &&
+            switch_context_x64(prev, NULL) != 0)
+            return;
 
         /*
          * Why this task went back to ring 3 instead of continuing its

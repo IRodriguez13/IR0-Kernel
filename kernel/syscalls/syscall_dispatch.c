@@ -37,6 +37,7 @@
 #include <ir0/serial_io.h>
 #include <ir0/errno.h>
 #include <ir0/process.h>
+#include <ir0/sched.h>
 #include <ir0/abi/mmap_contract.h>
 #include <ir0/arch_port.h>
 #include <ir0/cpu.h>
@@ -553,6 +554,10 @@ int64_t syscall_dispatch(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
   if (do_trace) {
     fase10_count++;
   }
+
+  /* Deliver only at a proven exit-to-user edge on this task's own stack. */
+  if (current_process && current_process->mode == USER_MODE)
+    signals_prepare_user_return(current_process);
 
   if (syscall_num == __NR_fork || syscall_num == __NR_clone ||
       syscall_num == __NR_vfork)

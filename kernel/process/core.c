@@ -139,10 +139,10 @@ process_t *process_get_current(void)
 }
 
 /*
- * irq_save_user_frame - Copy user context from an IRQ stub frame into the
- * current task. Frame layout is ISA-private (decoded in arch_task_ops).
+ * Copy user context from an opaque ISA exception frame into the current task.
+ * Frame classification and decoding remain architecture-owned.
  */
-void irq_save_user_frame(uint64_t *frame)
+void process_save_user_exception_frame(void *frame)
 {
 	process_t *p;
 
@@ -153,14 +153,16 @@ void irq_save_user_frame(uint64_t *frame)
 	if (!p || p->mode != USER_MODE)
 		return;
 
-	if (!irq_frame_is_user(frame))
+	if (!exception_frame_is_user(frame))
 		return;
 
 #if CONFIG_DEBUG_ISRABI
-	klog_debug_fmt("ISR", "[ISRABI][IRQ_SAVE] pid=%x src_int=%llx src_err=%llx src_rip=%llx src_cs=%llx src_rflags=%llx src_rsp=%llx src_ss=%llx", (unsigned)(current_process ? (uint32_t)current_process->task.pid : 0), (unsigned long long)(frame[0]), (unsigned long long)(frame[1]), (unsigned long long)(frame[2]), (unsigned long long)(frame[3]), (unsigned long long)(frame[4]), (unsigned long long)(frame[5]), (unsigned long long)(frame[6]));
+	klog_debug_fmt("ISR", "[ISRABI][IRQ_SAVE] pid=%x source=opaque_arch_frame",
+		       (unsigned)(current_process
+			? (uint32_t)current_process->task.pid : 0));
 #endif
 
-	task_save_irq_user_frame(&p->task, frame);
+	task_save_user_exception_frame(&p->task, frame);
 
 #if CONFIG_DEBUG_ISRABI
 	klog_debug_fmt("ISR", "[ISRABI][IRQ_SAVE] task_rip=%llx task_rsp=%llx task_cs=%llx task_ss=%llx task_rflags=%llx", (unsigned long long)(task_get_ip(&p->task)), (unsigned long long)(task_get_sp(&p->task)), (unsigned long long)((uint64_t)task_get_cs(&p->task)), (unsigned long long)((uint64_t)task_get_ss(&p->task)), (unsigned long long)(task_get_flags(&p->task)));
@@ -441,10 +443,3 @@ void process_restore_user_task_segments(process_t *p)
 	p->kernel_syscall_sleep = 0;
 	task_apply_user_segments(&p->task);
 }
-
-
-void process_save_user_context_from_irq_frame(uint64_t *gpr_stack)
-{
-	syscall_save_user_context_from_irq(gpr_stack);
-}
-

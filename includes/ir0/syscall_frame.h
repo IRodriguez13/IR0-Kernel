@@ -46,11 +46,5 @@ void syscall_capture_frame_at_entry(struct process *p,
 void syscall_restore_exit_regs(struct process *p,
 					    uint64_t *stack_r9_slot);
 
-/*
- * Save user GPRs from an IRQ stub stack into current_process (preempt path).
- * @gpr_stack: pointer to the saved-RAX slot (ISA-defined layout).
- */
-void syscall_save_user_context_from_irq(uint64_t *gpr_stack);
-
-/* 1 if @iretq_frame is a userspace interrupt frame. */
-int irq_frame_is_user(const uint64_t *iretq_frame);
+/* Classify an opaque ISA exception frame without exposing its layout. */
+int exception_frame_is_user(const void *frame);

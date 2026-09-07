@@ -83,20 +83,11 @@ void syscall_restore_exit_regs(struct process *p,
 	p->fork_resync_syscall_stack = 0;
 }
 
-int irq_frame_is_user(const uint64_t *iretq_frame)
+int exception_frame_is_user(const void *opaque_frame)
 {
-	if (!iretq_frame)
-		return 0;
-	return ((iretq_frame[3] & 3U) == 3U) ? 1 : 0;
-}
+	const uint64_t *frame = opaque_frame;
 
-void syscall_save_user_context_from_irq(uint64_t *gpr_stack)
-{
-	/*
-	 * gpr_stack = saved-RAX; iretq frame begins 15 qwords above
-	 * (isr_common_stub_64 / sched_resched.c).
-	 */
-	if (!gpr_stack)
-		return;
-	irq_save_user_frame(gpr_stack + 15);
+	if (!frame)
+		return 0;
+	return ((frame[3] & 3U) == 3U) ? 1 : 0;
 }

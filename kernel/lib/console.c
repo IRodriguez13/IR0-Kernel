@@ -136,10 +136,21 @@ int ir0_console_set_fg_pgid(int32_t pgid)
 	return 0;
 }
 
-void ir0_console_clear_fg_pgid(int32_t pgid)
+void ir0_console_clear_fg_pgid(int32_t pgid, int32_t exiting_pid)
 {
-	if (pgid > 1 && console_fg_pgid == pgid)
-		console_fg_pgid = 0;
+	process_t *p;
+
+	if (pgid <= 1 || console_fg_pgid != pgid)
+		return;
+
+	for (p = process_list; p; p = p->next)
+	{
+		if ((int32_t)p->task.pid == exiting_pid)
+			continue;
+		if ((int32_t)p->pgid == pgid)
+			return;
+	}
+	console_fg_pgid = 0;
 }
 
 int ir0_console_ioctl_set_ctty(void)

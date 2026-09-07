@@ -113,7 +113,8 @@ __attribute__((noreturn)) void process_exit(int code)
 	ir0_console_purge_waiters_for_process(dying);
 	pipe_purge_waiters_for_process(dying);
 	if (dying->pgid > 1)
-		ir0_console_clear_fg_pgid((int32_t)dying->pgid);
+		ir0_console_clear_fg_pgid((int32_t)dying->pgid,
+					 (int32_t)dying->task.pid);
 
 	process_release_fds(dying, "EXIT_CLOSE");
 
@@ -321,4 +322,3 @@ void process_destroy(process_t *p)
 	fase_audit_unbind(p);
 	process_fase43_proc_audit("destroy-after");
 }
-

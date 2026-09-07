@@ -136,7 +136,7 @@ void ir0_console_after_tty_read_signal(int signo);
 /* Ash longjmp without rt_sigreturn (SIGFRAME_ABANDON). */
 void ir0_console_after_signal_abandon(void);
 int ir0_console_set_fg_pgid(int32_t pgid);
-void ir0_console_clear_fg_pgid(int32_t pgid);
+void ir0_console_clear_fg_pgid(int32_t pgid, int32_t exiting_pid);
 /* TIOCSCTTY on the console: session-leader check + foreground pgrp bind. */
 int ir0_console_ioctl_set_ctty(void);
 int32_t ir0_console_get_fg_pgid(void);

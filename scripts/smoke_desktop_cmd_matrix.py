@@ -250,6 +250,13 @@ CASES: list[Case] = [
 STABILITY_CASES: list[Case] = [
     Case("true", "true", expect_prompt, echo="true"),
     Case(
+        "utmp_session",
+        "uptime|grep '1 users' && echo UTMP_SESSION_OK",
+        expect_prompt_any("UTMP_SESSION_OK"),
+        echo="UTMP_SESSION_OK",
+        timeout=30.0,
+    ),
+    Case(
         "top_batch",
         "top -b -n 2;echo TOP_BATCH_OK",
         expect_prompt_any("TOP_BATCH_OK", "Mem:"),
@@ -317,11 +324,11 @@ STABILITY_CASES: list[Case] = [
 ]
 
 STABILITY_TCC_CASE = Case(
-    "tcc_hello",
+    "development_toolchain",
     "",
-    expect_prompt_any("TCC_HELLO", "TCC_HELLO_OK"),
+    expect_prompt_any("ISD_DEVELOPER_HELLO_OK", "DEVELOPMENT_TOOLCHAIN_OK"),
     special="tcc_mnt",
-    echo="TCC_HELLO_OK",
+    echo="DEVELOPMENT_TOOLCHAIN_OK",
     timeout=90.0,
 )
 
@@ -550,13 +557,16 @@ def inject_case(mon: Monitor, case: Case, key_delay: float) -> None:
         mon.type_str("ls /mnt/host", d)
         mon.ret()
         time.sleep(1.0)
-        mon.type_str("tcc -o /tmp/hello /mnt/host/hello.c", d)
+        mon.type_str("cd ~/Developer/hello", d)
         mon.ret()
-        time.sleep(3.0)
-        mon.type_str("/tmp/hello", d)
+        time.sleep(1.0)
+        mon.type_str("make clean && make", d)
+        mon.ret()
+        time.sleep(4.0)
+        mon.type_str("./hello", d)
         mon.ret()
         time.sleep(1.5)
-        mon.type_str("echo TCC_HELLO_OK", d)
+        mon.type_str("echo DEVELOPMENT_TOOLCHAIN_OK", d)
         mon.ret()
         return
     if case.special == "doom_mnt":
@@ -1162,7 +1172,7 @@ def run_round(
         if stability and with_tcc and not only_doom:
             tcc_share = Path(tempfile.mkdtemp(prefix="ir0-cmx-tcc."))
             stage_stability_share(tcc_share)
-            print("  -- batch tcc /mnt/host (su for mount) --", flush=True)
+            print("  -- batch development toolchain --", flush=True)
             part = run_session(
                 iso,
                 disk_src,

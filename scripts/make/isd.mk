@@ -206,9 +206,14 @@ image-vmware:
 		"$(KERNEL_ROOT)/scripts/isd_machine_disk.sh" export-vmdk
 	@echo "  Attach $(KERNEL_ROOT)/kernel-x64-userspace.iso as the boot CD."
 
-# Product session: build the kernel ISO, but never rebuild or repack the mutable
-# machine disk. first-boot/machine-create are the explicit provisioning paths.
-poweron: kernel-x64-userspace.iso check-isd
+# Product session: boot existing artifacts only. first-boot/machine-create are
+# the explicit provisioning paths; rebuilding the kernel remains explicit.
+poweron: check-isd
+	@test -f "$(KERNEL_ROOT)/kernel-x64-userspace.iso" || { \
+		echo "✗ missing $(KERNEL_ROOT)/kernel-x64-userspace.iso"; \
+		echo "  Run make first-boot PROFILE=$(ISD_PROFILE) first."; \
+		exit 2; \
+	}
 	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"
 	@IR0_MACHINE_BASE_DISK="$(IR0_ISD_DISK)" \
 		IR0_MACHINE_DISK="$(IR0_MACHINE_DISK)" \

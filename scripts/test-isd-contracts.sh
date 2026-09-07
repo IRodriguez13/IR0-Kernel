@@ -52,6 +52,11 @@ if grep -E '^poweron:.*ensure-isd-disk' scripts/make/isd.mk >/dev/null; then
 else
 	ok "D poweron does not invoke ISD image packing"
 fi
+if grep -E '^poweron:.*kernel-x64-userspace\.iso' scripts/make/isd.mk >/dev/null; then
+	bad "D poweron rebuilds the kernel ISO"
+else
+	ok "D poweron boots existing kernel artifacts"
+fi
 
 ENS=scripts/ensure-host-deps.sh
 TMP=$(mktemp -d)

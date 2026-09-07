@@ -198,7 +198,9 @@ make poweron      # reuse the installed machine on every boot
 `first-boot` builds a reproducible ISD base image and creates a separate mutable
 machine disk under the sibling `IR0-machines/` directory. `poweron` reuses that
 disk without running the ISD image packer, so guest users, configuration and
-files survive kernel or rootfs rebuilds. Does **not** require TinyCC/GNU make unless
+files survive kernel or rootfs rebuilds. It boots existing artifacts without
+recompiling; rebuild `kernel-x64-userspace.iso` explicitly after kernel changes.
+Does **not** require TinyCC/GNU make unless
 `IR0_WITH_DEVTOOLS=1`.
 
 Use `IR0_MACHINE=name` to keep multiple installations of the same profile.

@@ -224,8 +224,16 @@ static int ext2_lookup(struct ext2_vol *v, uint32_t dir_ino, const char *name,
 		{
 			struct ext2_dirent *de = (struct ext2_dirent *)(buf + off);
 
-			if (de->rec_len < 8)
-				break;
+			if (de->rec_len < 8 || de->rec_len > v->block_size - off)
+			{
+				kfree(buf);
+				return -EIO;
+			}
+			if (de->name_len > de->rec_len - 8)
+			{
+				kfree(buf);
+				return -EIO;
+			}
 			if (de->inode != 0 && de->name_len == strlen(name) &&
 			    memcmp((char *)de + 8, name, de->name_len) == 0)
 			{

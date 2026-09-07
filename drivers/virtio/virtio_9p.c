@@ -563,7 +563,7 @@ static int v9p_write(uint32_t fid, uint64_t offset, const void *data, uint32_t c
 	uint32_t rblen;
 	int rc;
 
-	if (count + 16 > (uint32_t)V9P_BUF_SIZE)
+	if (count > (uint32_t)V9P_BUF_SIZE - 16u)
 		return -EFBIG;
 
 	body = kmalloc_try(V9P_BUF_SIZE);
@@ -582,8 +582,14 @@ static int v9p_write(uint32_t fid, uint64_t offset, const void *data, uint32_t c
 		return rc;
 	if (rblen < 4)
 		return -EIO;
-	if (written)
-		*written = p9_get32(&rb);
+	{
+		uint32_t nwritten = p9_get32(&rb);
+
+		if (nwritten > count)
+			return -EIO;
+		if (written)
+			*written = nwritten;
+	}
 	return 0;
 }
 
@@ -1493,4 +1499,3 @@ int virtio_9p_ready(void)
 {
 	return g_ready;
 }
-

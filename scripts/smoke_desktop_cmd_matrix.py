@@ -297,6 +297,22 @@ STABILITY_CASES: list[Case] = [
         timeout=55.0,
     ),
     Case(
+        "random_intr",
+        "",
+        expect_prompt_any("RANDOM_INTR_OK"),
+        special="random_intr",
+        echo="RANDOM_INTR_OK",
+        timeout=40.0,
+    ),
+    Case(
+        "ping_intr",
+        "",
+        expect_prompt_any("PING_INTR_OK"),
+        special="ping_intr",
+        echo="PING_INTR_OK",
+        timeout=40.0,
+    ),
+    Case(
         "man_quit",
         "",
         expect_prompt_any("MAN_QUIT_OK"),
@@ -544,6 +560,28 @@ def inject_case(mon: Monitor, case: Case, key_delay: float) -> None:
             time.sleep(0.4)
         time.sleep(1.2)
         mon.type_str("echo TOP_INTR_OK", d)
+        mon.ret()
+        return
+    if case.special == "random_intr":
+        d = max(key_delay, 0.20)
+        mon.type_str("cat /dev/random", d)
+        mon.ret()
+        time.sleep(1.5)
+        for _ in range(3):
+            mon.key("ctrl-c")
+            time.sleep(0.3)
+        mon.type_str("echo RANDOM_INTR_OK", d)
+        mon.ret()
+        return
+    if case.special == "ping_intr":
+        d = max(key_delay, 0.20)
+        mon.type_str("ping 10.0.2.2", d)
+        mon.ret()
+        time.sleep(2.0)
+        for _ in range(3):
+            mon.key("ctrl-c")
+            time.sleep(0.3)
+        mon.type_str("echo PING_INTR_OK", d)
         mon.ret()
         return
     if case.special == "man_quit":
@@ -970,13 +1008,20 @@ def run_session(
                 "-m",
                 "512M",
                 "-no-reboot",
-                "-net",
-                "none",
                 "-device",
                 "isa-debug-exit,iobase=0xf4,iosize=0x04",
                 "-monitor",
                 f"tcp:127.0.0.1:{port},server,nowait",
             ]
+            if any(case.name == "ping_intr" for case in cases):
+                qemu_cmd += [
+                    "-netdev",
+                    "user,id=net0",
+                    "-device",
+                    "rtl8139,netdev=net0",
+                ]
+            else:
+                qemu_cmd += ["-net", "none"]
             if share_dir is not None:
                 qemu_cmd += [
                     "-fsdev",

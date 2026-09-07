@@ -1280,6 +1280,32 @@ smoke-userspace-shebang: kernel-x64-userspace-ash-smoke.iso
 		--log /tmp/ir0-userspace-shebang.log
 	@echo "  LOG     /tmp/ir0-userspace-shebang.log"
 
+.PHONY: smoke-userspace-random-intr
+smoke-userspace-random-intr: kernel-x64-userspace-ash-smoke.iso
+	@echo "  SMOKE   Ctrl-C interrupts /dev/random reader (3 boots)..."
+	@test -f $(USERSPACE_STABILITY_DISK) || \
+		{ echo "✗ missing $(USERSPACE_STABILITY_DISK) — pack ISD development first"; exit 2; }
+	@python3 scripts/smoke_desktop_cmd_matrix.py --stability \
+		--only-stability-case random_intr --no-tcc --rounds 3 \
+		--key-delay 0.2 --batch-size 1 --skip-poweroff \
+		--iso kernel-x64-userspace-ash-smoke.iso \
+		--disk $(USERSPACE_STABILITY_DISK) \
+		--log /tmp/ir0-userspace-random-intr.log
+	@echo "  LOG     /tmp/ir0-userspace-random-intr.log"
+
+.PHONY: smoke-userspace-ping-intr
+smoke-userspace-ping-intr: kernel-x64-userspace-ash-smoke.iso
+	@echo "  SMOKE   Ctrl-C interrupts BusyBox ping (3 boots)..."
+	@test -f $(USERSPACE_STABILITY_DISK) || \
+		{ echo "✗ missing $(USERSPACE_STABILITY_DISK) — pack ISD development first"; exit 2; }
+	@python3 scripts/smoke_desktop_cmd_matrix.py --stability \
+		--only-stability-case ping_intr --no-tcc --rounds 3 \
+		--key-delay 0.2 --batch-size 1 --skip-poweroff \
+		--iso kernel-x64-userspace-ash-smoke.iso \
+		--disk $(USERSPACE_STABILITY_DISK) \
+		--log /tmp/ir0-userspace-ping-intr.log
+	@echo "  LOG     /tmp/ir0-userspace-ping-intr.log"
+
 # Interactive firstboot wizard (HMP): password Confirm must not #UD under IRQ1.
 FIRSTBOOT_WIZARD_LOG = /tmp/ir0-firstboot-wizard.log
 FIRSTBOOT_WIZARD_DISK ?= $(IR0_USERSPACE_ROOT)/out/x86_64/images/desktop/disk.img

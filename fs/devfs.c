@@ -67,6 +67,18 @@ static int num_dev_nodes = 0;
 devfs_node_t *devfs_find_node_by_id(uint32_t device_id);
 
 #if CONFIG_ENABLE_NETWORKING
+typedef struct dev_net_config_ptrs {
+    ip4_addr_t *ip;
+    ip4_addr_t *netmask;
+    ip4_addr_t *gateway;
+} dev_net_config_ptrs_t;
+
+typedef struct dev_net_config_values {
+    ip4_addr_t ip;
+    ip4_addr_t netmask;
+    ip4_addr_t gateway;
+} dev_net_config_values_t;
+
 static int dev_net_pid_has_ready_ping(pid_t pid)
 {
     uint16_t id;
@@ -75,6 +87,46 @@ static int dev_net_pid_has_ready_ping(pid_t pid)
         return 0;
     id = (uint16_t)(pid & 0xFFFF);
     return icmp_has_ready_echo_result(id) ? 1 : 0;
+}
+
+static int64_t dev_net_send_ping(ip4_addr_t dest_ip)
+{
+    struct net_device *dev = net_get_devices();
+    pid_t pid;
+    uint16_t id;
+    uint16_t seq;
+
+    if (!dev)
+        return -ENODEV;
+    pid = devfs_current_pid();
+    id = (uint16_t)(pid & 0xFFFF);
+    seq = icmp_allocate_echo_seq();
+    return icmp_send_echo_request(dev, dest_ip, id, seq, NULL, 0) == 0
+        ? 0 : -EIO;
+}
+
+static void dev_net_get_config(dev_net_config_values_t *config)
+{
+    config->ip = ip_local_addr;
+    config->netmask = ip_netmask;
+    config->gateway = ip_gateway;
+}
+
+static void dev_net_apply_config(const dev_net_config_values_t *config)
+{
+    struct net_device *dev;
+
+    ip_local_addr = config->ip;
+    ip_netmask = config->netmask;
+    ip_gateway = config->gateway;
+    arp_set_my_ip(config->ip);
+    dev = net_get_devices();
+    while (dev)
+    {
+        arp_set_interface_ip(dev, config->ip);
+        dev = dev->next;
+    }
+    (void)ip_routes_seed_from_globals();
 }
 #endif
 
@@ -533,7 +585,9 @@ int64_t dev_audio_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
         case AUDIO_SET_VOLUME:
             if (arg)
             {
-                uint8_t volume = *(uint8_t *)arg;
+                uint8_t volume;
+                if (copy_from_user(&volume, arg, sizeof(volume)) != 0)
+                    return -EFAULT;
                 if (volume > 100)
                     volume = 100;  /* Clamp to 0-100 */
                 /* Convert 0-100 to 0x00-0xFF mixer value */
@@ -552,7 +606,8 @@ int64_t dev_audio_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
                 uint8_t right = mixer_vol & 0x0F;
                 uint8_t avg = (left + right) / 2;
                 uint8_t volume = (avg * 100) / 15;
-                *(uint8_t *)arg = volume;
+                if (copy_to_user(arg, &volume, sizeof(volume)) != 0)
+                    return -EFAULT;
                 return 0;
             }
             return -1;
@@ -669,8 +724,8 @@ int64_t dev_mouse_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
                 ir0_mouse_state_t st;
                 if (input_mouse_get_state(&st))
                 {
-                    ir0_mouse_state_t *out = (ir0_mouse_state_t *)arg;
-                    *out = st;  /* Copy state */
+                    if (copy_to_user(arg, &st, sizeof(st)) != 0)
+                        return -EFAULT;
                     return 0;
                 }
             }
@@ -679,7 +734,10 @@ int64_t dev_mouse_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
         case MOUSE_SET_SENSITIVITY:
             if (arg)
             {
-                uint8_t sensitivity = *(uint8_t *)arg;
+                uint8_t sensitivity;
+                if (copy_from_user(&sensitivity, arg,
+                                   sizeof(sensitivity)) != 0)
+                    return -EFAULT;
                 /* Sensitivity maps to sample rate: higher = more sensitive */
                 /* Typical range: 10-200 samples/sec, default 100 */
                 if (sensitivity < 10)
@@ -838,7 +896,7 @@ int64_t dev_net_write(devfs_entry_t *entry, const void *buf, size_t count, off_t
         
         /* Send ping via ioctl */
         {
-            int64_t rc = dev_net_ioctl(entry, NET_SEND_PING, &dest_ip);
+            int64_t rc = dev_net_send_ping(dest_ip);
             return (rc < 0) ? rc : (int64_t)count;
         }
     }
@@ -865,24 +923,17 @@ int64_t dev_net_write(devfs_entry_t *entry, const void *buf, size_t count, off_t
         if (*config_str == '\0' || *config_str == '\n')
         {
             /* No arguments: show current config via ioctl */
-            typedef struct {
-                ip4_addr_t *ip;
-                ip4_addr_t *netmask;
-                ip4_addr_t *gateway;
-            } net_config_t;
-            
-            ip4_addr_t ip, netmask, gateway;
-            net_config_t config = { &ip, &netmask, &gateway };
-            
-            if (dev_net_ioctl(entry, NET_GET_CONFIG, &config) == 0)
+            dev_net_config_values_t config;
+
+            dev_net_get_config(&config);
             {
                 /* Format and display configuration */
                 char buf[256];
                 
                 /* Format IP addresses */
-                uint32_t ip_h = ntohl(ip);
-                uint32_t netmask_h = ntohl(netmask);
-                uint32_t gateway_h = ntohl(gateway);
+                uint32_t ip_h = ntohl(config.ip);
+                uint32_t netmask_h = ntohl(config.netmask);
+                uint32_t gateway_h = ntohl(config.gateway);
                 
                 snprintf(buf, sizeof(buf), 
                         "IP: %d.%d.%d.%d\n"
@@ -1045,19 +1096,16 @@ int64_t dev_net_write(devfs_entry_t *entry, const void *buf, size_t count, off_t
             }
             
             /* Set configuration via ioctl */
-            typedef struct {
-                ip4_addr_t ip;
-                ip4_addr_t netmask;
-                ip4_addr_t gateway;
-            } net_set_config_t;
-            
-            net_set_config_t config = {
+            dev_net_config_values_t config = {
                 .ip = new_ip,
                 .netmask = new_netmask,
                 .gateway = new_gateway
             };
             
-            return dev_net_ioctl(entry, NET_SET_CONFIG, &config);
+            if (!ir0_cred_is_root())
+                return -EPERM;
+            dev_net_apply_config(&config);
+            return (int64_t)count;
         }
         return (int64_t)count;
     }
@@ -1313,77 +1361,49 @@ int64_t dev_net_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
         case NET_SEND_PING:
             if (arg)
             {
-                /* arg points to ip4_addr_t */
-                ip4_addr_t dest_ip = *(ip4_addr_t *)arg;
-                struct net_device *dev = net_get_devices();
-                
-                if (dev)
-                {
-                    
-                    /* Use process ID as identifier and a monotonic sequence. */
-                    pid_t pid = devfs_current_pid();
-                    uint16_t id = (uint16_t)(pid & 0xFFFF);
-                    uint16_t seq = icmp_allocate_echo_seq();
-                    
-                    int ret = icmp_send_echo_request(dev, dest_ip, id, seq, NULL, 0);
-                    return (ret == 0) ? 0 : -EIO;
-                }
-                return -ENODEV;
+                ip4_addr_t dest_ip;
+
+                if (copy_from_user(&dest_ip, arg, sizeof(dest_ip)) != 0)
+                    return -EFAULT;
+                return dev_net_send_ping(dest_ip);
             }
             return -EINVAL;
             
         case NET_GET_CONFIG:
             if (arg)
             {
-                /* arg points to: { ip4_addr_t *ip; ip4_addr_t *netmask; ip4_addr_t *gateway; } */
-                typedef struct {
-                    ip4_addr_t *ip;
-                    ip4_addr_t *netmask;
-                    ip4_addr_t *gateway;
-                } net_config_t;
-                
-                net_config_t *config = (net_config_t *)arg;
-                if (config)
-                {
-                    if (config->ip)
-                        *config->ip = ip_local_addr;
-                    if (config->netmask)
-                        *config->netmask = ip_netmask;
-                    if (config->gateway)
-                        *config->gateway = ip_gateway;
-                    return 0;
-                }
+                dev_net_config_ptrs_t user_ptrs;
+                dev_net_config_values_t values;
+
+                if (copy_from_user(&user_ptrs, arg, sizeof(user_ptrs)) != 0)
+                    return -EFAULT;
+                dev_net_get_config(&values);
+                if (user_ptrs.ip && copy_to_user(user_ptrs.ip, &values.ip,
+                                                 sizeof(values.ip)) != 0)
+                    return -EFAULT;
+                if (user_ptrs.netmask &&
+                    copy_to_user(user_ptrs.netmask, &values.netmask,
+                                 sizeof(values.netmask)) != 0)
+                    return -EFAULT;
+                if (user_ptrs.gateway &&
+                    copy_to_user(user_ptrs.gateway, &values.gateway,
+                                 sizeof(values.gateway)) != 0)
+                    return -EFAULT;
+                return 0;
             }
             return -EINVAL;
             
         case NET_SET_CONFIG:
             if (arg)
             {
-                /* arg points to: { ip4_addr_t ip; ip4_addr_t netmask; ip4_addr_t gateway; } */
-                typedef struct {
-                    ip4_addr_t ip;
-                    ip4_addr_t netmask;
-                    ip4_addr_t gateway;
-                } net_config_t;
-                
-                net_config_t *config = (net_config_t *)arg;
-                if (config)
-                {
-                    ip_local_addr = config->ip;
-                    ip_netmask = config->netmask;
-                    ip_gateway = config->gateway;
-                    arp_set_my_ip(config->ip);  /* Update ARP cache */
-                    {
-                        struct net_device *dev = net_get_devices();
-                        while (dev)
-                        {
-                            arp_set_interface_ip(dev, config->ip);
-                            dev = dev->next;
-                        }
-                    }
-                    (void)ip_routes_seed_from_globals();
-                    return 0;
-                }
+                dev_net_config_values_t config;
+
+                if (!ir0_cred_is_root())
+                    return -EPERM;
+                if (copy_from_user(&config, arg, sizeof(config)) != 0)
+                    return -EFAULT;
+                dev_net_apply_config(&config);
+                return 0;
             }
             return -EINVAL;
             
@@ -1391,27 +1411,25 @@ int64_t dev_net_ioctl(devfs_entry_t *entry, uint64_t request, void *arg)
             if (arg)
             {
                 /* arg points to: { int success; uint64_t rtt; uint8_t ttl; size_t payload_bytes; ip4_addr_t reply_ip; } */
-                struct ping_result *result = (struct ping_result *)arg;
-                if (!result)
-                    return -EINVAL;
+                struct ping_result result = {0};
                 
                 /* Get PID to use as ICMP ID (matches NET_SEND_PING behavior) */
                 pid_t pid = devfs_current_pid();
                 uint16_t id = (uint16_t)(pid & 0xFFFF);
 
                 /* Try to get next completed echo result for this pid. */
-                if (icmp_get_next_echo_result(id, &result->seq, &result->rtt, &result->ttl,
-                                              &result->payload_bytes, &result->reply_ip))
+                if (icmp_get_next_echo_result(id, &result.seq, &result.rtt, &result.ttl,
+                                              &result.payload_bytes, &result.reply_ip))
                 {
-                    result->success = 1;
-                    return 0;
+                    result.success = 1;
                 }
                 else
                 {
-                    result->success = 0;
-                    result->seq = 0;
-                    return 0;  /* Still pending, but not an error */
+                    result.success = 0;
+                    result.seq = 0;
                 }
+                return copy_to_user(arg, &result, sizeof(result)) == 0
+                    ? 0 : -EFAULT;
             }
             return -EINVAL;
             

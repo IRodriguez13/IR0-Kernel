@@ -19,6 +19,17 @@
 
 #include <ir0/arch_mm.h>
 
+uintptr_t mm_kernel_heap_start(void)
+{
+	/* QEMU virt DRAM starts at 0x40000000; leave 8 MiB for the image. */
+	return 0x40800000UL;
+}
+
+size_t mm_kernel_heap_size(void)
+{
+	return 0x01800000UL;
+}
+
 unsigned mm_user_root_slots(void)
 {
 	/* Entire TTBR0 L0 is process-owned for walk/COW (no TTBR1 split). */

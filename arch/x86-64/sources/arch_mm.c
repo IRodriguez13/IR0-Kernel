@@ -15,6 +15,16 @@
 #include <ir0/arch_mm.h>
 #include <mm/paging.h>
 
+uintptr_t mm_kernel_heap_start(void)
+{
+	return 0x00800000UL;
+}
+
+size_t mm_kernel_heap_size(void)
+{
+	return 0x01800000UL;
+}
+
 unsigned mm_user_root_slots(void)
 {
 	return 256;

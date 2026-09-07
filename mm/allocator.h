@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <ir0/arch_mm.h>
 
 /*
  * Memory layout (from boot: 0-32MB mapped)
@@ -24,8 +25,8 @@
  * 0x800000 - 0x2000000: Heap (8MB-32MB = 24MB heap)
  */
 
-#define SIMPLE_HEAP_START 0x800000
-#define SIMPLE_HEAP_SIZE 0x1800000 /* 24MB */
+#define SIMPLE_HEAP_START (mm_kernel_heap_start())
+#define SIMPLE_HEAP_SIZE (mm_kernel_heap_size())
 #define SIMPLE_HEAP_END (SIMPLE_HEAP_START + SIMPLE_HEAP_SIZE)
 
 /* Initialize the allocator */

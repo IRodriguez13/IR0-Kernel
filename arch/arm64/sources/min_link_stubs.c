@@ -34,6 +34,30 @@ void __attribute__((weak)) serial_print_hex64(uint64_t v)
 	(void)v;
 }
 
+void __attribute__((weak)) klog_print(const char *message)
+{
+	serial_print(message);
+}
+
+int __attribute__((weak)) klog_trace_enabled(uint32_t category)
+{
+	(void)category;
+	return 0;
+}
+
+void __attribute__((weak)) klog_trace(const char *component, const char *message)
+{
+	(void)component;
+	(void)message;
+}
+
+void __attribute__((weak)) klog_trace_fmt(const char *component,
+					  const char *format, ...)
+{
+	(void)component;
+	(void)format;
+}
+
 void *__attribute__((weak)) current_process;
 
 void *__attribute__((weak)) process_find_by_pid(int pid)

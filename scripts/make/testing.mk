@@ -2145,7 +2145,7 @@ kernel-arm64-min.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 
 # ALL_OBJS_ARM64: MEMORY + portable KERNEL sample + LIB strings + mark (no x86 drivers).
 # FS/NET/logging/futex full link remains probe-only / BLOCKED (pulls snprintf/sched).
-.PHONY: kernel-arm64-all.bin
+.PHONY: kernel-arm64-all.bin smoke-arm64-all
 kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c \
 		arch/arm64/sources/all_objs_mark.c arch/arm64/sources/portable_string.c
 	@echo "  CC      ARM64_ALL portable objs (not x86 drivers)"
@@ -2155,6 +2155,7 @@ kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 	for src in mm/allocator.c mm/paging.c mm/pmm.c mm/kmem.c \
 		kernel/errno.c \
 		kernel/lib/open_flags.c \
+		arch/arm64/sources/arch_mm.c \
 		arch/arm64/sources/portable_string.c; do \
 		base=$$(basename $$src .c); \
 		echo "  CC      $$src (all)"; \
@@ -2185,9 +2186,6 @@ kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 		'int strncmp(const char *a, const char *b, size_t n) {' \
 		'  while (n && *a && *a == *b) { a++; b++; n--; }' \
 		'  if (!n) return 0; return (unsigned char)*a - (unsigned char)*b; }' \
-		'char *strncpy(char *d, const char *s, size_t n) {' \
-		'  size_t i; for (i = 0; i < n && s[i]; i++) d[i] = s[i];' \
-		'  for (; i < n; i++) d[i] = 0; return d; }' \
 		'void *memcpy(void *d, const void *s, size_t n) { return arm64_portable_memcpy(d, s, n); }' \
 		'void *memset(void *d, int c, size_t n) {' \
 		'  unsigned char *p = d; while (n--) *p++ = (unsigned char)c; return d; }' \
@@ -2198,7 +2196,10 @@ kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 	@aarch64-linux-gnu-ld -T arch/arm64/linker.ld -o $@ \
 		arch/arm64/sources/boot_stub.o arch/arm64/sources/mmu_early.o \
 		arch/arm64/sources/exc_early.o arch/arm64/sources/pl011.o \
+		arch/arm64/sources/board.o arch/arm64/sources/platform.o \
+		arch/arm64/sources/freestanding_stubs.o \
 		arch/arm64/sources/serial_io_arm64.o arch/arm64/sources/slice_hello.o \
+		build/arm64-boot/boot_log.o \
 		arch/arm64/sources/timer.o arch/arm64/sources/gic_v2.o \
 		arch/arm64/sources/syscall_early.o arch/arm64/sources/mm_ops.o \
 		arch/arm64/sources/switch_early.o arch/arm64/sources/switch_early_asm.o \
@@ -2217,10 +2218,24 @@ kernel-arm64-all.bin: kernel-arm64-boot.bin arch/arm64/sources/min_link_stubs.c 
 		build/arm64-all/pmm.o build/arm64-all/kmem.o \
 		build/arm64-all/errno.o \
 		build/arm64-all/open_flags.o \
+		build/arm64-all/arch_mm.o \
 		build/arm64-all/portable_string.o \
 		build/arm64-all/string_aliases.o \
 		build/arm64-all/min_link_stubs.o build/arm64-all/all_objs_mark.o
 	@echo "✓ $@ (ALL_OBJS_ARM64 portable link; ATA/RTL/VBE/ISA still BLOCKED)"
+
+smoke-arm64-all: kernel-arm64-all.bin
+	@echo "  SMOKE   ARM64 common MM objects linked into boot..."
+	@$(SMOKE_QEMU_RUN) --log /tmp/arm64-all-smoke.log --timeout 20 --stale-sec 8 \
+		--done ARM64_EL0_RET_OK -- \
+		qemu-system-aarch64 -M $(ARM64_QEMU_MACHINE) -cpu cortex-a53 -m 128M \
+		-kernel kernel-arm64-all.bin -nographic -serial mon:stdio \
+		-display none -no-reboot 2>/dev/null || true
+	@grep -q 'ARM64_ALL_OBJS_LINK_OK' /tmp/arm64-all-smoke.log
+	@grep -q 'ARM64_BUSYBOX_INIT_OK' /tmp/arm64-all-smoke.log
+	@grep -q 'ARM64_EL0_RET_OK' /tmp/arm64-all-smoke.log
+	@! grep -Eqi 'panic|exception.*fail|corrupt' /tmp/arm64-all-smoke.log
+	@echo "✓ smoke-arm64-all passed (common MM link + BusyBox EL0)"
 
 smoke-arm64-boot: kernel-arm64-boot.bin
 	@echo "  SMOKE   ARM64 QEMU virt boot tag..."

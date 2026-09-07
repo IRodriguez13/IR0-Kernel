@@ -94,9 +94,8 @@ struct mmap_region
 };
 
 /*
- * Arch-owned thread TLS (x86: IA32_FS_BASE; ARM64: TPIDR_EL0). Lives in a
- * union with fs_base so ASM IR0_PROC_FS_BASE_OFFSET stays stable; portable
- * code uses process_tls_*.
+ * ISA-owned thread TLS state. The compatibility alias preserves the assembly
+ * layout while portable code uses process_tls_* exclusively.
  */
 typedef struct arch_thread_state
 {
@@ -295,9 +294,10 @@ typedef struct process
 	uint8_t syscall_frame_fresh;
 	uint8_t coop_resched_resume;
 	/*
-	 * Class B close: arm requested kernel_ret resume but task.arch.rip was still
-	 * userspace — do not set KERNEL CS until switch_context has saved kernel
-	 * [rsp] (see process_after_task_save / process_arm_kernel_syscall_sleep).
+	 * Class B close: a kernel-return resume was requested while the saved task
+	 * IP was still userspace — do not change privilege state until the backend
+	 * has saved the kernel stack pointer (see process_after_task_save /
+	 * process_arm_kernel_syscall_sleep).
 	 */
 	uint8_t want_kernel_ret;
 
@@ -370,12 +370,7 @@ typedef struct process
  * FS_BASE offset: includes/ir0/asm_offsets.h + asm_offsets.inc (NASM).
  * arch-guard verifies the C header matches the .inc file.
  */
-#include <ir0/asm_offsets.h>
-#if defined(__x86_64__) || defined(__amd64__)
-_Static_assert(offsetof(process_t, task) == 0, "process_t.task must be at offset 0");
-_Static_assert(offsetof(process_t, fs_base) == IR0_PROC_FS_BASE_OFFSET,
-	       "asm_offsets.h PROC_FS_BASE out of sync with process_t");
-#endif
+PROCESS_CONTEXT_ASSERT_LAYOUT(process_t);
 
 #include <ir0/mm_struct.h>
 

@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct arch_task_context
@@ -54,3 +55,11 @@ typedef struct arch_task_context
 	uint64_t spsr_el1;
 	uint64_t ttbr0_el1;
 } arch_task_context_t;
+
+#define TASK_CONTEXT_ASSERT_LAYOUT(task_type) \
+	_Static_assert(sizeof(task_type) >= sizeof(arch_task_context_t), \
+		       "ARM64 task context must remain embedded")
+
+#define PROCESS_CONTEXT_ASSERT_LAYOUT(process_type) \
+	_Static_assert(offsetof(process_type, task) == 0, \
+		       "process task must remain first")

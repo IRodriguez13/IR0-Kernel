@@ -69,15 +69,7 @@ typedef struct task
 
 } task_t;
 
-#include <ir0/asm_offsets.h>
-#if defined(__x86_64__) || defined(__amd64__)
-_Static_assert(offsetof(task_t, arch.cr3) == IR0_TASK_ARCH_CR3_OFFSET,
-	       "asm_offsets.h CR3 out of sync");
-_Static_assert(offsetof(task_t, arch.rip) == IR0_TASK_ARCH_RIP_OFFSET,
-	       "asm_offsets.h RIP out of sync");
-_Static_assert(offsetof(task_t, arch.ss) == IR0_TASK_ARCH_SS_OFFSET,
-	       "asm_offsets.h SS out of sync");
-#endif
+TASK_CONTEXT_ASSERT_LAYOUT(task_t);
 
 #include <ir0/arch_task.h>
 

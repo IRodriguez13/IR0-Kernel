@@ -57,11 +57,25 @@ typedef struct arch_task_context
 	uint64_t dr7;      /* +0xE8 */
 } arch_task_context_t;
 
-#if defined(__x86_64__) || defined(__amd64__)
 _Static_assert(offsetof(arch_task_context_t, rip) == 0x80,
 	       "switch_x64.asm RIP offset");
 _Static_assert(offsetof(arch_task_context_t, cr3) == 0xB0,
 	       "switch_x64.asm CR3 offset");
 _Static_assert(offsetof(arch_task_context_t, ss) == 0x9A,
 	       "switch_x64.asm SS offset");
-#endif
+
+#include <ir0/asm_offsets.h>
+
+#define TASK_CONTEXT_ASSERT_LAYOUT(task_type) \
+	_Static_assert(offsetof(task_type, arch.cr3) == IR0_TASK_ARCH_CR3_OFFSET, \
+		       "x86 task CR3 offset out of sync"); \
+	_Static_assert(offsetof(task_type, arch.rip) == IR0_TASK_ARCH_RIP_OFFSET, \
+		       "x86 task RIP offset out of sync"); \
+	_Static_assert(offsetof(task_type, arch.ss) == IR0_TASK_ARCH_SS_OFFSET, \
+		       "x86 task SS offset out of sync")
+
+#define PROCESS_CONTEXT_ASSERT_LAYOUT(process_type) \
+	_Static_assert(offsetof(process_type, task) == 0, \
+		       "process task must remain first"); \
+	_Static_assert(offsetof(process_type, fs_base) == IR0_PROC_FS_BASE_OFFSET, \
+		       "x86 process FS base offset out of sync")

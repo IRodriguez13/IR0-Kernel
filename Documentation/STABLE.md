@@ -1,6 +1,6 @@
 # IR0 — Stable baseline (release 0.0.1)
 
-> **Last verified:** 2026-07-30  
+> **Last verified:** 2026-09-07
 > **Source of truth:** `make release-0.0.1` / CTR gates, `Makefile` smoke targets,  
 > hostshare-exec + F8 **honest MVP** (`smoke-f8-net`) + FAT secondary ship note,  
 > runit PID1 + hybrid 9p payload (`runit_hostshare_payload_run`) for desktop X smoke,  
@@ -81,6 +81,7 @@ make smoke-release-0.0.1    # bundle determinista (sin health duplicado)
 | `linux-abi-audit` | contrato `brk` Linux↔IR0 + host/ktest |
 | `smoke-runit-ash-interactive` | runit + BusyBox ash + TTY `echo hi` |
 | `smoke-fat16-mount` | FAT16 read-only en `/dev/hdb` |
+| `smoke-release-session-0.0.1` | persistencia de dos boots, Ctrl+C, SIGCHLD/pipelines y halt con sync |
 
 **`release-0.0.1` añade:** `kernel-text-budget`.
 

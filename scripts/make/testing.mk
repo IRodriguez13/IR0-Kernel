@@ -3450,7 +3450,17 @@ smoke-tier1: kernel-x64.bin arch-guard
 
 # Release 0.0.1 gate — deterministic regression bundle (D1.20).
 # Does NOT include smoke-desk-* (optional sibling IR0-desktop; see TREE_CONTRACT).
-.PHONY: smoke-release-0.0.1 release-0.0.1
+.PHONY: smoke-release-session-0.0.1 smoke-release-0.0.1 release-0.0.1
+
+smoke-release-session-0.0.1:
+	@echo "  RELEASE 0.0.1 session/persistence gate"
+	@$(MAKE) -s smoke-persistent-boot
+	@$(MAKE) -s smoke-ctrl-c-spam
+	@$(MAKE) -s smoke-pipe-stdin-ctrl-c
+	@$(MAKE) -s smoke-sigchld-no-false-logout
+	@PIPE_STRESS_FAST=1 $(MAKE) -s smoke-shell-pipe-stress
+	@$(MAKE) -s smoke-runit-power
+	@echo "✓ smoke-release-session-0.0.1 passed"
 
 smoke-release-0.0.1:
 	@echo "  RELEASE 0.0.1 gate (D1.20 deterministic bundle)"
@@ -3458,6 +3468,7 @@ smoke-release-0.0.1:
 	@$(MAKE) -s linux-abi-audit
 	@$(MAKE) -s smoke-runit-ash-interactive
 	@$(MAKE) -s smoke-fat16-mount
+	@$(MAKE) -s smoke-release-session-0.0.1
 	@echo "✓ smoke-release-0.0.1 passed"
 
 release-0.0.1: kernel-text-budget smoke-release-0.0.1

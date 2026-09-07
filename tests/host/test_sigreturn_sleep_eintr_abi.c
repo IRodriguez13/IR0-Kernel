@@ -62,7 +62,8 @@ void test_sigreturn_sleep_eintr_frame_abi(void)
 	ASSERT(!signal_syscall_read_fd_suspicious(out.rdi));
 
 	ASSERT(signal_syscall_read_fd_suspicious((uint64_t)(int64_t)(-1)));
-	ASSERT(signal_syscall_read_fd_suspicious(0x3fULL));
+	ASSERT(!signal_syscall_read_fd_suspicious(3ULL));
+	ASSERT(!signal_syscall_read_fd_suspicious(0x3fULL));
 	ASSERT(!signal_syscall_read_fd_suspicious(0ULL));
 	ASSERT(signal_syscall_user_ptr_suspicious(0x3fULL));
 	ASSERT(!signal_syscall_user_ptr_suspicious(0x7fdf8000ULL));

@@ -18,17 +18,10 @@
 #include <ir0/errno.h>
 #include <ir0/syscall_frame.h>
 
-/*
- * read(2) arg0: negative or small non-fd (signum / wait4 pid residue).
- * fd 0–2 are valid even though they are below 0x1000.
- */
+/* A captured negative read descriptor is never a valid restart argument. */
 static inline int signal_syscall_read_fd_suspicious(uint64_t val)
 {
-	if ((int64_t)val < 0)
-		return 1;
-	if (val <= 2u)
-		return 0;
-	return val < 0x1000ul;
+	return (int64_t)val < 0;
 }
 
 /* read(2) arg1 is the userspace buffer pointer. */

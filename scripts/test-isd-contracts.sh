@@ -57,6 +57,13 @@ if grep -E '^poweron:.*kernel-x64-userspace\.iso' scripts/make/isd.mk >/dev/null
 else
 	ok "D poweron boots existing kernel artifacts"
 fi
+if grep -q '^machine-update-kernel: check-isd' scripts/make/isd.mk \
+	&& grep -A10 '^machine-update-kernel:' scripts/make/isd.mk | grep -q 'kernel-x64-userspace.iso' \
+	&& ! grep -A10 '^machine-update-kernel:' scripts/make/isd.mk | grep -Eq 'ensure-isd-disk|machine-reset'; then
+	ok "D machine-update-kernel refreshes ISO without persistent disk"
+else
+	bad "D machine-update-kernel contract"
+fi
 
 ENS=scripts/ensure-host-deps.sh
 TMP=$(mktemp -d)

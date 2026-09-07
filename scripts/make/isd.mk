@@ -88,7 +88,7 @@ IR0_USERSPACE_MAKE = $(MAKE) -s -C $(IR0_ISD_ROOT) IR0_ROOT=$(KERNEL_ROOT) ARCH=
 .PHONY: check-isd clone-isd isd-defconfig isdconfig isd isd-rootfs isd-image \
 	isd-clean first-boot bootstrap-userspace check-userspace \
 	warn-userspace-deprecated ensure-isd-disk run-isd machine-create \
-	machine-reset machine-info image-vmware poweron
+	machine-reset machine-info machine-update-kernel image-vmware poweron
 
 warn-userspace-deprecated:
 	@case "$(_IR0_USERSPACE_ROOT_ORIGIN)" in \
@@ -197,6 +197,16 @@ machine-info:
 	@echo "BASE DISK     $(IR0_ISD_DISK)"
 	@echo "MACHINE DISK  $(IR0_MACHINE_DISK)"
 	@echo "VMWARE DISK   $(IR0_MACHINE_VMDK)"
+
+# Refresh only the boot ISO. The mutable machine disk is never a dependency.
+machine-update-kernel: check-isd
+	@if pgrep -f '^qemu-system-x86_64 .*$(IR0_MACHINE_DISK)' >/dev/null 2>&1; then \
+		echo "✗ machine $(IR0_MACHINE) is running; power it off cleanly first"; \
+		exit 2; \
+	fi
+	+@$(MAKE) -s kernel-x64-userspace.iso
+	@echo "✓ machine kernel updated: $(KERNEL_ROOT)/kernel-x64-userspace.iso"
+	@echo "  DISK preserved: $(IR0_MACHINE_DISK)"
 
 image-vmware:
 	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"

@@ -1043,8 +1043,13 @@ ALL_OBJS = $(KERNEL_OBJS) $(MEMORY_OBJS) $(LIB_OBJS) $(INTERRUPT_OBJS) \
            $(STORAGE_ATA_OBJS) $(STORAGE_ATA_BLOCK_OBJS) $(STORAGE_AHCI_OBJS) \
            $(STORAGE_NVME_OBJS)
 
+# Keep test-only entry objects separate: their IR0_KERNEL_TESTS references must
+# never contaminate an incremental production link.
+KERNEL_TEST_ENTRY_OBJS = build/test/kernel/main.o build/test/kernel/boot_init.o
+
 # Objetos para kernel con tests in-kernel (make tests / kernel-tests)
-ALL_OBJS_TEST = $(KERNEL_OBJS) $(KERNEL_TEST_OBJS) $(MEMORY_OBJS) $(LIB_OBJS) $(INTERRUPT_OBJS) \
+ALL_OBJS_TEST = $(filter-out kernel/main.o kernel/boot_init.o,$(KERNEL_OBJS)) \
+                $(KERNEL_TEST_ENTRY_OBJS) $(KERNEL_TEST_OBJS) $(MEMORY_OBJS) $(LIB_OBJS) $(INTERRUPT_OBJS) \
                 $(DRIVER_OBJS) $(FS_OBJS) $(ARCH_OBJS) $(DISK_OBJS) \
                 $(CPP_OBJS) $(CPP_DRIVER_OBJS) $(RUST_DRIVER_OBJS) \
                 $(NET_OBJS) $(NET_DRIVER_OBJS) $(SOUND_OBJS) $(BLUETOOTH_OBJS) \
@@ -1163,13 +1168,22 @@ kernel-x64.iso: kernel-x64.bin arch/x86-64/grub.cfg
 # config.h documents IR0_KERNEL_TESTS; Makefile ensures it for this target.
 # kmain must be compiled with that flag: a leftover kernel-x64.bin main.o
 # would skip kernel_test_run_all() and make kernel-tests time out.
-kernel-x64-test.bin: CFLAGS += -DIR0_KERNEL_TESTS=1
 kernel-x64-test.bin: $(ALL_OBJS_TEST) arch/x86-64/linker.ld
-	@rm -f kernel/main.o kernel/boot_init.o
-	@$(MAKE) --no-print-directory CFLAGS="$(CFLAGS)" kernel/main.o kernel/boot_init.o
 	@echo "  LD      $@ (with in-kernel tests)"
 	@$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS_TEST)
 	@echo "✓ Kernel (test) linked: $@"
+
+build/test/kernel/%.o: kernel/%.c
+	@mkdir -p $(@D)
+	@echo "  CC      $< (test variant)"
+	@$(CC) $(CFLAGS) -DIR0_KERNEL_TESTS=1 \
+		-DIR0_BUILD_DATE_STRING="\"$(IR0_BUILD_DATE)\"" \
+		-DIR0_BUILD_TIME_STRING="\"$(IR0_BUILD_TIME)\"" \
+		-DIR0_BUILD_USER_STRING="\"$(IR0_BUILD_USER)\"" \
+		-DIR0_BUILD_HOST_STRING="\"$(IR0_BUILD_HOST)\"" \
+		-DIR0_BUILD_CC_STRING="\"$(IR0_BUILD_CC)\"" \
+		-DIR0_BUILD_NUMBER_STRING="\"$(IR0_BUILD_NUMBER)\"" \
+		-c $< -o $@
 
 kernel-x64-test.iso: kernel-x64-test.bin arch/x86-64/grub.cfg
 	@echo "  ISO     $@"

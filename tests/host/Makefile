@@ -50,7 +50,9 @@ KERNEL_HOST_OBJS = host_pseudo_fs_registry.o host_usb_host_disabled.o \
 TEST_OBJS  = $(TEST_SRCS:.c=.o) $(KERNEL_HOST_OBJS)
 TEST_BIN   = ir0_test_suite
 
-IR0_USERSPACE_ROOT ?= $(abspath $(KERNEL_ROOT)/../IR0-userspace)
+IR0_ISD_ROOT ?= $(abspath $(KERNEL_ROOT)/../ISD)
+# Backward-compatible override name; the maintained userspace is ISD.
+IR0_USERSPACE_ROOT ?= $(IR0_ISD_ROOT)
 MATRIX_CAPTURE_CFLAGS = $(BASE_CFLAGS) -I$(IR0_USERSPACE_ROOT)/smoke
 
 .PHONY: all clean memsafe run

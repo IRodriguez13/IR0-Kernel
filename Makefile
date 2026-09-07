@@ -920,6 +920,7 @@ ARCH_OBJS_X86_64 = \
     arch/x86-64/sources/arch_fork.o \
     arch/x86-64/sources/fork_asm_hooks.o \
     arch/x86-64/sources/arch_task_ops.o \
+    arch/x86-64/sources/task_stack.o \
     arch/x86-64/sources/arch_syscall_frame.o \
     arch/x86-64/sources/arch_signal.o \
     arch/x86-64/sources/arch_switch.o \
@@ -960,6 +961,7 @@ ARCH_OBJS_ARM64 = \
     arch/arm64/sources/arch_fork.o \
     arch/arm64/sources/fork_asm_hooks.o \
     arch/arm64/sources/arch_task_ops.o \
+    arch/arm64/sources/task_stack.o \
     arch/arm64/sources/arch_syscall_frame.o \
     arch/arm64/sources/arch_signal.o \
     arch/arm64/sources/arch_switch.o \

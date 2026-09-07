@@ -28,6 +28,7 @@ Checks:
     mm_struct.c — use process_pgd() / process_set_pgd() (mm->page_directory OK).
 18) kernel/lib I1–I2: selected syscall/MM/IPC helpers must not remain as .c under includes/ir0/.
 19) Portable task setup must not construct x86 RFLAGS directly; use task_ops.
+20) Process lifecycle C must not select an ISA with compiler predefines.
 """
 
 from pathlib import Path
@@ -1562,6 +1563,24 @@ def check_scheduler_user_return_boundary():
     return errors
 
 
+def check_process_lifecycle_no_isa_conditionals():
+    """Keep ISA selection in per-architecture backends, not process/*.c."""
+    errors = []
+    isa_re = re.compile(r"\b(?:__x86_64__|__amd64__|__aarch64__)\b")
+    process_tree = ROOT / "kernel" / "process"
+
+    for fpath in process_tree.glob("*.c"):
+        lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+        for idx, line in enumerate(lines, 1):
+            if isa_re.search(line):
+                errors.append(
+                    f"[process-no-isa-conditional] "
+                    f"{fpath.relative_to(ROOT)}:{idx}: move ISA policy to a "
+                    f"selected backend: {line.strip()}"
+                )
+    return errors
+
+
 def main():
     errors = []
     errors.extend(check_forbidden_includes())
@@ -1602,6 +1621,7 @@ def main():
     errors.extend(check_portable_no_arch_prefix_calls())
     errors.extend(check_portable_no_arch_switch_include())
     errors.extend(check_scheduler_user_return_boundary())
+    errors.extend(check_process_lifecycle_no_isa_conditionals())
 
     if errors:
         print("[arch-guard] FAILED")

@@ -1081,6 +1081,8 @@ $(VDSO_EMBED): $(VDSO_SO)
 	@echo "  OBJCOPY $< → $@"
 	@cd $(VDSO_DIR) && objcopy -I binary -O elf64-x86-64 -B i386:x86-64 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
+		--add-section .note.GNU-stack=/dev/null \
+		--set-section-flags .note.GNU-stack=noload,readonly \
 		vdso.so vdso_blob_embed.o
 
 # Compile C files

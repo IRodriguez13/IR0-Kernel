@@ -28,7 +28,12 @@ STRACE="$OUT/strace.log"
 echo "  LINUX_ABI  strace $PROBE_BASENAME (Linux ground truth)"
 (
 	cd "$OUT"
-	strace -f -o "$STRACE" -e "trace=$STRACE_SYSCALLS" -s 128 "$PROBE"
+	if [[ "$CONTRACT" == "ioctl" ]]; then
+		python3 "$ROOT/scripts/linux_abi/run_under_pty.py" -- \
+			strace -f -o "$STRACE" -e "trace=$STRACE_SYSCALLS" -s 128 "$PROBE"
+	else
+		strace -f -o "$STRACE" -e "trace=$STRACE_SYSCALLS" -s 128 "$PROBE"
+	fi
 ) >"$STDOUT" 2>&1 || true
 
 python3 "$ROOT/scripts/linux_abi/parse_simple_trace.py" \

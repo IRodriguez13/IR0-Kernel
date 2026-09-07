@@ -17,6 +17,18 @@
 #include <ir0/signals.h>
 #include <string.h>
 
+uint64_t task_initial_user_status(void)
+{
+	/* EL0t, interrupts unmasked. */
+	return 0;
+}
+
+uint64_t task_initial_kernel_status(void)
+{
+	/* EL1h, interrupts unmasked. */
+	return 0x5U;
+}
+
 void task_store_sigcontext(struct sigcontext *ctx, const task_t *t)
 {
 	if (!ctx || !t)

@@ -1181,7 +1181,7 @@ void handle_signals(void)
                         process_syscall_set_arg(current, 2, 0);
                         if (!process_syscall_flags(current))
                             process_syscall_set_flags(current,
-                                                      (uint64_t)RFLAGS_IF);
+                                                      task_initial_user_status());
 
                         current->want_kernel_ret = 0;
                         process_apply_syscall_frame_to_task(

@@ -16,6 +16,16 @@
 #include <ir0/debug_trap.h>
 #include <config.h>
 
+uint64_t task_initial_user_status(void)
+{
+	return ir0_rflags_sanitize_user(RFLAGS_IF);
+}
+
+uint64_t task_initial_kernel_status(void)
+{
+	return RFLAGS_IF;
+}
+
 void task_store_sigcontext(struct sigcontext *ctx, const task_t *t)
 {
 	if (!ctx || !t)

@@ -17,6 +17,7 @@
 #include <ir0/mm.h>
 #include <ir0/paging.h>
 #include <ir0/tlb.h>
+#include <ir0/task_ops.h>
 
 static uint32_t ir0_kstack_slot_next;
 
@@ -365,9 +366,9 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 	/* Setup task registers for clean start */
 	task_set_ip(&proc->task, (uint64_t)entry);
 	if (proc->mode == USER_MODE)
-		task_set_flags(&proc->task, ir0_rflags_sanitize_user(RFLAGS_IF));
+		task_set_flags(&proc->task, task_initial_user_status());
 	else
-		task_set_flags(&proc->task, RFLAGS_IF);
+		task_set_flags(&proc->task, task_initial_kernel_status());
 	if (proc->mode == KERNEL_MODE)
 		task_set_kernel_segments(&proc->task);
 	else
@@ -459,4 +460,3 @@ pid_t spawn_kernel(void (*entry)(void), const char *name)
 {
 	return spawn(entry, name, KERNEL_MODE);
 }
-

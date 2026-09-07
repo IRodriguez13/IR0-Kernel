@@ -18,6 +18,7 @@
 #include <ir0/signal_irq.h>
 #include <ir0/process.h>
 #include <ir0/kmem.h>
+#include <ir0/task_ops.h>
 #include <stdint.h>
 
 void ktest_signal_segv_deliver_irq_frame(void)
@@ -45,7 +46,7 @@ void ktest_signal_segv_deliver_irq_frame(void)
 	frame[1] = 4;
 	frame[2] = 0x004422E3UL;
 	frame[3] = (uint64_t)USER_CODE_SEL;
-	frame[4] = (uint64_t)RFLAGS_IF;
+	frame[4] = task_initial_user_status();
 	frame[5] = 0x7FFFEB38UL;
 	frame[6] = (uint64_t)USER_DATA_SEL;
 	frame[-7] = 0;

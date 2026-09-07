@@ -15,6 +15,7 @@
 #include "process.h"
 #include <ir0/arch_task.h>
 #include <ir0/arch_elf.h>
+#include <ir0/task_ops.h>
 #include <ir0/sched.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -604,7 +605,7 @@ static process_t *elf_create_process(elf64_header_t *header, const char *path)
     /* Stack window is USER_STACK_TOP (spawn_user / process_set_stack_layout). */
 
     /* Enable interrupts in user mode */
-    task_set_flags(&process->task, ir0_rflags_sanitize_user(RFLAGS_IF));
+    task_set_flags(&process->task, task_initial_user_status());
 
     klog_debug_fmt("ELF", "SERIAL: ELF: Process created with PID %x", (unsigned)(process->task.pid));
     klog_debug_fmt("ELF", "SERIAL: ELF: Entry point: 0x%x", (unsigned)((uint32_t)task_get_ip(&process->task)));
@@ -1585,7 +1586,7 @@ static int exec_replace_current_depth(const char *path, char *const argv[],
     task_set_ip(&proc->task, header->e_entry);
     exec_commit_ctx.entry_rip = header->e_entry;
     task_set_user_segments(&proc->task);
-    task_set_flags(&proc->task, ir0_rflags_sanitize_user(RFLAGS_IF));
+    task_set_flags(&proc->task, task_initial_user_status());
 
     /*
      * Past the point of no return: the old image is already gone, so this

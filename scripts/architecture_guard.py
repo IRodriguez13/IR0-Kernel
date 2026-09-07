@@ -27,6 +27,7 @@ Checks:
 17) process_t.page_directory must not be touched outside process.h /
     mm_struct.c — use process_pgd() / process_set_pgd() (mm->page_directory OK).
 18) kernel/lib I1–I2: selected syscall/MM/IPC helpers must not remain as .c under includes/ir0/.
+19) Portable task setup must not construct x86 RFLAGS directly; use task_ops.
 """
 
 from pathlib import Path
@@ -812,6 +813,13 @@ PORTABLE_CR2_RE = re.compile(r"\b(?:read_cr2|__read_cr2|get_cr2)\s*\(|\bmov\s+.*
 PORTABLE_IRETQ_SYSRET_ASM_RE = re.compile(
     r'(?:__asm__|asm)\b[^;]*\b(?:iretq|sysret)\b', re.I
 )
+PORTABLE_X86_STATUS_RE = re.compile(
+    r"\b(?:RFLAGS_IF|ir0_rflags_sanitize_user)\b"
+)
+PORTABLE_X86_STATUS_ALLOWLIST = {
+    ROOT / "kernel" / "lib" / "debug_trap.c",
+    ROOT / "includes" / "ir0" / "debug_trap.h",
+}
 
 
 def check_portable_no_isa_leak_literals():
@@ -854,6 +862,13 @@ def check_portable_no_isa_leak_literals():
                     errors.append(
                         f"[portable-no-iretq-sysret] {rel}:{idx}: iretq/sysret "
                         f"belong in arch/; use facades: {line.strip()}"
+                    )
+                if (fpath not in PORTABLE_X86_STATUS_ALLOWLIST and
+                        PORTABLE_X86_STATUS_RE.search(line)):
+                    errors.append(
+                        f"[portable-no-x86-status] {rel}:{idx}: use the "
+                        f"task_ops status facade; no x86 RFLAGS in portable "
+                        f"code: {line.strip()}"
                     )
     return errors
 

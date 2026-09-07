@@ -89,7 +89,7 @@ void boot_memory_serial(uint32_t multiboot_info)
 	 * COW/clear_highpage switch here after process tables use pte_none
 	 * holes (Linux kmap / copy_user_highpage analogue).
 	 */
-	paging_pin_kernel_cr3(get_current_page_directory());
+	paging_pin_kernel_address_space(paging_current_address_space());
 
 	logging_init();
 	(void)klog_promote_normal_ring();

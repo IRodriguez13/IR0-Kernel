@@ -25,6 +25,9 @@
 #define X86_PTE_NX        (1ULL << 63)
 #define X86_PTE_PFN_MASK  0x000FFFFFFFFFF000ULL
 #define X86_INDEX_MASK    0x1FFUL
+#define X86_CR0_PG        (1ULL << 31)
+#define X86_CR0_WP        (1ULL << 16)
+#define X86_CR4_PAE       (1ULL << 5)
 
 void mm_activate(uintptr_t root)
 {
@@ -85,7 +88,7 @@ void irq_restore(unsigned long flags)
 	__asm__ volatile("pushq %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
-uint64_t mm_read_ctrl0(void)
+static uint64_t mm_read_ctrl0(void)
 {
 	uint64_t v;
 
@@ -93,17 +96,35 @@ uint64_t mm_read_ctrl0(void)
 	return v;
 }
 
-void mm_write_ctrl0(uint64_t value)
+static void mm_write_ctrl0(uint64_t value)
 {
 	__asm__ volatile("mov %0, %%cr0" :: "r"(value) : "memory");
 }
 
-uint64_t mm_read_ctrl1(void)
+static uint64_t mm_read_ctrl1(void)
 {
-	uint64_t v;
+	uint64_t value;
 
-	__asm__ volatile("mov %%cr4, %0" : "=r"(v));
-	return v;
+	__asm__ volatile("mov %%cr4, %0" : "=r"(value));
+	return value;
+}
+
+void mm_enable_translation(void)
+{
+	uint64_t cr0 = mm_read_ctrl0();
+
+	cr0 |= X86_CR0_PG | X86_CR0_WP;
+	mm_write_ctrl0(cr0);
+}
+
+int mm_translation_enabled(void)
+{
+	return (mm_read_ctrl0() & X86_CR0_PG) != 0;
+}
+
+int mm_translation_ready(void)
+{
+	return (mm_read_ctrl1() & X86_CR4_PAE) != 0;
 }
 
 void mm_va_indices(uintptr_t va, size_t idx[4])

@@ -263,14 +263,10 @@ void irq_restore(unsigned long flags);
  *   uses simple facades (switch_to, irq_save, …) — no CPUID in kernel/syscalls.
  */
 
-/**
- * MM control registers behind a neutral API (W10b partial).
- * ctrl0: x86 CR0; ARM64 SCTLR_EL1 (bit0 M ≈ paging enabled).
- * ctrl1: x86 CR4; ARM64 reserved/0 until a portable need exists.
- */
-uint64_t mm_read_ctrl0(void);
-void mm_write_ctrl0(uint64_t value);
-uint64_t mm_read_ctrl1(void);
+/** ISA-owned translation enablement and status. */
+void mm_enable_translation(void);
+int mm_translation_enabled(void);
+int mm_translation_ready(void);
 
 /**
  * 4-level VA indices (9 bits each) for 4 KiB granules — x86-64 and aarch64.

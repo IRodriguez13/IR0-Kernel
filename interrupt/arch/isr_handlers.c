@@ -41,7 +41,7 @@ extern void increment_pit_ticks(void);
 
 extern void page_fault_handler_x64(uint64_t *stack);
 extern void gpf_audit_from_isr(uint64_t *stack);
-extern uint64_t get_current_page_directory(void);
+extern uintptr_t paging_current_address_space(void);
 extern uint64_t iretq_checkpoint_buf[40];
 extern uint64_t isr_abi_entry_intno;
 extern uint64_t isr_abi_entry_has_err;
@@ -265,7 +265,7 @@ static void isr_handler64_dispatch(uint64_t interrupt_number, uint64_t *stack)
 			cpu_halt();
 	}
 
-        klog_debug_fmt("ISR", "[ISR] int=%llx current=%llx cr3=%llx rip=%llx cs=%llx rsp=%llx ss=%llx frame=%llx user=%llx", (unsigned long long)(interrupt_number), (unsigned long long)((uint64_t)(uintptr_t)current), (unsigned long long)(get_current_page_directory()), (unsigned long long)(fault_rip), (unsigned long long)(fault_cs), (unsigned long long)(fault_rsp), (unsigned long long)(stack[6]), (unsigned long long)((uint64_t)(uintptr_t)stack), (unsigned long long)(user));
+        klog_debug_fmt("ISR", "[ISR] int=%llx current=%llx cr3=%llx rip=%llx cs=%llx rsp=%llx ss=%llx frame=%llx user=%llx", (unsigned long long)(interrupt_number), (unsigned long long)((uint64_t)(uintptr_t)current), (unsigned long long)paging_current_address_space(), (unsigned long long)(fault_rip), (unsigned long long)(fault_cs), (unsigned long long)(fault_rsp), (unsigned long long)(stack[6]), (unsigned long long)((uint64_t)(uintptr_t)stack), (unsigned long long)(user));
 
         /*
          * Desk-session flake: #UD/#GP with RIP in non-text (data/bss).

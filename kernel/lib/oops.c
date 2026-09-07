@@ -369,7 +369,7 @@ void panicex(const char *message, panic_level_t level, const char *file, int lin
     disable_interrupts();
 
     /*
-     * Do not load_page_directory(kernel) here while RSP may still sit on a
+     * Do not activate the kernel address space here while RSP may still sit on a
      * per-task kstack: if that slot is missing from kernel CR3, the next
      * stack access becomes #PF → #DF and the FAULT FRAME blames the dump.
      */

@@ -321,11 +321,11 @@ uint64_t create_process_page_directory(void)
 	 * Fork under a user mm must still share kstack / high kernel PTEs
 	 * (switch loads next CR3 while RSP is still on the previous kstack).
 	 */
-	kernel_cr3 = paging_get_kernel_cr3();
+	kernel_cr3 = paging_kernel_address_space();
 	if (!kernel_cr3)
 	{
-		kernel_cr3 = get_current_page_directory();
-		paging_pin_kernel_cr3(kernel_cr3);
+		kernel_cr3 = paging_current_address_space();
+		paging_pin_kernel_address_space(kernel_cr3);
 	}
 	kernel_pml4 = (uint64_t *)(uintptr_t)kernel_cr3;
 
@@ -400,8 +400,7 @@ uint64_t create_process_page_directory(void)
 	}
 #endif
 
-	paging_ir0_mm_note_pml4_created((uint64_t)(uintptr_t)pml4);
+	paging_ir0_mm_note_root_created((uintptr_t)pml4);
 	process_fase43_note_mm_created();
 	return (uint64_t)pml4;
 }
-

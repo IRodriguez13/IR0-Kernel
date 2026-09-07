@@ -87,7 +87,7 @@ pid_t spawn(void (*entry)(void), const char *name, process_mode_t mode)
 
 		if (mode == KERNEL_MODE && name && strcmp(name, "idle") == 0)
 		{
-			uint64_t kcr3 = get_current_page_directory();
+			uintptr_t kcr3 = paging_current_address_space();
 
 			proc->sched_prio = 0;
 			mm->page_directory = (uint64_t *)kcr3;

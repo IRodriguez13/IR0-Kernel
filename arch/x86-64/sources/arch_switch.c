@@ -31,7 +31,7 @@
 #include <mm/allocator.h>
 
 extern int switch_context_x64(task_t *prev, task_t *next);
-extern uint64_t get_current_page_directory(void);
+extern uintptr_t paging_current_address_space(void);
 extern uint64_t kernel_syscall_stack_top;
 extern uint64_t user_rsp_save;
 extern void tss_set_rsp0(uint64_t rsp0);
@@ -219,7 +219,7 @@ static void wait_exit_audit_ctx_resume(process_t *prev_proc, process_t *next_pro
 	klog_print(" next_cr3=");
 	klog_hex64(next ? task_mm_root(next) : 0);
 	klog_print(" active_cr3=");
-	klog_hex64(get_current_page_directory());
+	klog_hex64(paging_current_address_space());
 	klog_print("\n");
 
 	if (prev_proc && prev_proc->state == PROCESS_ZOMBIE)
@@ -431,7 +431,7 @@ void arch_switch_to(task_t *prev, task_t *next)
          * active unmaps the running page tables and faults mid-destroy.
          */
         if (next && task_mm_root(next))
-            load_page_directory(task_mm_root(next));
+            paging_activate_address_space(task_mm_root(next));
         /*
          * Cooperative reschedule resume carries a syscall retval in
          * syscall_resume_rax, not a child pid — skip the wait4 zombie reap so
@@ -471,7 +471,7 @@ void arch_switch_to(task_t *prev, task_t *next)
         {
 #if IR0_DEBUG_WAIT
             {
-                uint64_t active_cr3_before = get_current_page_directory();
+                uintptr_t active_cr3_before = paging_current_address_space();
                 uint64_t active_cr3_after_expected = next ? task_mm_root(next) : 0;
                 uint64_t next_task_cr3 = next ? task_mm_root(next) : 0;
                 uint64_t current_before = (uint64_t)(uintptr_t)current_process;
@@ -492,7 +492,7 @@ void arch_switch_to(task_t *prev, task_t *next)
                 klog_print(" active_cr3_before=");
                 klog_hex64(active_cr3_before);
                 klog_print(" active_cr3_pre_iret=");
-                klog_hex64(get_current_page_directory());
+                klog_hex64(paging_current_address_space());
                 klog_print(" active_cr3_after_expected=");
                 klog_hex64(active_cr3_after_expected);
                 klog_print(" next_task_cr3=");
@@ -545,7 +545,7 @@ void arch_switch_to(task_t *prev, task_t *next)
             switch_to_user_task(next);
 #if IR0_DEBUG_WAIT
             klog_print("CTX RESUME unexpected_return active_cr3_after=");
-            klog_hex64(get_current_page_directory());
+            klog_hex64(paging_current_address_space());
             klog_print("\n");
 #endif
         }
@@ -675,14 +675,14 @@ void arch_switch_to(task_t *prev, task_t *next)
     /*
      * switch_context_x64 loads next CR3 while still on prev's RSP. Keep
      * shared kernel-half PDPT links (kstacks) fresh — asm bypasses
-     * load_page_directory().
+	 * paging_activate_address_space().
      */
     if (next)
     {
 	uint64_t next_root = task_mm_root(next);
 
 	if (next_root)
-		paging_sync_kernel_half((uint64_t *)(uintptr_t)next_root);
+		paging_sync_kernel_mappings((address_space_root_t)next_root);
     }
 
     if (next_proc && next && arch_will_resume_user_iretq(next_proc, next))

@@ -50,14 +50,10 @@
  * pointers when walking page tables (see Linux pud_page()/pte_pfn()).
  */
 #define PAGE_PTE_PFN_MASK   0x000FFFFFFFFFF000ULL
-/* Nine-bit index into PML4/PDPT/PD/PT (512 entries) */
+/* Nine-bit index into each translation-table level (512 entries). */
 #define PAGE_INDEX_MASK     0x1FF
 
-/* CR0: paging and write-protect */
-#define CR0_PG              (1UL << 31)
-#define CR0_WP              (1UL << 16)
-/* CR4: physical address extension (required before long-mode paging) */
-#define CR4_PAE             (1UL << 5)
+typedef uint64_t *address_space_root_t;
 
 
 /**
@@ -74,30 +70,29 @@ void setup_and_enable_paging(void);
 /**
  * Load page directory root via mm_activate (ISA-neutral).
  */
-void load_page_directory(uint64_t pml4_addr);
+void paging_activate_address_space(uintptr_t root);
 
 /**
  * Get current page directory root via mm_current_root.
  */
-uint64_t get_current_page_directory(void);
+uintptr_t paging_current_address_space(void);
 
-/** Pin boot/kernel CR3 once (before any process mm). Never overwrite. */
-void paging_pin_kernel_cr3(uint64_t cr3);
+/** Pin the boot/kernel address-space root once. Never overwrite. */
+void paging_pin_kernel_address_space(uintptr_t root);
 
-/** Boot/kernel CR3 with PMM identity (0 if not pinned yet). */
-uint64_t paging_get_kernel_cr3(void);
+/** Boot/kernel address-space root with PMM identity, or zero if not pinned. */
+uintptr_t paging_kernel_address_space(void);
 
 /**
- * Re-share present kernel-half root slots from the pinned boot CR3 into
- * @proc_pml4 (kstacks, supervisor identity PDPT links). Safe no-op if
- * @proc_pml4 is NULL or is the boot root itself.
+ * Synchronize ISA-defined shared kernel mappings from the pinned boot root
+ * into @root. Safe no-op if @root is NULL or is the boot root itself.
  */
-void paging_sync_kernel_half(uint64_t *proc_pml4);
+void paging_sync_kernel_mappings(address_space_root_t root);
 
-/** Copy one 4KiB frame via pinned boot CR3 (COW / phys access). */
+/** Copy one 4KiB frame via pinned boot address-space root (COW / phys access). */
 void paging_copy_phys_page(uintptr_t dst_phys, uintptr_t src_phys);
 
-/** Zero one 4KiB frame via pinned boot CR3 (clear_highpage). */
+/** Zero one 4KiB frame via pinned boot address-space root (clear_highpage). */
 void paging_zero_phys_page(uintptr_t phys);
 void paging_poison_phys_page(uintptr_t phys, uint8_t pattern);
 
@@ -114,44 +109,44 @@ int map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
 
 /**
  * Map a virtual address to a physical address in a specific page directory
- * @pml4: PML4 table address (page directory)
+ * @root: address-space root table address (page directory)
  * @virt_addr: Virtual address to map
  * @phys_addr: Physical address to map to
  * @flags: Page flags (PAGE_USER, PAGE_RW, etc.)
  * Returns: 0 on success, -1 on failure
  */
-int map_page_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
+int map_page_in_directory(address_space_root_t root, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
 
 /**
  * Check if a virtual address is mapped in a page directory
- * @pml4: PML4 table address (page directory)
+ * @root: address-space root table address (page directory)
  * @virt_addr: Virtual address to check
  * @flags_out: Optional output for page flags (can be NULL)
  * Returns: 1 if mapped (including 2 MiB/1 GiB leaves), 0 if not mapped, -1 on error
  */
-int is_page_mapped_in_directory(uint64_t *pml4, uint64_t virt_addr, uint64_t *flags_out);
+int is_page_mapped_in_directory(address_space_root_t root, uint64_t virt_addr, uint64_t *flags_out);
 
 /**
- * Walk 4-level paging to the PTE for @a vaddr in @a pml4.
+ * Walk 4-level paging to the PTE for @a vaddr in @a root.
  * Returns NULL if any level is missing or a huge page is encountered.
  * The returned pointer is valid even when the leaf PTE is not present.
  */
-uint64_t *paging_get_pte(uint64_t *pml4, uintptr_t vaddr);
+uint64_t *paging_get_pte(address_space_root_t root, uintptr_t vaddr);
 
 /*
  * Split a PD-level 2MiB leaf covering @vaddr into 512×4KiB supervisor leaves
  * so paging_get_pte / COW can see a PTE. No-op if already 4KiB.
  */
-int paging_ensure_4k_leaf(uint64_t *pml4, uintptr_t vaddr);
+int paging_ensure_4k_leaf(address_space_root_t root, uintptr_t vaddr);
 
 /**
- * Unmap a 4KB page in an explicit page directory (PML4 root).
- * Does not assume current CR3 matches @pml4.
+ * Unmap a 4KB page in an explicit page directory (address-space root root).
+ * Does not assume current address-space root matches @root.
  */
-int unmap_page_in_directory(uint64_t *pml4, uintptr_t virt_addr);
+int unmap_page_in_directory(address_space_root_t root, uintptr_t virt_addr);
 
 /**
- * Unmap a virtual address in the current address space (current CR3)
+ * Unmap a virtual address in the current address space (current address-space root)
  */
 int unmap_page(uint64_t virt_addr);
 
@@ -162,35 +157,35 @@ int map_user_page(uintptr_t virtual_addr, uintptr_t physical_addr, uint64_t flag
 int map_user_region(uintptr_t virtual_start, size_t size, uint64_t flags);
 
 /* Map user region in a specific page directory */
-int map_user_region_in_directory(uint64_t *pml4, uintptr_t virtual_start, size_t size, uint64_t flags);
+int map_user_region_in_directory(address_space_root_t root, uintptr_t virtual_start, size_t size, uint64_t flags);
 
 /*
  * Map a supervisor-only identity region with 4 KiB pages (not boot 2 MiB huge
  * pages). User mappings added later override overlapping VAs (e.g. ELF at
  * 0x400000). Required so IRQ/syscall handlers and TSS RSP0 work under
- * process CR3 while the kernel image lives in low canonical memory.
+ * process address-space root while the kernel image lives in low canonical memory.
  */
-int map_supervisor_identity_low(uint64_t *pml4, uint64_t start, uint64_t end);
+int map_supervisor_identity_low(address_space_root_t root, uint64_t start, uint64_t end);
 
 /*
  * Supervisor-only 2 MiB identity map (PD-level PS). Use for heap/PMM ranges that
  * do not overlap the user ELF load window (0x400000); COW break uses memcpy via
- * physical VA under process CR3.
+ * physical VA under process address-space root.
  */
-int map_supervisor_identity_2mb(uint64_t *pml4, uint64_t start, uint64_t end);
+int map_supervisor_identity_2mb(address_space_root_t root, uint64_t start, uint64_t end);
 
-/* Copy/zero user VAs via page-table walk (kernel CR3, no user CR3 switch) */
-int copy_to_user_region_in_directory(uint64_t *pml4, uintptr_t dst,
+/* Copy/zero user VAs via page-table walk (kernel address-space root, no user address-space root switch) */
+int copy_to_user_region_in_directory(address_space_root_t root, uintptr_t dst,
                                      const void *src, size_t n);
-int copy_from_user_region_in_directory(uint64_t *pml4, uintptr_t src,
+int copy_from_user_region_in_directory(address_space_root_t root, uintptr_t src,
                                        void *dst, size_t n);
-int zero_user_region_in_directory(uint64_t *pml4, uintptr_t dst, size_t n);
+int zero_user_region_in_directory(address_space_root_t root, uintptr_t dst, size_t n);
 
 struct process;
 
 /**
  * Create a new page directory for a user process
- * Returns physical address of the new PML4 table
+ * Returns the physical address of the new address-space root.
  */
 uint64_t create_process_page_directory(void);
 
@@ -199,13 +194,13 @@ uint64_t create_process_page_directory(void);
  * Used for fork() implementation
  */
 int copy_process_memory(struct process *parent, struct process *child);
-void paging_reclaim_lower_half_tables(uint64_t *pml4);
+void paging_reclaim_user_tables(address_space_root_t root);
 
 /*
  * IR0 MM frame/PT bookkeeping: emit page-table/frame balance counters tagged by phase.
  */
-void paging_ir0_mm_note_pml4_created(uint64_t pml4_phys);
-void paging_ir0_mm_note_pml4_freed(uint64_t pml4_phys);
+void paging_ir0_mm_note_root_created(uintptr_t root_phys);
+void paging_ir0_mm_note_root_freed(uintptr_t root_phys);
 void paging_ir0_mm_checkpoint(const char *tag, int32_t pid);
 void paging_ir0_mm_category_stats(uint64_t *user_alloc, uint64_t *user_free,
                                   uint64_t *pt_alloc, uint64_t *pt_free,

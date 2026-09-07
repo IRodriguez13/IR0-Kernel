@@ -92,7 +92,7 @@ static inline int access_ok(const void *addr, size_t size)
 	})
 
 /*
- * Cross-mm / explicit-pgd copies. Prefer these over load_page_directory +
+ * Cross-mm / explicit-root copies. Prefer these over address-space switching +
  * memcpy. Implemented in mm/paging.c; declared here so syscalls need not
  * include <mm/paging.h> for the uaccess contract alone.
  */

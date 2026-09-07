@@ -1104,7 +1104,7 @@ static void exec_commit_emit(const char *point, int64_t errno_val,
 			   : "0",
 		       (unsigned long long)(exec_commit_ctx.task_cr3_entry),
 		       (unsigned long long)(proc ? process_mm_root(proc) : 0),
-		       (unsigned long long)(get_current_page_directory()),
+		       (unsigned long long)paging_current_address_space(),
 		       (point && strcmp(point, "before-userswitch") == 0)
 			   ? "switch_to_user_asm"
 			   : "not_yet",
@@ -1352,7 +1352,7 @@ static int exec_replace_current_depth(const char *path, char *const argv[],
     memset(&exec_commit_ctx, 0, sizeof(exec_commit_ctx));
     exec_commit_ctx.mm_entry = (uint64_t)(uintptr_t)process_pgd(proc);
     exec_commit_ctx.task_cr3_entry = process_mm_root(proc);
-    exec_commit_ctx.active_cr3_entry = get_current_page_directory();
+    exec_commit_ctx.active_cr3_entry = paging_current_address_space();
 
     paging_ir0_mm_checkpoint("exec-before", (int32_t)proc->task.pid);
     process_fase44_list_checkpoint("exec-before");
@@ -1611,7 +1611,7 @@ static int exec_replace_current_depth(const char *path, char *const argv[],
     process_fase44_list_checkpoint("exec-after");
 
     klog_debug_fmt("ELF", "SERIAL: ELF: exec_replace success PID %x", (unsigned)((uint32_t)proc->task.pid));
-    klog_debug_fmt("ELF", "SERIAL: ELF: exec CR3 active=%llx task_cr3=%llx mm_cr3=%llx", (unsigned long long)(get_current_page_directory()), (unsigned long long)(process_mm_root(proc)), (unsigned long long)((uint64_t)(uintptr_t)process_pgd(proc)));
+    klog_debug_fmt("ELF", "SERIAL: ELF: exec CR3 active=%llx task_cr3=%llx mm_cr3=%llx", (unsigned long long)paging_current_address_space(), (unsigned long long)(process_mm_root(proc)), (unsigned long long)((uint64_t)(uintptr_t)process_pgd(proc)));
     /*
      * Linux clears pending catchable signals across execve. IR0 had
      * signals_reset_on_exec() but never called it — fork PF leftovers

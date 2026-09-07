@@ -1581,6 +1581,24 @@ def check_process_lifecycle_no_isa_conditionals():
     return errors
 
 
+def check_common_paging_uses_neutral_roots():
+    """Keep ISA register/table vocabulary out of the common paging contract."""
+    errors = []
+    legacy = re.compile(r"\b(?:CR3|cr3|PML4|pml4|PDPT|pdpt)\b")
+
+    for relative in ("mm/paging.c", "mm/paging.h"):
+        fpath = ROOT / relative
+        for idx, line in enumerate(
+            fpath.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            if legacy.search(line):
+                errors.append(
+                    f"[paging-neutral-root] {relative}:{idx}: use address-space "
+                    f"root/translation-level vocabulary: {line.strip()}"
+                )
+    return errors
+
+
 def main():
     errors = []
     errors.extend(check_forbidden_includes())
@@ -1622,6 +1640,7 @@ def main():
     errors.extend(check_portable_no_arch_switch_include())
     errors.extend(check_scheduler_user_return_boundary())
     errors.extend(check_process_lifecycle_no_isa_conditionals())
+    errors.extend(check_common_paging_uses_neutral_roots())
 
     if errors:
         print("[arch-guard] FAILED")

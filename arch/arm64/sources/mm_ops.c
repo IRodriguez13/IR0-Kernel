@@ -27,6 +27,7 @@
 #define A64_PTE_UXN       (1ULL << 54)
 #define A64_PTE_PFN_MASK  0x0000FFFFFFFFF000ULL
 #define A64_INDEX_MASK    0x1FFUL
+#define A64_SCTLR_M       (1ULL << 0)
 
 void mm_activate(uintptr_t root)
 {
@@ -76,7 +77,7 @@ void irq_restore(unsigned long flags)
 	__asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
 }
 
-uint64_t mm_read_ctrl0(void)
+static uint64_t mm_read_ctrl0(void)
 {
 	uint64_t sctlr;
 
@@ -84,16 +85,29 @@ uint64_t mm_read_ctrl0(void)
 	return sctlr;
 }
 
-void mm_write_ctrl0(uint64_t value)
+static void mm_write_ctrl0(uint64_t value)
 {
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(value) : "memory");
 	__asm__ volatile("isb" ::: "memory");
 }
 
-uint64_t mm_read_ctrl1(void)
+void mm_enable_translation(void)
 {
-	/* No CR4 analogue claimed for freestanding ARM yet. */
-	return 0;
+	uint64_t sctlr = mm_read_ctrl0();
+
+	sctlr |= A64_SCTLR_M;
+	mm_write_ctrl0(sctlr);
+}
+
+int mm_translation_enabled(void)
+{
+	return (mm_read_ctrl0() & A64_SCTLR_M) != 0;
+}
+
+int mm_translation_ready(void)
+{
+	/* Early platform setup owns MAIR/TCR/TTBR initialization. */
+	return 1;
 }
 
 void mm_va_indices(uintptr_t va, size_t idx[4])

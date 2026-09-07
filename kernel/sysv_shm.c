@@ -135,7 +135,7 @@ int64_t sys_shmget(int key, size_t size, int shmflg)
 			return -ENOMEM;
 		}
 		free_slot->frames[p] = phys;
-		old_cr3 = get_current_page_directory();
+		old_cr3 = paging_current_address_space();
 		/* Zero via temporary identity-style map in kernel CR3 if needed:
 		 * frames are low phys; clear through direct map when available. */
 		memset((void *)(uintptr_t)phys, 0, PAGE_SZ);

@@ -56,7 +56,7 @@ void gpf_audit_from_isr(uint64_t *stack)
 	if (ir0_panic_in_progress())
 		return;
 
-	klog_debug_fmt("GPF", "err=%llx rip=%llx cs=%llx rsp=%llx ss=%llx rflags=%llx mode=%s pid=%x comm=%s cr3=%llx", (unsigned long long)(errcode), (unsigned long long)(fault_rip), (unsigned long long)(fault_cs), (unsigned long long)(fault_rsp), (unsigned long long)(fault_ss), (unsigned long long)(fault_rflags), user ? "user" : "kernel", (unsigned)(current ? (uint32_t)current->task.pid : 0), current ? current->comm : "(none)", (unsigned long long)(get_current_page_directory()));
+	klog_debug_fmt("GPF", "err=%llx rip=%llx cs=%llx rsp=%llx ss=%llx rflags=%llx mode=%s pid=%x comm=%s cr3=%llx", (unsigned long long)(errcode), (unsigned long long)(fault_rip), (unsigned long long)(fault_cs), (unsigned long long)(fault_rsp), (unsigned long long)(fault_ss), (unsigned long long)(fault_rflags), user ? "user" : "kernel", (unsigned)(current ? (uint32_t)current->task.pid : 0), current ? current->comm : "(none)", (unsigned long long)paging_current_address_space());
 
 	klog_debug_fmt("GPF", "iretq_ckpt rip=%llx cs=%llx rsp=%llx", (unsigned long long)(ckpt_rip), (unsigned long long)(ckpt_cs), (unsigned long long)(ckpt_rsp));
 

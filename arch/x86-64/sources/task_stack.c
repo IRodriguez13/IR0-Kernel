@@ -13,10 +13,10 @@ static uint32_t kstack_slot_next;
 
 static uint64_t *kernel_page_root(void)
 {
-	uint64_t root = paging_get_kernel_cr3();
+	uintptr_t root = paging_kernel_address_space();
 
 	if (!root)
-		root = get_current_page_directory();
+		root = paging_current_address_space();
 	return root ? (uint64_t *)(uintptr_t)root : NULL;
 }
 
@@ -59,13 +59,13 @@ int process_kernel_stack_alloc(process_t *p)
 	}
 
 	{
-		uint64_t saved = get_current_page_directory();
+		uintptr_t saved = paging_current_address_space();
 
 		if (saved != (uint64_t)(uintptr_t)pml4)
-			load_page_directory((uint64_t)(uintptr_t)pml4);
+			paging_activate_address_space((uintptr_t)pml4);
 		tlb_invalidate_all();
 		if (saved != (uint64_t)(uintptr_t)pml4)
-			load_page_directory(saved);
+			paging_activate_address_space(saved);
 	}
 
 	{

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ISD_DISK = ROOT.parent / "ISD/out/x86_64/images/development/disk.img"
 
 import importlib.util
 
@@ -43,7 +44,9 @@ _guards_spec.loader.exec_module(guards)
 
 def main() -> int:
     iso = Path(os.environ.get("ISO", str(ROOT / "kernel-x64-userspace.iso")))
-    src = Path(os.environ.get("DISK", str(ROOT / "disk.img")))
+    # Product smokes must exercise the ISD-owned rootfs.  The legacy IR0
+    # disk.img can be stale and silently omit current shell/profile policy.
+    src = Path(os.environ.get("DISK", str(DEFAULT_ISD_DISK)))
     log = Path("/tmp/ir0-sigchld-no-false-logout.log")
     port = int(os.environ.get("PORT", "46745"))
     if not iso.is_file() or not src.is_file():

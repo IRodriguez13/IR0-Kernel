@@ -47,10 +47,37 @@ grep -q 'IR0_USERSPACE_ROOT := \$(IR0_ISD_ROOT)' scripts/make/isd.mk \
 	&& ok "D USERSPACE_ROOT aliases ISD" || bad "D no USERSPACE alias"
 grep -q 'IR0_LEGACY_USERSPACE' Makefile && ok "legacy gate" || bad "legacy"
 grep -q 'IR0_DEPS_SELFTEST' scripts/ensure-host-deps.sh && ok "F SELFTEST hook" || bad "F SELFTEST"
+if grep -E '^poweron:.*ensure-isd-disk' scripts/make/isd.mk >/dev/null; then
+	bad "D poweron may repack persistent state"
+else
+	ok "D poweron does not invoke ISD image packing"
+fi
 
 ENS=scripts/ensure-host-deps.sh
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+
+# Persistent machine disks are copied once and never refreshed implicitly.
+printf 'base-v1\n' >"$TMP/base.img"
+IR0_MACHINE_BASE_DISK="$TMP/base.img" IR0_MACHINE_DISK="$TMP/machine.img" \
+	bash scripts/isd_machine_disk.sh create >/dev/null
+printf 'guest-state\n' >>"$TMP/machine.img"
+printf 'base-v2\n' >"$TMP/base.img"
+IR0_MACHINE_BASE_DISK="$TMP/base.img" IR0_MACHINE_DISK="$TMP/machine.img" \
+	bash scripts/isd_machine_disk.sh create >/dev/null
+grep -q 'guest-state' "$TMP/machine.img" \
+	&& ok "D machine-create preserves guest state" || bad "D machine-create overwrote state"
+set +e
+IR0_MACHINE_BASE_DISK="$TMP/base.img" IR0_MACHINE_DISK="$TMP/machine.img" \
+	bash scripts/isd_machine_disk.sh reset >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -ne 0 ] && grep -q 'guest-state' "$TMP/machine.img" \
+	&& ok "D machine-reset requires confirmation" || bad "D unsafe machine-reset"
+IR0_MACHINE_BASE_DISK="$TMP/base.img" IR0_MACHINE_DISK="$TMP/machine.img" \
+	CONFIRM_RESET=yes bash scripts/isd_machine_disk.sh reset >/dev/null
+cmp -s "$TMP/base.img" "$TMP/machine.img" \
+	&& ok "D confirmed machine-reset refreshes base" || bad "D machine-reset mismatch"
 
 # never: fail without install
 set +e

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""
-Headless minimal-profile firstboot smoke via /etc/firstboot.seed.
+"""Headless firstboot and persistent second-boot smoke.
 
-Proves stage1 --early applies a seed, emits FIRSTBOOT_OK, and persists
-canonical done markers plus a real SHA-512 shadow hash.
+Boot one applies /etc/firstboot.seed and writes account state. Boot two reuses
+the same disk and must skip provisioning while retaining the written data.
 """
 
 from __future__ import annotations
@@ -25,6 +24,11 @@ DEFAULT_TIMEOUT = 90
 NEED_TAGS = [
     "RUNIT_STAGE1_OK",
     "FIRSTBOOT_OK",
+    "GETTY_READY",
+]
+SECOND_BOOT_TAGS = [
+    "RUNIT_STAGE1_OK",
+    "FIRSTBOOT_SKIP",
     "GETTY_READY",
 ]
 
@@ -187,7 +191,54 @@ def main() -> int:
                     print(f"✗ {path} missing {must!r}: {body!r}", file=sys.stderr)
                     return 1
 
-        print("✓ smoke-firstboot-seed OK")
+        # A new QEMU process is a real second boot. The persisted done marker
+        # must suppress provisioning, while the account remains readable.
+        log_path.unlink(missing_ok=True)
+        proc = subprocess.Popen(
+            [
+                args.qemu,
+                "-cdrom",
+                str(iso),
+                "-drive",
+                f"file={disk},format=raw,if=ide,index=0",
+                "-serial",
+                f"file:{log_path}",
+                "-display",
+                "none",
+                "-m",
+                "256M",
+                "-no-reboot",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.time() + args.timeout
+        second_ok = False
+        while time.time() < deadline:
+            text = read_log(log_path)
+            if "FIRSTBOOT_FAIL" in text or "KERNEL PANIC" in text or "Oops:" in text:
+                break
+            if all(tag in text for tag in SECOND_BOOT_TAGS):
+                second_ok = True
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.25)
+        kill_qemu(proc)
+        text = read_log(log_path)
+        if not second_ok:
+            print("✗ persistent second boot failed", file=sys.stderr)
+            for tag in SECOND_BOOT_TAGS:
+                print(f"  {'OK' if tag in text else 'MISS'} {tag}", file=sys.stderr)
+            print(text[-4000:], file=sys.stderr)
+            return 1
+
+        data = disk.read_bytes()
+        if f"{user}:x:1000:".encode() not in data or hashed.encode() not in data:
+            print("✗ account data missing after second boot", file=sys.stderr)
+            return 1
+
+        print("✓ smoke-firstboot-seed OK (state survived second boot)")
         return 0
     finally:
         seed_path.unlink(missing_ok=True)

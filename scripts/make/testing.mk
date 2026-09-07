@@ -1257,6 +1257,19 @@ smoke-firstboot-wizard: kernel-x64-userspace.iso
 		--log $(FIRSTBOOT_WIZARD_LOG)
 	@echo "  LOG     $(FIRSTBOOT_WIZARD_LOG)"
 
+# Boot the same temporary disk twice: provisioning must persist and the second
+# boot must observe FIRSTBOOT_SKIP without losing passwd/shadow state.
+PERSISTENT_BOOT_LOG = /tmp/ir0-persistent-boot.log
+.PHONY: smoke-persistent-boot
+smoke-persistent-boot: kernel-x64-userspace.iso ensure-isd-disk
+	@echo "  SMOKE   persistent state across two boots..."
+	@chmod +x scripts/smoke_firstboot_seed.py
+	@python3 scripts/smoke_firstboot_seed.py \
+		--iso kernel-x64-userspace.iso \
+		--disk $(IR0_ISD_DISK) \
+		--log $(PERSISTENT_BOOT_LOG)
+	@echo "  LOG     $(PERSISTENT_BOOT_LOG)"
+
 # Non-root path: crypt(3) auth + setuid drop + /etc/profile PS1 (typed via monitor).
 RUNIT_LOGIN_NONROOT_SMOKE_LOG = /tmp/runit-login-nonroot-smoke.log
 smoke-runit-login-nonroot: load-userspace-runit kernel-x64-userspace.iso

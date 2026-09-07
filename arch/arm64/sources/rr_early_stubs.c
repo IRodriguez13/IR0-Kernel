@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include <ir0/process.h>
+#include <ir0/boot_log.h>
 #include <sched/task.h>
 
 static uint8_t g_heap[8192] __attribute__((aligned(16)));
@@ -66,6 +67,17 @@ int __attribute__((weak)) signals_should_handle_on_run(process_t *p)
 void __attribute__((weak)) set_current_kernel_stack(process_t *p)
 {
 	(void)p;
+}
+
+void __attribute__((weak)) process_sched_state_trace(const process_t *p,
+					      process_state_t prev,
+					      process_state_t next,
+					      void *caller)
+{
+	(void)p;
+	(void)prev;
+	(void)next;
+	(void)caller;
 }
 
 void __attribute__((weak)) first_switch_to(struct process *next)
@@ -148,6 +160,5 @@ void __attribute__((weak)) sched_context_switch_to(process_t *next)
 /* Portable blockdev.c CLASSIFY lines; full ktm/klog.c is not in early boot. */
 void __attribute__((weak)) klog_info(const char *component, const char *message)
 {
-	(void)component;
-	(void)message;
+	ir0_boot_info(component, message);
 }

@@ -210,18 +210,43 @@ musl-aarch64-hello: setup-musl-aarch64
 
 .PHONY: busybox-aarch64-min
 BUSYBOX_AARCH64 = $(KERNEL_ROOT)/build/busybox_aarch64
+BUSYBOX_AARCH64_BUILD = $(KERNEL_ROOT)/build/busybox-arm64-src
+MUSL_CROSS_AARCH64 = $(patsubst %gcc,%,$(MUSL_CC_AARCH64))
 busybox-aarch64-min: setup-musl-aarch64
 	@mkdir -p $(KERNEL_ROOT)/build
-	@if [ -x "$(BUSYBOX_AARCH64)" ] && file "$(BUSYBOX_AARCH64)" | grep -qi aarch64; then \
+	@set -e; \
+	if [ -x "$(BUSYBOX_AARCH64)" ] && \
+	   file -b "$(BUSYBOX_AARCH64)" | grep -qi aarch64 && \
+	   ! file -b "$(BUSYBOX_AARCH64)" | grep -qi pie && \
+	   readelf -h "$(BUSYBOX_AARCH64)" | grep -q 'Entry point address:.*0x44'; then \
 		echo "✓ busybox-aarch64-min already present: $(BUSYBOX_AARCH64)"; \
-	elif [ -x "$(BUSYBOX_SRC)/busybox_unstripped" ]; then \
-		cp -f "$(BUSYBOX_SRC)/busybox_unstripped" "$(BUSYBOX_AARCH64)"; \
+	elif [ -f "$(BUSYBOX_SRC)/Makefile" ] && [ -n "$(MUSL_CC_AARCH64)" ]; then \
+		if [ ! -f "$(BUSYBOX_AARCH64_BUILD)/Makefile" ]; then \
+			cp -a "$(BUSYBOX_SRC)" "$(BUSYBOX_AARCH64_BUILD)"; \
+		fi; \
+		$(MAKE) -s -C "$(BUSYBOX_AARCH64_BUILD)" mrproper; \
+		cp -f "$(BUSYBOX_SRC)/.config" "$(BUSYBOX_AARCH64_BUILD)/.config"; \
+		sed -i 's|^CONFIG_EXTRA_CFLAGS=.*|CONFIG_EXTRA_CFLAGS="-fno-pie"|' \
+			"$(BUSYBOX_AARCH64_BUILD)/.config"; \
+		sed -i 's|^CONFIG_EXTRA_LDFLAGS=.*|CONFIG_EXTRA_LDFLAGS="-no-pie -Wl,-Ttext-segment=0x44000000"|' \
+			"$(BUSYBOX_AARCH64_BUILD)/.config"; \
+		sed -i 's|^# CONFIG_ECHO is not set|CONFIG_ECHO=y|' \
+			"$(BUSYBOX_AARCH64_BUILD)/.config"; \
+		$(MAKE) -s -C "$(BUSYBOX_AARCH64_BUILD)" \
+			ARCH=arm64 CROSS_COMPILE="$(MUSL_CROSS_AARCH64)" \
+			CC="$(MUSL_CC_AARCH64)" oldconfig </dev/null; \
+		$(MAKE) -s -C "$(BUSYBOX_AARCH64_BUILD)" \
+			ARCH=arm64 CROSS_COMPILE="$(MUSL_CROSS_AARCH64)" \
+			CC="$(MUSL_CC_AARCH64)" -j$${IR0_JOBS:-2}; \
+		cp -f "$(BUSYBOX_AARCH64_BUILD)/busybox_unstripped" "$(BUSYBOX_AARCH64)"; \
 		aarch64-linux-gnu-strip "$(BUSYBOX_AARCH64)" 2>/dev/null || true; \
-		echo "✓ busybox-aarch64-min ← busybox_unstripped"; \
+		echo "✓ busybox-aarch64-min built out-of-tree"; \
 	else \
-		echo "✗ build BusyBox aarch64 first (see oleada notes)"; exit 1; \
+		echo "✗ BusyBox source or aarch64 musl compiler missing"; exit 1; \
 	fi
-	@file $(BUSYBOX_AARCH64) | grep -qi aarch64
+	@file -b $(BUSYBOX_AARCH64) | grep -qi aarch64
+	@! file -b $(BUSYBOX_AARCH64) | grep -qi pie
+	@readelf -h $(BUSYBOX_AARCH64) | grep -q 'Entry point address:.*0x44'
 	@echo "✓ busybox-aarch64-min → $(BUSYBOX_AARCH64)"
 
 smoke-musl-aarch64-toolchain: musl-aarch64-hello
@@ -1779,7 +1804,7 @@ smoke-robust-list: kernel-x64-userspace.iso
 # Board: ARM64_BOARD=qemu-virt|rpi4|rpi5 (see scripts/make/arm64-board.mk).
 ARM64_BOOT_CFLAGS = -ffreestanding -nostdlib -fno-builtin -O2 -mgeneral-regs-only \
 	-DIR0_FREESTANDING_BOOT=1 $(ARM64_BOARD_CFLAGS) \
-	-I. -Iarch/arm64/sources -Iarch/common -Iincludes -Iincludes/ir0 -Iktm/include
+	-I. -Iarch/arm64/sources -Iarch/common -Iincludes -Iktm/include -Iincludes/ir0
 ARM64_BOOT_ASFLAGS = -ffreestanding -nostdlib -mgeneral-regs-only
 # QEMU virt: pin GICv2 (default may be v3 — freestanding Dist/CPU iface is v2).
 ARM64_QEMU_MACHINE = virt,gic-version=2
@@ -2368,7 +2393,7 @@ smoke-arm64-virtio-blk: kernel-arm64-syscall.bin
 		-display none -no-reboot 2>/dev/null || true
 	@if grep -q "ARM64_VIRTIO_MMIO_OK" /tmp/arm64-virtio-blk-smoke.log && \
 	   grep -q "ARM64_VIRTIO_BLK_OK" /tmp/arm64-virtio-blk-smoke.log && \
-	   grep -q "\\[BLOCKDEV\\]\\[CLASSIFY\\] BLOCKDEV_FACADE_OK" /tmp/arm64-virtio-blk-smoke.log && \
+	   grep -q "\\[BLOCKDEV\\].*CLASSIFY BLOCKDEV_FACADE_OK" /tmp/arm64-virtio-blk-smoke.log && \
 	   grep -q "ARM64_BLOCKDEV_FACADE_OK" /tmp/arm64-virtio-blk-smoke.log; then \
 		echo "✓ smoke-arm64-virtio-blk passed (virtio + portable ir0_block facade)"; \
 	else \

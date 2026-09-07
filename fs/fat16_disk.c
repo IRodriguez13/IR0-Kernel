@@ -1045,6 +1045,9 @@ static int fat16_write_file(struct fat16_vol *v, struct fat16_ent_ref *ref,
 	if (!buf || !nwrote || offset < 0)
 		return -EINVAL;
 	*nwrote = 0;
+	if ((uint64_t)offset > UINT32_MAX ||
+	    count > (size_t)(UINT32_MAX - (uint64_t)offset))
+		return -EFBIG;
 	end = (size_t)offset + count;
 	if (end > ref->de.size)
 	{

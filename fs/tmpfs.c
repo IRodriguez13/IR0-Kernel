@@ -560,7 +560,11 @@ int tmpfs_read_file(const char *path, void *buf, size_t count, size_t *read_coun
 
 int tmpfs_write_file(const char *path, const void *buf, size_t count, size_t *written_count, off_t offset)
 {
+    size_t offset_u;
+
     if (!path || !buf)
+        return -EINVAL;
+    if (offset < 0)
         return -EINVAL;
     
     tmpfs_inode_t *inode = tmpfs_find_inode(path);
@@ -571,9 +575,11 @@ int tmpfs_write_file(const char *path, const void *buf, size_t count, size_t *wr
         return -EISDIR;
     
     /* Calculate new size */
-    size_t new_size = (size_t)offset + count;
-    if (new_size > TMPFS_MAX_FILE_SIZE)
+    offset_u = (size_t)offset;
+    if (offset_u > TMPFS_MAX_FILE_SIZE ||
+        count > TMPFS_MAX_FILE_SIZE - offset_u)
         return -EFBIG;
+    size_t new_size = offset_u + count;
     
     /* Reallocate if needed */
     if (new_size > inode->size)
@@ -600,7 +606,7 @@ int tmpfs_write_file(const char *path, const void *buf, size_t count, size_t *wr
     /* Write data */
     if (count > 0)
     {
-        memcpy(inode->data + offset, buf, count);
+        memcpy(inode->data + offset_u, buf, count);
         inode->mtime = clock_get_current_time();
     }
     

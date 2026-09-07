@@ -690,9 +690,10 @@ static int simplefs_write_common(const char *fs_name, const char *path, const vo
     if (offset < 0)
         return -EINVAL;
 
-    new_size = (size_t)offset + count;
-    if (new_size > SIMPLEFS_MAX_FILE_SIZE)
+    if ((size_t)offset > SIMPLEFS_MAX_FILE_SIZE ||
+        count > SIMPLEFS_MAX_FILE_SIZE - (size_t)offset)
         return -EFBIG;
+    new_size = (size_t)offset + count;
 
     if (new_size > e->size)
     {

@@ -121,6 +121,13 @@ def expect_prompt_any(*need: str) -> Callable[[str], bool]:
     return _fn
 
 
+def expect_prompt_all(*need: str) -> Callable[[str], bool]:
+    def _fn(new: str) -> bool:
+        return expect_prompt(new) and all(n in new for n in need)
+
+    return _fn
+
+
 def expect_enoent(new: str) -> bool:
     return expect_prompt(new) and (
         "No such file" in new
@@ -255,6 +262,17 @@ STABILITY_CASES: list[Case] = [
         expect_prompt_any("UTMP_SESSION_OK"),
         echo="UTMP_SESSION_OK",
         timeout=30.0,
+    ),
+    Case(
+        "busybox_shebang",
+        "cd /root/Developer/shebang&&./direct.sh alpha beta&&./busybox-ash.sh alpha beta&&echo SHEBANG_EXEC_OK",
+        expect_prompt_all(
+            "SHEBANG_SH_ARGV_OK",
+            "SHEBANG_BUSYBOX_ARGV_OK",
+            "SHEBANG_EXEC_OK",
+        ),
+        echo="SHEBANG_EXEC_OK",
+        timeout=75.0,
     ),
     Case(
         "top_batch",
@@ -1102,13 +1120,17 @@ def run_round(
     skip_poweroff: bool = False,
     stability: bool = False,
     with_tcc: bool = True,
+    only_stability_case: Optional[str] = None,
 ) -> tuple[bool, list[tuple[str, str]]]:
     results: list[tuple[str, str]] = []
     share_dir: Optional[Path] = None
     if only_doom:
         batches: list[list[Case]] = []
     elif stability:
-        batches = chunked(list(STABILITY_CASES), batch_size)
+        selected = list(STABILITY_CASES)
+        if only_stability_case:
+            selected = [case for case in selected if case.name == only_stability_case]
+        batches = chunked(selected, batch_size)
     else:
         batches = chunked(list(CASES), batch_size)
     doom_case: Optional[Case] = None
@@ -1250,6 +1272,11 @@ def main() -> int:
         help="With --stability, skip tcc hello via 9p",
     )
     ap.add_argument(
+        "--only-stability-case",
+        choices=[case.name for case in STABILITY_CASES],
+        help="Run one named stability case (requires --stability)",
+    )
+    ap.add_argument(
         "--skip-poweroff",
         action="store_true",
         help="Skip halt -f batch (default: run soft-gated)",
@@ -1282,9 +1309,13 @@ def main() -> int:
         args.skip_poweroff = True
         if args.batch_size == 5:
             args.batch_size = 3
+    if args.only_stability_case and not args.stability:
+        ap.error("--only-stability-case requires --stability")
 
     if args.stability:
-        ncases = len(STABILITY_CASES) + (0 if args.no_tcc else 1)
+        ncases = 1 if args.only_stability_case else len(STABILITY_CASES)
+        if not args.only_stability_case and not args.no_tcc:
+            ncases += 1
     else:
         ncases = 0 if args.only_doom else len(CASES)
     ncases += 0 if args.skip_poweroff else 1
@@ -1314,6 +1345,7 @@ def main() -> int:
             skip_poweroff=args.skip_poweroff,
             stability=args.stability,
             with_tcc=not args.no_tcc,
+            only_stability_case=args.only_stability_case,
         )
         for name, st in results:
             print(f"  {st:22} {name}", flush=True)

@@ -283,30 +283,7 @@ static void panic_print_final_screen(const char *message, panic_level_t level,
 	print_screen_only("========================================\n");
 	print_screen_only("KERNEL PANIC - SYSTEM HALTED\n");
 	print_screen_only("========================================\n");
-
-	snprintf(linebuf, sizeof(linebuf), "Uptime at panic: %s\n", uptime);
-	print_screen_only(linebuf);
-
-	snprintf(linebuf, sizeof(linebuf), "Panic Level: %s\n",
-		 panic_level_names[level]);
-	print_screen_only(linebuf);
-
-	snprintf(linebuf, sizeof(linebuf), "Source File: %s\n",
-		 file ? file : "unknown");
-	print_screen_only(linebuf);
-
-	snprintf(linebuf, sizeof(linebuf), "Line Number: %d\n", line);
-	print_screen_only(linebuf);
-
-	snprintf(linebuf, sizeof(linebuf), "Calling Function: %s\n",
-		 caller ? caller : "unknown");
-	print_screen_only(linebuf);
-
-	snprintf(linebuf, sizeof(linebuf), "Error Message: %s\n",
-		 message ? message : "no message");
-	print_screen_only(linebuf);
-
-	print_screen_only("========================================\n\n");
+	print_screen_only("\n");
 
 	print_screen_only("     +------------------------------------------------+\n");
 	print_screen_only("     |                                                |\n");
@@ -314,18 +291,15 @@ static void panic_print_final_screen(const char *message, panic_level_t level,
 	print_screen_only("     |                                                |\n");
 	print_screen_only("     +------------------------------------------------+\n\n");
 
-	snprintf(linebuf, sizeof(linebuf), "Type: %s\n", panic_level_names[level]);
-	print_screen_only(linebuf);
-	snprintf(linebuf, sizeof(linebuf), "Location: %s:%d\n",
-		 file ? file : "unknown", line);
-	print_screen_only(linebuf);
-	snprintf(linebuf, sizeof(linebuf), "Caller: %s\n",
-		 caller ? caller : "unknown");
-	print_screen_only(linebuf);
-	snprintf(linebuf, sizeof(linebuf), "Due to: %s\n",
+	snprintf(linebuf, sizeof(linebuf), "Reason: %s\n",
 		 message ? message : "no message");
 	print_screen_only(linebuf);
-	snprintf(linebuf, sizeof(linebuf), "Uptime at panic: %s\n\n", uptime);
+	snprintf(linebuf, sizeof(linebuf), "Origin: %s:%d (%s)\n",
+		 file ? file : "unknown", line, caller ? caller : "unknown");
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Level: %s\n", panic_level_names[level]);
+	print_screen_only(linebuf);
+	snprintf(linebuf, sizeof(linebuf), "Uptime: %s\n\n", uptime);
 	print_screen_only(linebuf);
 
 	print_screen_only("========================================\n");

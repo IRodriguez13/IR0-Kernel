@@ -1040,7 +1040,7 @@ void handle_signals(void)
                             ctx->rip > 0x00007FFFFFFFFFFFULL)
                         {
                             klog_info_fmt("SIGNAL",
-                                          "DELIVER_DEFER sig=%x "
+                                          "DELIVER_DEFER sig=%d "
                                           "reason=nonuser_site rip=%llx",
                                           (unsigned)sig,
                                           (unsigned long long)ctx->rip);
@@ -1052,7 +1052,7 @@ void handle_signals(void)
                             ctx->rsp > 0x00007FFFFFFFFFFFULL)
                         {
                             klog_info_fmt("SIGNAL",
-                                          "DELIVER_DEFER sig=%x "
+                                          "DELIVER_DEFER sig=%d "
                                           "reason=nonuser_rsp rsp=%llx",
                                           (unsigned)sig,
                                           (unsigned long long)ctx->rsp);

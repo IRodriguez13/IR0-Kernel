@@ -290,6 +290,9 @@ def main() -> int:
             "yes | head -n 20",
             "cat /bin/busybox | head -n 1",
         ]
+        if os.environ.get("PIPE_STRESS_FAST", "0") == "1":
+            hard_commands = ["echo pipeok"]
+            soft_commands = ["hexdump -C /bin/busybox | cat -u | head -n 3"]
         session_segv_before = read_log(log_path).count("CONSOLE_SESSION_SEGV")
         soft_skips = []
 
@@ -322,7 +325,9 @@ def main() -> int:
         soft_budget = float(os.environ.get("PIPE_STRESS_SOFT_TIMEOUT", "25"))
         timings = []
         for cmd in [c for _ in range(rounds) for c in soft_commands]:
-            segv_base = read_log(log_path).count("CONSOLE_SESSION_SEGV")
+            before_text = read_log(log_path)
+            segv_base = before_text.count("CONSOLE_SESSION_SEGV")
+            deferred_segv_base = before_text.count("DELIVER_DEFER sig=11")
             t0 = time.time()
             type_str(args.port, cmd)
             mon(args.port, "sendkey ret", 0.35)
@@ -344,9 +349,20 @@ def main() -> int:
             if text.count("CONSOLE_SESSION_SEGV") > segv_base:
                 soft_skips.append(cmd + " [SESSION_SEGV]")
                 prompts_before = len(list(PROMPT_RE.finditer(strip_ansi(text))))
+            if text.count("DELIVER_DEFER sig=11") > deferred_segv_base:
+                kill_qemu(proc)
+                print(f"✗ deferred SIGSEGV after: {cmd!r}", file=sys.stderr)
+                print(text[-8000:], file=sys.stderr)
+                return 1
 
         text = read_log(log_path)
         kill_qemu(proc)
+
+        if ("DELIVER_DEFER sig=11" in text or
+                "CLASSIFY SIGNAL_KILL_SIGSEGV" in text):
+            print("✗ latent SIGSEGV observed during pipeline stress",
+                  file=sys.stderr)
+            return 1
 
         checks = [
             ("UP Priority" in text or "UP RR" in text or "IR0 " in text, "uname identity"),

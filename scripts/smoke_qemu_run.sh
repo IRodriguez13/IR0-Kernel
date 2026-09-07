@@ -17,6 +17,7 @@ profile=""
 success_mode="all"
 success_tags=()
 fail_patterns=()
+expected_panic=0
 qemu_args=()
 
 usage()
@@ -56,6 +57,10 @@ while [[ $# -gt 0 ]]; do
 		fail_patterns+=("${2:-}")
 		shift 2
 		;;
+	--expected-panic)
+		expected_panic=1
+		shift
+		;;
 	--)
 		shift
 		qemu_args=("$@")
@@ -85,6 +90,9 @@ if [[ -n "$stale_sec" ]]; then
 fi
 if [[ -n "$profile" ]]; then
 	cmd+=("--profile" "$profile")
+fi
+if [[ "$expected_panic" -eq 1 ]]; then
+	cmd+=("--expected-panic")
 fi
 
 for tag in "${success_tags[@]}"; do

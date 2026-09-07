@@ -50,7 +50,7 @@ INIT_TCC_POWER_HALT_SRC = setup/pid1/init_tcc_power_halt.c
 TCC_POWER_HALT_HARNESS_BIN = setup/pid1/tcc_power_halt_harness
 TCC_POWER_HALT_LOG = /tmp/tcc-power-halt-smoke.log
 KTM_DOOMGENERIC_SMOKE_BIN = setup/doom/doomgeneric_smoke
-RUNIT_STAGE_BIN = $(IR0_USERSPACE_OUT)/stage-bin
+RUNIT_STAGE_BIN = $(IR0_USERSPACE_OUT)/x86_64/smoke/stage-bin
 # Smoke runit helpers (fase55d, tcc power, busybox power) live under smoke/stage-bin.
 RUNIT_SMOKE_STAGE_BIN = $(IR0_USERSPACE_OUT)/smoke/stage-bin
 KTM_FS_DEV_SMOKE_SRC = setup/pid1/ktm_fs_dev_smoke.c
@@ -1319,6 +1319,7 @@ smoke-runit-power: load-userspace-runit kernel-x64-userspace.iso
 	rm -f $$DISK; \
 	if grep -q "RUNIT_STAGE2_OK" $(RUNIT_POWER_SMOKE_LOG) && \
 	    grep -q "POWER_SMOKE_CALL" $(RUNIT_POWER_SMOKE_LOG) && \
+	    grep -q "POWER_SMOKE_SYSFS_INVALID_OK" $(RUNIT_POWER_SMOKE_LOG) && \
 	    grep -q "SYSTEM_SYNC_OK" $(RUNIT_POWER_SMOKE_LOG) && \
 	    grep -q "SYSTEM_SHUTDOWN_HALT" $(RUNIT_POWER_SMOKE_LOG); then \
 		echo "✓ smoke-runit-power passed"; \
@@ -1327,6 +1328,29 @@ smoke-runit-power: load-userspace-runit kernel-x64-userspace.iso
 		grep -E 'RUNIT_|RUNSV_|POWER_|SYSTEM_|KERNEL PANIC|panic' $(RUNIT_POWER_SMOKE_LOG) | tail -40; \
 		exit 1; \
 	fi
+
+SYSFS_PANIC_SERVICE_LOG = /tmp/ir0-sysfs-panic-service.log
+.PHONY: smoke-sysfs-panic-service
+smoke-sysfs-panic-service: load-userspace-runit kernel-x64-userspace.iso
+	@echo "  SMOKE   deterministic /sys/kernel/panic service..."
+	@DISK=$$(mktemp /tmp/ir0-sysfs-panic.XXXXXX.img); \
+	cp -f disk.img $$DISK; \
+	$(IR0_USERSPACE_ROOT)/scripts/inject-smoke-service.sh $$DISK syspanic \
+		$(RUNIT_STAGE_BIN)/runit_sysfs_panic_run \
+		$(RUNIT_STAGE_BIN)/runit_sysfs_panic_smoke bin/sysfs-panic; \
+	$(SMOKE_QEMU_RUN) --log $(SYSFS_PANIC_SERVICE_LOG) --timeout 60 --stale-sec 20 \
+		--expected-panic \
+		--fail-regex 'SYSFS_PANIC_(OPEN_FAIL|RETURNED)|#PF|#GP' \
+		--done PANICEX_KERNEL_WIDE_OK -- \
+		$(QEMU) -cdrom kernel-x64-userspace.iso \
+		-drive file=$$DISK,format=raw,if=ide,index=0 \
+		-serial stdio -display none -m 256M -no-reboot -net none; \
+	rm -f $$DISK; \
+	grep -q 'SYSFS_PANIC_CALL' $(SYSFS_PANIC_SERVICE_LOG); \
+	grep -q 'forced panic via /sys/kernel/panic' $(SYSFS_PANIC_SERVICE_LOG); \
+	grep -q 'PANICEX_KERNEL_WIDE_OK' $(SYSFS_PANIC_SERVICE_LOG); \
+	! grep -q 'SYSFS_PANIC_RETURNED' $(SYSFS_PANIC_SERVICE_LOG)
+	@echo "✓ smoke-sysfs-panic-service passed"
 
 # BusyBox halt applet → sys_reboot (requires CONFIG_HALT in fase58 fragment).
 RUNIT_BB_HALT_LOG = /tmp/runit-busybox-halt-smoke.log

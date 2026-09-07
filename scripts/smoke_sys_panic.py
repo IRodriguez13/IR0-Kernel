@@ -149,6 +149,13 @@ def attempt(iso: Path, src: Path, log: Path, port: int, year: str,
             return RETRY
         print("  OK  /sys/kernel/panic present")
 
+        out = run_cmd(port, log, "ls /sys/kernel/reboot /sys/kernel/poweroff /sys/kernel/halt")
+        if not all(name in out for name in ("reboot", "poweroff", "halt")):
+            print("✗ semantic power controls missing from sysfs", file=sys.stderr)
+            print(out[-1000:], file=sys.stderr)
+            return FAIL
+        print("  OK  semantic sysfs power controls present")
+
         # --- Part B: force the panic (root-only node, via doas) -------------
         mark = len(read_log(log))
         type_str(port, "doas sh -c 'echo c > /sys/kernel/panic'")

@@ -424,6 +424,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Extra fail regex (repeat)",
     )
     parser.add_argument(
+        "--expected-panic",
+        action="store_true",
+        help="Allow panic text for a smoke whose success condition is the panic itself",
+    )
+    parser.add_argument(
         "qemu_cmd",
         nargs=argparse.REMAINDER,
         help="QEMU command after --",
@@ -445,7 +450,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     success_mode = args.success_mode
     timeout_sec = args.timeout
     stale_sec = args.stale_sec
-    fail_patterns = list(DEFAULT_FAIL_RES) + list(args.fail_patterns)
+    default_fail_res = list(DEFAULT_FAIL_RES)
+    if args.expected_panic:
+        default_fail_res = [
+            pattern for pattern in default_fail_res
+            if pattern not in (r"KERNEL PANIC", r"panicex\(", r"panic\(")
+        ]
+    fail_patterns = default_fail_res + list(args.fail_patterns)
 
     if args.profile:
         prof = PROFILES[args.profile]

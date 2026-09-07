@@ -74,12 +74,21 @@ IR0_ISD_MAKE = $(MAKE) -C "$(IR0_ISD_ROOT)" \
 # Disk owned by ISD (not copied into IR0/ by default)
 IR0_ISD_DISK = $(IR0_ISD_ROOT)/out/$(ISD_ARCH)/images/$(ISD_PROFILE)/disk.img
 
+# Mutable guest state lives outside ISD out/. Rebuilding a package or rootfs may
+# recreate IR0_ISD_DISK, but must never overwrite an installed machine.
+IR0_MACHINE ?= default
+IR0_MACHINE_ROOT ?= $(abspath $(IR0_ISD_ROOT)/../IR0-machines)
+IR0_MACHINE_DIR = $(IR0_MACHINE_ROOT)/$(ISD_ARCH)/$(ISD_PROFILE)/$(IR0_MACHINE)
+IR0_MACHINE_DISK = $(IR0_MACHINE_DIR)/disk.img
+IR0_MACHINE_VMDK = $(IR0_MACHINE_DIR)/ir0-$(ISD_PROFILE).vmdk
+
 IR0_USERSPACE_OUT = $(IR0_ISD_ROOT)/out
 IR0_USERSPACE_MAKE = $(MAKE) -s -C $(IR0_ISD_ROOT) IR0_ROOT=$(KERNEL_ROOT) ARCH=$(ISD_ARCH)
 
 .PHONY: check-isd clone-isd isd-defconfig isdconfig isd isd-rootfs isd-image \
 	isd-clean first-boot bootstrap-userspace check-userspace \
-	warn-userspace-deprecated ensure-isd-disk run-isd
+	warn-userspace-deprecated ensure-isd-disk run-isd machine-create \
+	machine-reset machine-info image-vmware poweron
 
 warn-userspace-deprecated:
 	@case "$(_IR0_USERSPACE_ROOT_ORIGIN)" in \
@@ -166,6 +175,52 @@ first-boot:
 		IR0_USERSPACE_URL="$(IR0_ISD_URL)" \
 		ISD_ARCH="$(ISD_ARCH)" \
 		"$(KERNEL_ROOT)/scripts/bootstrap-isd.sh"
+	+@$(MAKE) -s machine-create PROFILE=$(ISD_PROFILE) IR0_MACHINE=$(IR0_MACHINE)
+	@echo "  POWERON  make poweron PROFILE=$(ISD_PROFILE) IR0_MACHINE=$(IR0_MACHINE)"
+
+machine-create: ensure-isd-disk
+	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"
+	@IR0_MACHINE_BASE_DISK="$(IR0_ISD_DISK)" \
+		IR0_MACHINE_DISK="$(IR0_MACHINE_DISK)" \
+		"$(KERNEL_ROOT)/scripts/isd_machine_disk.sh" create
+
+machine-reset: ensure-isd-disk
+	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"
+	@IR0_MACHINE_BASE_DISK="$(IR0_ISD_DISK)" \
+		IR0_MACHINE_DISK="$(IR0_MACHINE_DISK)" \
+		CONFIRM_RESET="$(CONFIRM_RESET)" \
+		"$(KERNEL_ROOT)/scripts/isd_machine_disk.sh" reset
+
+machine-info:
+	@echo "PROFILE       $(ISD_PROFILE)"
+	@echo "MACHINE       $(IR0_MACHINE)"
+	@echo "BASE DISK     $(IR0_ISD_DISK)"
+	@echo "MACHINE DISK  $(IR0_MACHINE_DISK)"
+	@echo "VMWARE DISK   $(IR0_MACHINE_VMDK)"
+
+image-vmware:
+	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"
+	@IR0_MACHINE_BASE_DISK="$(IR0_ISD_DISK)" \
+		IR0_MACHINE_DISK="$(IR0_MACHINE_DISK)" \
+		IR0_MACHINE_VMDK="$(IR0_MACHINE_VMDK)" FORCE="$(FORCE)" \
+		"$(KERNEL_ROOT)/scripts/isd_machine_disk.sh" export-vmdk
+	@echo "  Attach $(KERNEL_ROOT)/kernel-x64-userspace.iso as the boot CD."
+
+# Product session: build the kernel ISO, but never rebuild or repack the mutable
+# machine disk. first-boot/machine-create are the explicit provisioning paths.
+poweron: kernel-x64-userspace.iso check-isd
+	@chmod +x "$(KERNEL_ROOT)/scripts/isd_machine_disk.sh"
+	@IR0_MACHINE_BASE_DISK="$(IR0_ISD_DISK)" \
+		IR0_MACHINE_DISK="$(IR0_MACHINE_DISK)" \
+		"$(KERNEL_ROOT)/scripts/isd_machine_disk.sh" create
+	@echo "Running persistent IR0 + ISD machine ($(IR0_MACHINE))"
+	@echo "  DISK     $(IR0_MACHINE_DISK)"
+	qemu-system-x86_64 -cdrom kernel-x64-userspace.iso \
+		-drive "file=$(IR0_MACHINE_DISK),format=raw,if=ide,index=0" \
+		$(QEMU_NET_ALL) $(QEMU_AUDIO_ALL) $(QEMU_SERIAL_COM1) $(QEMU_ISA_DEBUG_EXIT) \
+		$(QEMU_DENNIS_9P) \
+		-m 512M -no-reboot \
+		$(QEMU_DISPLAY)
 
 # Product run: boot ISD-owned disk for PROFILE (no per-binary inject).
 # Auto-builds the disk if missing (e.g. after ISD make clean).

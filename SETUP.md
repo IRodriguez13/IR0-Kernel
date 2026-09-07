@@ -192,12 +192,23 @@ make clean
 
 ```bash
 make first-boot   # once: sibling + disk.img
-make run
+make poweron      # reuse the installed machine on every boot
 ```
 
-Builds/uses `kernel-x64-userspace.iso`, injects runit + BusyBox into `disk.img`,
-and enables the standard IR0 hardware profile. Does **not** require TinyCC/GNU
-make unless `IR0_WITH_DEVTOOLS=1`.
+`first-boot` builds a reproducible ISD base image and creates a separate mutable
+machine disk under the sibling `IR0-machines/` directory. `poweron` reuses that
+disk without running the ISD image packer, so guest users, configuration and
+files survive kernel or rootfs rebuilds. Does **not** require TinyCC/GNU make unless
+`IR0_WITH_DEVTOOLS=1`.
+
+Use `IR0_MACHINE=name` to keep multiple installations of the same profile.
+Reset is intentionally explicit and destructive:
+
+```bash
+make machine-info PROFILE=desktop
+CONFIRM_RESET=yes make machine-reset PROFILE=desktop
+make image-vmware PROFILE=desktop   # exports VMDK; attach the kernel ISO as CD
+```
 
 ### Serial-only (no GUI)
 

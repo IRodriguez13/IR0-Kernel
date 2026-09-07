@@ -177,7 +177,7 @@ DISK         ${DISK}
 ISO          ${ISO}
 
 Next:
-  make run PROFILE=${PROFILE}
+  make poweron PROFILE=${PROFILE}
 
 Host deps: IR0_DEPS_INSTALL=ask|yes|never (default ask)
 Extras:    make isdconfig PROFILE=${PROFILE}

@@ -1005,16 +1005,19 @@ int unmap_page_in_directory(uint64_t *root, uintptr_t virt_addr)
     if (phys_frame &&
         phys_frame >= pmm_get_start() && phys_frame < pmm_get_end())
     {
-        freed_type = ir0_mm_get_frame_type(phys_frame);
-        if (freed_type == IR0_MM_FRAME_USER)
-            ir0_mm_frame_user_free++;
-        else if (freed_type == IR0_MM_FRAME_KERNEL)
-            ir0_mm_frame_kernel_free++;
-        else if (freed_type == IR0_MM_FRAME_PT)
-            ir0_mm_frame_pt_free++;
-        ir0_mm_set_frame_type(phys_frame, IR0_MM_FRAME_UNKNOWN);
-        ir0_mm_log_frame_type("FREE", phys_frame, freed_type);
-        pmm_free_frame(phys_frame);
+		if (pmm_frame_refcount(phys_frame) == 1)
+		{
+			freed_type = ir0_mm_get_frame_type(phys_frame);
+			if (freed_type == IR0_MM_FRAME_USER)
+				ir0_mm_frame_user_free++;
+			else if (freed_type == IR0_MM_FRAME_KERNEL)
+				ir0_mm_frame_kernel_free++;
+			else if (freed_type == IR0_MM_FRAME_PT)
+				ir0_mm_frame_pt_free++;
+			ir0_mm_set_frame_type(phys_frame, IR0_MM_FRAME_UNKNOWN);
+			ir0_mm_log_frame_type("FREE", phys_frame, freed_type);
+		}
+		pmm_frame_put(phys_frame);
     }
 
 	if (page_table_is_empty(level3_table))

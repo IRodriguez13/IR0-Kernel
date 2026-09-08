@@ -158,7 +158,7 @@ int ir0_memfd_ftruncate(struct ir0_memfd *m, size_t length)
 			return -ENOMEM;
 		}
 		nf[i] = phys;
-		memset((void *)(uintptr_t)phys, 0, PAGE_SZ);
+		paging_zero_phys_page(phys);
 	}
 	if (m->frames)
 		kfree(m->frames);
@@ -196,9 +196,11 @@ int ir0_memfd_mmap(struct ir0_memfd *m, uint64_t *pml4, uintptr_t va,
 
 		if (idx >= m->npages || !m->frames[idx])
 			return -EINVAL;
+		pmm_frame_get(m->frames[idx]);
 		if (map_page_in_directory(pml4, va + p * PAGE_SZ, m->frames[idx],
 					  page_flags) != 0)
 		{
+			pmm_frame_put(m->frames[idx]);
 			while (p > 0)
 			{
 				p--;

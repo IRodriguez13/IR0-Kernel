@@ -127,7 +127,6 @@ int64_t sys_shmget(int key, size_t size, int shmflg)
 	for (p = 0; p < npages; p++)
 	{
 		uintptr_t phys = pmm_alloc_frame();
-		uint64_t old_cr3;
 
 		if (!phys)
 		{
@@ -135,11 +134,7 @@ int64_t sys_shmget(int key, size_t size, int shmflg)
 			return -ENOMEM;
 		}
 		free_slot->frames[p] = phys;
-		old_cr3 = paging_current_address_space();
-		/* Zero via temporary identity-style map in kernel CR3 if needed:
-		 * frames are low phys; clear through direct map when available. */
-		memset((void *)(uintptr_t)phys, 0, PAGE_SZ);
-		(void)old_cr3;
+		paging_zero_phys_page(phys);
 	}
 	free_slot->in_use = 1;
 	free_slot->key = key;
@@ -172,9 +167,11 @@ int64_t sys_shmat(int shmid, const void *shmaddr, int shmflg)
 	     (uintptr_t)((unsigned)s->nattch * 0x00100000UL);
 	for (p = 0; p < s->npages; p++)
 	{
+		pmm_frame_get(s->frames[p]);
 		if (map_page_in_directory(pml4, va + p * PAGE_SZ, s->frames[p],
 					  PAGE_USER | PAGE_RW) != 0)
 		{
+			pmm_frame_put(s->frames[p]);
 			while (p > 0)
 			{
 				p--;

@@ -75,6 +75,7 @@ setup/pid1/fase48_echo
 setup/pid1/fase50_busybox_real
 setup/pid1/fase50_hello
 setup/pid1/fase55e_doom_interactive
+setup/pid1/ktm_doom_interactive
 setup/pid1/fase58c_boot_halt
 setup/pid1/fase58c_fbdev
 setup/pid1/fase58l_busybox_smoke

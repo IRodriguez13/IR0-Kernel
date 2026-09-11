@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="scripts/kconfig/assets/black_hole_logo.png" alt="IR0 — black hole logo" width="160" />
+  <img src="scripts/kconfig/assets/ir0logo.png" alt="IR0 — black hole logo" width="160" />
 </p>
 
 <h1 align="center">IR0 Kernel</h1>
